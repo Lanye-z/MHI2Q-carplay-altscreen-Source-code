@@ -5,8 +5,13 @@ set -eu
 # Do not rely on the caller having inherited the MHI2Q/QNX runtime search path.
 # Keep this in sync with the integrated Mirror boot block and diagnostics block.
 PATH=${PATH:+$PATH:}/proc/boot:/armle/bin:/armle/scripts:/bin:/usr/bin:/usr/sbin:/sbin:/mnt/app/armle/bin:/mnt/app/armle/sbin:/mnt/app/armle/usr/bin:/mnt/app/armle/usr/sbin:/eso/bin:/eso/bin/apps
-LD_LIBRARY_PATH=${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}/proc/boot:/usr/lib:/armle/lib:/armle/lib/dll:/lib:/mnt/app/root/carplay-altscreen/lib:/eso/lib:/mnt/app/usr/lib:/mnt/app/armle/lib:/mnt/app/armle/lib/dll:/mnt/app/armle/usr/lib:/lib/dll
-export PATH LD_LIBRARY_PATH
+export PATH
+# Only publish the QNX loader path on a real target. This keeps host-side
+# fixtures usable while production MHI2Q launches remain deterministic.
+if [ -d /proc/boot ] && [ -d /mnt/app ]; then
+  LD_LIBRARY_PATH=${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}/proc/boot:/usr/lib:/armle/lib:/armle/lib/dll:/lib:/mnt/app/root/carplay-altscreen/lib:/eso/lib:/mnt/app/usr/lib:/mnt/app/armle/lib:/mnt/app/armle/lib/dll:/mnt/app/armle/usr/lib:/lib/dll
+  export LD_LIBRARY_PATH
+fi
 
 case "$0" in
   */*) ROOT=${0%/*} ;;
@@ -65,7 +70,7 @@ rm -f "$READY" "$BASE_READY"
 {
   echo "MIRROR_LAUNCH_ENV=READY pid=$$ bin=$BIN volatile_mode=$VOLATILE_MODE"
   echo "PATH=$PATH"
-  echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+  echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-<unset>}"
 } >> "$LOGFILE"
 "$BIN" --verbose >>"$LOGFILE" 2>&1 &
 PID=$!
