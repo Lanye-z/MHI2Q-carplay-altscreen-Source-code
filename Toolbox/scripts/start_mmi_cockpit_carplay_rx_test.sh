@@ -151,6 +151,13 @@ strip_block "$STARTUP" > "$CLEAN" || { rollback_start; echo "FAIL: invalid exist
 cat > "$BLOCK" <<'MIRROR_BOOT'
 # BEGIN ALT111 MIRROR AUTOSTART
 (
+    # startup.sh inherits a firmware-dependent environment. Build a known-good
+    # QNX runtime search path before invoking the Mirror sidecar so boot, GEM,
+    # diagnostics, and direct/manual launch all resolve the same commands/libs.
+    PATH=${PATH:+$PATH:}/proc/boot:/armle/bin:/armle/scripts:/bin:/usr/bin:/usr/sbin:/sbin:/mnt/app/armle/bin:/mnt/app/armle/sbin:/mnt/app/armle/usr/bin:/mnt/app/armle/usr/sbin:/eso/bin:/eso/bin/apps
+    LD_LIBRARY_PATH=${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}/proc/boot:/usr/lib:/armle/lib:/armle/lib/dll:/lib:/mnt/app/root/carplay-altscreen/lib:/eso/lib:/mnt/app/usr/lib:/mnt/app/armle/lib:/mnt/app/armle/lib/dll:/mnt/app/armle/usr/lib:/lib/dll
+    export PATH LD_LIBRARY_PATH
+
     RUNTIME=/mnt/app/root/carplay-altscreen
     MIRROR="$RUNTIME/bin/mirror"
     ENABLED="$RUNTIME/state/mirror.enabled"
@@ -162,7 +169,17 @@ cat > "$BLOCK" <<'MIRROR_BOOT'
             [ ! -d "$MIRROR_PARENT" ] || [ -d "$MIRROR_TMP" ] || mkdir "$MIRROR_TMP" >/dev/null 2>&1 || true
             if [ -d "$MIRROR_TMP" ]; then MIRROR_LOG="$MIRROR_TMP/autostart.log"; else MIRROR_LOG=/tmp/MMI-Cockpit-Carplay.mirror.autostart.log; fi
             if ( : >> "$MIRROR_LOG" ) 2>/dev/null; then
-                /bin/sh "$MIRROR/start_vehicle.sh" >> "$MIRROR_LOG" 2>&1 || true
+                {
+                    echo "MIRROR_BOOT_ATTEMPT pid=$$"
+                    echo "PATH=$PATH"
+                    echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+                } >> "$MIRROR_LOG"
+                if /bin/sh "$MIRROR/start_vehicle.sh" >> "$MIRROR_LOG" 2>&1; then
+                    MIRROR_RC=0
+                else
+                    MIRROR_RC=$?
+                fi
+                echo "MIRROR_START_RC=$MIRROR_RC" >> "$MIRROR_LOG"
             else
                 /bin/sh "$MIRROR/start_vehicle.sh" >/dev/null 2>&1 || true
             fi
