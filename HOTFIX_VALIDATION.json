@@ -47,7 +47,7 @@
     "compiled_build_id_source": "pass",
     "release_binary_source_guard": "implemented",
     "pixel_plane_parity": "pass",
-    "wm_first_full_chain_ci": "pending-latest-run"
+    "wm_first_full_chain_ci": "pass"
   },
   "source_artifacts": {
     "repository": "yuedizhibo/mib2q-MMI-Cockpit-Carplay",
