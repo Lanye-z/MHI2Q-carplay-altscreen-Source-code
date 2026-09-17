@@ -1,3 +1,11 @@
+# 2026-09-17：运行路由统一为 UNIVERSAL
+
+> **当前有效策略：** 所有受支持 AUG22 车机，包括 K1004/P1404，正常 INSTALL / START / STATUS / COLLECT 均统一走 `altscreen_chain_test_universal.sh`。`profiles/K1004`、`profiles/P1404` 与 `altscreen_chain_test_known.sh` 已退出正常运行路径，仅保留用于历史分析、回归比对和旧安装 RESTORE。
+>
+> 当前 active runtime 为 `stock dio_manager + stock libairplay/Nme + LD_PRELOAD libcarplay_altscreen.so`。以下 2026-09-14/15 关于三库 overlay、`libairplax.so` 和 profile 装载顺序的内容属于**历史实现记录**，不再描述新安装的正常运行入口。
+>
+> 需要注意：现有 universal SO 内部仍保留历史 `p1404_*` 命名及若干 P1404 ABI 防护分支。因此本次变更完成的是“统一路由/复用 stock”的架构切换；后续仍需继续清理 universal hook 内部的固件特定实现。
+
 # 2026-09-14：AltScreen 模块运行依赖与影响面审计
 
 > 后续 CarPlay 分析基线：发现、认证后的能力协商、`/info`、SETUP、type 111 建链、数据端口和视频接收均先对照固定提交的 LIVI，并留档提交号、源码位置、dio 证据及平台差异，避免重复分析或用猜测替代证据。
@@ -18,9 +26,9 @@
 
 最新 P1404 日志还补出一个只在真实返回对象中出现的分支：手机的流级 SETUP 只有 type 111，代理从给原厂的请求中移除 111 后留下 `streams=[]`，原厂返回成功和空字典 `{}`。旧合并器要求原厂响应预先存在 `streams[]`，因此在 ScreenSession、安全设置和 listener 全部成功后仍报 `STREAM_111_RESPONSE_MERGE merge_failed=1` 并撤销 worker。LIVI 对这类流级 SETUP 总是返回 `{streams: respStreams}`；当前合并器在原厂响应没有 `streams` 时先创建空数组，再追加 `{type:111,dataPort}`，已有数组仍按原顺序保留，非数组值继续拒绝。模拟原厂端也已改为对空拆分请求返回 `{}`，避免再次用虚构的 Main110 响应掩盖该分支。证据见 `Research/AltScreen/evidence/20260914-livi-empty-stream-response/README.md`。
 
-## 结论
+## 历史 profile 结论（已退出正常运行路径）
 
-当前 K1004、P1404 交付物没有新增任何车机系统库依赖。代理新增的唯一 `DT_NEEDED` 边是包内同时交付的 `libairplax.so`。两版重命名原厂 libairplay 的依赖列表与各自原厂文件逐项、顺序完全一致；两版补丁 Nme 的依赖列表也与各自原厂文件完全一致。
+以下结论记录旧 K1004/P1404 overlay 交付物：它们没有新增任何车机系统库依赖。代理新增的唯一 `DT_NEEDED` 边是包内同时交付的 `libairplax.so`。两版重命名原厂 libairplay 的依赖列表与各自原厂文件逐项、顺序完全一致；两版补丁 Nme 的依赖列表也与各自原厂文件完全一致。
 
 当前 START 启用第二屏协商、type 111 建链、视频帧处理和 `NATIVE_DISPLAY_MODE`。仪表路由不会在 START 时立即切换；原生代码仍要求 type 111 流已建立、`showUI` 已接受、动态配置有效且认证 Logo 首帧已经预提交，随后才调用 `dmdt`。Restore/Stop 会清理该标记并执行恢复路由。
 
@@ -35,11 +43,11 @@ python Toolbox/carplay_alt_screen/tests/audit_module_runtime_contract.py \
 
 该审计已作为 `module-runtime-contract` 接入双版本完整模拟器。
 
-## dio 装载与模块入口
+## 历史 profile 的 dio 装载与模块入口
 
-运行入口为 `dio_manager -> libairplay.so 代理 -> libairplax.so 原厂实现`。dio 同时通过 `libNmeSDK.so -> libNmeBaseClasses.so` 装入对应 profile 的补丁 Nme。P1404 实车运行列表证明三份 overlay 都从 `/mnt/app/root/carplay-altscreen/lib` 装入，顺序为代理在前、重命名原厂库和补丁 Nme 在后。
+旧 profile 运行入口为 `dio_manager -> libairplay.so 代理 -> libairplax.so 原厂实现`。dio 同时通过 `libNmeSDK.so -> libNmeBaseClasses.so` 装入对应 profile 的补丁 Nme。P1404 实车运行列表证明三份 overlay 都从 `/mnt/app/root/carplay-altscreen/lib` 装入，顺序为代理在前、重命名原厂库和补丁 Nme 在后。
 
-代理构造函数先绑定原始 libc 转发函数并安装原厂库的精确 GOT 重定向，然后启动后台初始化。后台初始化只有在 state root、14 个重定向、进程身份、原厂私有符号、转发门和 display 1 几何均准备好后才置为 ready；此前所有包装函数保持原厂路径。初始化失败会让本进程中的扩展保持不活动，原厂 CarPlay 路径仍然可调用。
+代理构造函数先绑定原始 libc 转发函数并安装原厂库的精确 GOT 重定向，然后启动后台初始化。后台初始化只有在 state rootc��14 个重定向、进程身份、原厂私有符号、转发门和 display 1 几何均准备好后才置为 ready；此前所有包装函数保持原厂路径。初始化失败会让本进程中的扩展保持不活动，原厂 CarPlay 路径仍然可调用。
 
 代理实际导出 22 个 AirPlay/Screen/CScreenRender 或私有 Nme 名称，不导出 `open/open64/read/write/send/recv/close/dup`。因此当前交付物不会接管 dio 全进程的通用文件和网络调用。原厂 libairplay 只把 `write/close` 等长改名到代理私有入口；Nme 只把七个指定导入等长改名。特殊处理还受原厂调用者地址、`/dev/otg-cinemo` 路径、iAP2 候选或已管理 FD 限制，其他调用直接转发原函数。
 
@@ -69,9 +77,9 @@ K1004 尚有 11 个系统 SONAME 没有可读的对应固件字节。这些边�
 
 静态检查能证明这些创建、限制、回退和清理代码存在，也能在主机协议模拟中覆盖成功、失败、重复连接和 teardown。它不能执行 QNX 的真实线程调度；若原厂 `ProcessFrames` 在 stop 后不退出，teardown 仍可能等待，这是实车需要观察的剩余风险。
 
-## 安装和恢复影响
+## 当前安装和恢复影响
 
-INSTALL 会备份 dio、原厂 libairplay、原厂 Nme、overlay 目录原状态、CarPlay 配置、启动脚本和 `/mnt/system/etc/pf.conf`，然后向 `/mnt/app/root/carplay-altscreen/lib` 发布三个 profile 文件，并确保原厂最终 `carplay0` block 前的入站策略允许 type111 listener 在流级 SETUP 返回的动态 `dataPort`。dio 二进制和 `/eso/lib` 原厂库不被覆盖。CarPlay 配置只移除已知冲突 preload；开机诊断块负责实时写 SD 日志并周期采集 `netstat -an` 和活动 `pfctl -sr`。任一步发布失败会执行事务回滚。Restore 会按备份清单逐文件恢复或删除本次新增文件，并把原始 `pf.conf` 字节写回，随后要求重启让原厂进程和 PF 策略重新加载。
+当前 INSTALL 会备份 dio、原厂 libairplay、原厂 Nme、旧 overlay 目录状态、CarPlay 配置和 `/mnt/system/etc/pf.conf`，但**不再发布 K1004/P1404 三库 profile**。安装只发布 `/mnt/app/root/carplay-altscreen/lib/libcarplay_altscreen.so`，并通过 CarPlay `LD_PRELOAD` 装入 universal resolver；dio、stock libairplay 和 stock Nme 保持原厂字节并在运行时直接复用。PF 逻辑仍负责允许 type111 listener 在流级 SETUP 返回的动态 `dataPort`。任一步发布失败会执行事务回滚。Restore 会恢复原始配置/防火墙和本次 universal hook 状态。对于旧版本已经安装的 K1004/P1404 profile，路由器仍允许调用 known controller 的 RESTORE，但不允许其继续 START/STATUS/COLLECT。
 
 审计器还包含负例：删除原函数回退、删除 FD guard、删除 worker 停止路径、删除运行库记录、重新在 START 中启用仪表路由，五种修改都必须被拒绝。
 

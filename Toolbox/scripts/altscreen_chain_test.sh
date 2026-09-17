@@ -1,11 +1,14 @@
 #!/bin/sh
 # AltScreen controller router.
 #
-# Selection policy is deliberately asymmetric:
-#   1. exact K1004 bytes -> the frozen certified known controller;
-#   2. exact P1404 bytes -> the frozen certified known controller;
-#   3. neither exact baseline + AUG22 train -> isolated UNIVERSAL controller;
-#   4. anything else -> refuse before mutation.
+# Active installation policy (2026-09-17): UNIVERSAL ONLY.
+#   1. every supported AUG22 installation routes to the standalone universal
+#      LD_PRELOAD controller;
+#   2. K1004/P1404 profile artifacts and the known controller remain in the
+#      repository only as historical/reference material;
+#   3. the known controller may still be invoked for RESTORE only when a vehicle
+#      was installed by an older profile-based package;
+#   4. anything outside the supported AUG22 train is refused before mutation.
 #
 # Mirror is intentionally outside this decision; the integrated wrappers keep the
 # existing AUG22 Mirror runtime/boot path unchanged.
@@ -26,10 +29,6 @@ ensure_dirs() {
     return 0
 }
 
-K1004_LIB="2678655048 761564"
-K1004_DIO="3274834670 694029"
-P1404_LIB="1012372429 761564"
-P1404_DIO="1260773095 691569"
 
 TESTING=${ALTSCREEN_CHAIN_TESTING:-0}
 FIXED_ROOT=""
@@ -104,48 +103,53 @@ read_aug22_train(){
 
 select_install_route(){
     requested=${1:-}
+
+    # Test harness compatibility: legacy profile names are accepted only as
+    # aliases for UNIVERSAL so tests cannot accidentally re-enable known install.
     if [ "$TESTING" = 1 ] && [ -n "${ALTSCREEN_TEST_FORCE_PROFILE:-}" ]; then
-        case "$ALTSCREEN_TEST_FORCE_PROFILE" in K1004|P1404|UNIVERSAL|LEGACY_FLAT) echo "$ALTSCREEN_TEST_FORCE_PROFILE"; return 0 ;; *) return 1 ;; esac
+        case "$ALTSCREEN_TEST_FORCE_PROFILE" in
+          UNIVERSAL) echo UNIVERSAL; return 0 ;;
+          K1004|P1404)
+            echo "LEGACY_PROFILE_FORCE_IGNORED requested=$ALTSCREEN_TEST_FORCE_PROFILE route=UNIVERSAL" >&2
+            echo UNIVERSAL
+            return 0
+            ;;
+          LEGACY_FLAT) echo LEGACY_FLAT; return 0 ;;
+          *) return 1 ;;
+        esac
     fi
     if [ "$TESTING" = 1 ] && [ ! -d "$ARTIFACT_DIR/profiles" ] && [ ! -d "$ARTIFACT_DIR/universal" ]; then
         echo LEGACY_FLAT
         return 0
     fi
+
+    # A caller from an older menu/script may still pass K1004 or P1404.  Treat
+    # those names as deprecated aliases, never as selectors for profile payloads.
+    case "$requested" in
+      ""|UNIVERSAL) ;;
+      K1004|P1404)
+        echo "LEGACY_PROFILE_REQUEST_IGNORED requested=$requested route=UNIVERSAL" >&2
+        ;;
+      *)
+        echo "PROFILE_REFUSED unsupported=$requested" >&2
+        return 1
+        ;;
+    esac
+
+    # Universal still requires the stock inputs it will reuse.  We deliberately
+    # do not fingerprint them for route selection.
     dio_rel=$(locate_first "$LIVE_DIO_CANDIDATES") || return 1
     [ -s "$(p "$LIVE_LIBAIRPLAY")" ] && [ -s "$(p "$dio_rel")" ] || return 1
-    lib_id=$(cksum < "$(p "$LIVE_LIBAIRPLAY")") || return 1
-    dio_id=$(cksum < "$(p "$dio_rel")") || return 1
-    exact=""
-    if [ "$lib_id" = "$K1004_LIB" ] && [ "$dio_id" = "$K1004_DIO" ]; then exact=K1004; fi
-    if [ "$lib_id" = "$P1404_LIB" ] && [ "$dio_id" = "$P1404_DIO" ]; then exact=P1404; fi
 
-    if [ -n "$requested" ]; then
-        case "$requested" in
-          K1004|P1404)
-            [ "$exact" = "$requested" ] || {
-                echo "PROFILE_REFUSED requested=$requested actual_lib='$lib_id' actual_dio='$dio_id'" >&2
-                return 1
-            }
-            ;;
-          UNIVERSAL)
-            [ -z "$exact" ] || { echo "PROFILE_REFUSED universal_requested_but_known_exact=$exact" >&2; return 1; }
-            ;;
-          *) echo "PROFILE_REFUSED unsupported=$requested" >&2; return 1 ;;
-        esac
-    fi
-    if [ -n "$exact" ]; then
-        echo "$exact"
-        return 0
-    fi
     train=$(read_aug22_train || true)
     case "$train" in
       *AUG22*)
-        echo "AUG22_DYNAMIC_FALLBACK lib='$lib_id' dio='$dio_id' train='$train'" >&2
+        echo "AUG22_UNIVERSAL_ROUTE train='$train' stock_reuse=YES profile_overlay=DISABLED" >&2
         echo UNIVERSAL
         return 0
         ;;
       *)
-        echo "PROFILE_REFUSED known_baselines_mismatch=1 aug22_proof=ABSENT lib='$lib_id' dio='$dio_id' train='$train'" >&2
+        echo "PROFILE_REFUSED aug22_proof=ABSENT train='$train' universal_only=YES" >&2
         return 1
         ;;
     esac
@@ -323,17 +327,21 @@ route_for_existing(){
 delegate(){
     route=$1; shift
     case "$route" in
-      K1004|P1404|LEGACY_FLAT)
-        [ -f "$KNOWN" ] || fail "certified known controller missing: $KNOWN"
-        if [ "$1" = install ] && [ "$route" != LEGACY_FLAT ]; then
-            /bin/sh "$KNOWN" install "$route"
-        else
-            /bin/sh "$KNOWN" "$@"
-        fi
-        ;;
       UNIVERSAL)
         [ -f "$UNIVERSAL" ] || fail "AUG22 universal controller missing: $UNIVERSAL"
         /bin/sh "$UNIVERSAL" "$@"
+        ;;
+      K1004|P1404)
+        # Historical profile runtime is intentionally unreachable.  The sole
+        # exception is restoring a vehicle that was installed by an older build.
+        [ "${1:-}" = restore ] || fail "legacy profile runtime is disabled ($route); run RESTORE ORIGINAL, reboot, then INSTALL to migrate to UNIVERSAL"
+        [ -f "$KNOWN" ] || fail "legacy restore controller missing: $KNOWN"
+        /bin/sh "$KNOWN" restore
+        ;;
+      LEGACY_FLAT)
+        [ "$TESTING" = 1 ] || fail "LEGACY_FLAT is test-only"
+        [ -f "$KNOWN" ] || fail "legacy test controller missing: $KNOWN"
+        /bin/sh "$KNOWN" "$@"
         ;;
       *) fail "invalid persisted route: $route" ;;
     esac
@@ -359,9 +367,14 @@ case "$CMD" in
     elif [ -f "$LEGACY_INSTALLED_MARKER" ] && [ -f "$LEGACY_ROUTE_FILE" ]; then existing_route="$LEGACY_ROUTE_FILE"; fi
     if [ -n "$existing_route" ]; then
         old=$(cat "$existing_route")
-        [ "$old" = "$route" ] || fail "installed route is $old but new route is $route; RESTORE ORIGINAL before switching"
+        if [ "$old" != "$route" ]; then
+            case "$old" in
+              K1004|P1404) fail "legacy profile $old is still installed; run RESTORE ORIGINAL, reboot, then INSTALL to migrate to UNIVERSAL" ;;
+              *) fail "installed route is $old but new route is $route; RESTORE ORIGINAL before switching" ;;
+            esac
+        fi
     fi
-    echo "ROUTER_PROFILE=$route policy=KNOWN_EXACT_FIRST_THEN_AUG22_DYNAMIC"
+    echo "ROUTER_PROFILE=$route policy=AUG22_UNIVERSAL_ONLY known_profiles=REFERENCE_RESTORE_ONLY"
     validate_runtime_sources || exit 1
     precheck_app_runtime || exit 1
     if ! install_runtime_scripts; then

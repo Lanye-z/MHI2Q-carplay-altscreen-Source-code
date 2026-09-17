@@ -1,11 +1,13 @@
 #!/bin/sh
-# MIB2Q AUG22 universal fallback controller.
+# MIB2Q AUG22 universal AltScreen controller.
 #
-# This path is entered only by altscreen_chain_test.sh after the actual vehicle
-# binaries fail both exact K1004 and P1404 fingerprints but the train still
-# identifies as AUG22.  It does not replace dio_manager, stock libairplay or Nme.
-# It installs the standalone dynamic resolver as LD_PRELOAD and preserves the
-# same marker/private111 transaction used by the certified known-profile path.
+# Since 2026-09-17 this is the only active installation/runtime path for supported
+# AUG22 vehicles, including K1004 and P1404.  It does not replace dio_manager,
+# stock libairplay or Nme.  It installs the standalone dynamic resolver as
+# LD_PRELOAD and reuses the vehicle's stock implementation at runtime.
+#
+# Historical K1004/P1404 profile overlays remain in the repository for reference
+# and legacy RESTORE only; this controller never selects or deploys them.
 set -u
 
 # QNX compatibility: some vehicle mkdir implementations return EEXIST for
@@ -445,7 +447,7 @@ restore_originals() (
 
 check_sources(){
     ensure_dirs "$STATE_DIR" || return 1
-    nonempty "$UNIVERSAL_SRC" || { say "FAIL: universal fallback missing: $UNIVERSAL_SRC"; return 1; }
+    nonempty "$UNIVERSAL_SRC" || { say "FAIL: universal hook missing: $UNIVERSAL_SRC"; return 1; }
     nonempty "$PRELOAD_AWK" || { say "FAIL: altscreen_preload.awk missing"; return 1; }
     dio_rel=$(locate_first "$LIVE_DIO_CANDIDATES") || return 1
     nme_rel=$(locate_first "$LIVE_NME_CANDIDATES") || return 1
@@ -492,7 +494,7 @@ cmd_install(){
           "$STATE_DIR/ACTIVE" "$STATE_DIR/FORCE_START" "$STATE_DIR/FULL_CHAIN_MODE" "$STATE_DIR/NATIVE_DISPLAY_MODE"
     finish_mounts || { lock_release; return 1; }
     LIVE_DIRTY=0
-    say "FIRMWARE_PROFILE=UNIVERSAL source=known_baselines_mismatch"
+    say "FIRMWARE_PROFILE=UNIVERSAL source=aug22_unified_policy stock_reuse=YES"
     say "UNIVERSAL_PRELOAD=INSTALLED path=$UNIVERSAL_REL resolver=ELF_DYNAMIC_RELOCATION"
     lock_release || return 1
     say "INSTALL=PASS reboot_required=YES"

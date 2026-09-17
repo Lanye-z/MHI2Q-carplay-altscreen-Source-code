@@ -1,0 +1,5 @@
+K1004/P1404 profile payloads are retained for historical analysis, regression comparison, and legacy RESTORE support only.
+
+Active INSTALL / START / STATUS / COLLECT routing no longer selects these payloads. All supported AUG22 installations use ../universal/libcarplay_altscreen.so and reuse the stock dio_manager, libairplay.so, and Nme runtime.
+
+Do not add new firmware profiles here for normal installation. Extend the universal resolver instead.

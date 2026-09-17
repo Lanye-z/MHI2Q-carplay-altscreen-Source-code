@@ -1,11 +1,11 @@
 {
   "LICENSE": "4ac9e4707e93945bf70ba7a141032b0b8f99318b48f541f54bce0098d511aee5",
-  "TECHNICAL-NOTES.md": "5056d17ed0c38cb1584f8de4a59bd35c5a00dd694230a336d1770d127bd4ce73",
-  "READ-ME-FIRST.md": "2ced9730cdd8a04aa1cd1d4798fcd0df28b6f056f9cd71dbb19cf0d32bf9c971",
+  "TECHNICAL-NOTES.md": "e09574337f4eb37818ebd0956492615d6c2da04ee79fad56e3a086179e6dca84",
+  "READ-ME-FIRST.md": "26257e237bfded57065758de98d5fa9f575e5a47b28f6fdc6634ae91b6d75c7f",
   "HOST_VALIDATION.json": "055ba2ba42701fe6fd075ed204ba572d4f2e65428117c27f3b8532186d832ef4",
-  "Toolbox/scripts/altscreen_chain_test.sh": "043ad9f95ba8943044db81f0b21dc7a94eb747257d070cce55b323bce9cc89f7",
+  "Toolbox/scripts/altscreen_chain_test.sh": "6f728eb1cc769aedea8fdad06ce80dca14c817329c11911d32eacccea44f1903",
   "Toolbox/scripts/altscreen_chain_test_known.sh": "ff14c5549806de47b884080e976b641750f7786bd6bcd3d7d68f16a9aeb5ce30",
-  "Toolbox/scripts/altscreen_chain_test_universal.sh": "df99ab27aed3958b8769bfdf295259d1cb8c4e02df08eaa9c94de8a47d485dfd",
+  "Toolbox/scripts/altscreen_chain_test_universal.sh": "f4806604cb2769655194887f76d96cb7a1c0c821db30f2a2d676c76eae3cb786",
   "Toolbox/scripts/altscreen_persistent_diag.sh": "2d500b744efff89bf17de0c2b17ecd40d36acfa4b554260d67850e04e982a35e",
   "Toolbox/scripts/altscreen_adaptive_diag.sh": "d6788635d3255eab47f6f308a9f83a236805a6af0888fe692e7c75245d6fec96",
   "Toolbox/scripts/altscreen_boot_diag.sh": "969b111fd694e31137ddd0e1eac1b3f278db7fb5358f9da1833a1976ae263800",
@@ -38,5 +38,6 @@
   "Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh": "0dedaef187e13965cefa254c14f19386efd91b9385ee2907463810b5d6379fc8",
   "Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt": "45f5e1132d555623f5f218fb0aefaa12b73911cb06beccc2286e60ce926a5d74",
   "Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS": "b2ce5d1e0865779b659602c4ff4c53d98a3f0d1cfe9ba132ba2aa5a02aad11ca",
-  "Toolbox/carplay_alt_screen/mirror_display/release/LICENSE.MMI-MIRROR": "436a6d536138f203ac333858cff92a568be62797752b3adb94bcaa0f6ffe7ef6"
+  "Toolbox/carplay_alt_screen/mirror_display/release/LICENSE.MMI-MIRROR": "436a6d536138f203ac333858cff92a568be62797752b3adb94bcaa0f6ffe7ef6",
+  "Toolbox/carplay_alt_screen/profiles/REFERENCE_ONLY.txt": "0aaec0c7975c0a05fcaa867c22546a37740d7f6c9ae0f5c164c29c1d0c52f31f"
 }
