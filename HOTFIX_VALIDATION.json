@@ -18,12 +18,19 @@
     "Mirror binary, launcher, and ownership marker required before controller activation",
     "STATUS returns failure when an active chain lacks Mirror autostart or a live sidecar",
     "boot diagnostics capture Mirror runtime state, mirror.log, and mirror_autostart.log",
+    "Mirror boot block now establishes explicit QNX PATH and LD_LIBRARY_PATH before sidecar launch",
+    "start_vehicle.sh normalizes the target QNX runtime environment independently of its caller",
+    "Mirror autostart now records boot attempts, launch environment, and MIRROR_START_RC instead of silently swallowing failures",
     "operator documentation distinguishes Window58 frame delivery from instrument output"
   ],
   "host_checks": {
     "modified_shell_syntax": "pass",
     "git_diff_check": "pass",
     "package_source_map_all_entries": "pass",
+    "mirror_start_vehicle_shell_syntax": "pass",
+    "integrated_start_shell_syntax": "pass",
+    "generated_startup_shell_syntax": "pass",
+    "mirror_host_fixture_launch": "pass",
     "status_active_autostart_disabled": "pass-returns-1",
     "status_active_sidecar_running": "pass-returns-0",
     "status_active_sidecar_missing": "pass-returns-1"
@@ -37,6 +44,8 @@
     "perform a complete MMI reboot",
     "verify MIRROR_HEALTH=PASS before connecting the iPhone",
     "verify MIRROR_FIRST_FRAME=READY and visible instrument output during navigation",
+    "confirm autostart.log contains MIRROR_BOOT_ATTEMPT and MIRROR_START_RC=0",
+    "confirm mirror.log contains MIRROR_LAUNCH_ENV=READY and the expected QNX LD_LIBRARY_PATH",
     "collect the newly added Mirror and autostart logs"
   ]
 }
