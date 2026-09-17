@@ -11,7 +11,7 @@ OUTROOT="${ALTSCREEN_SOURCE_BUILD_ROOT:-$ROOT/dev-build}"
 fail(){ echo "FAIL: $*" >&2; exit 1; }
 [ -d "$UP/src" ] || fail "source submodule is not initialized; run: git submodule update --init Toolbox/carplay_alt_screen/source_upstream"
 
-if command -v git >/dev/null 2>&1 && [ -d "$ROOT/source_upstream/.git" -o -f "$ROOT/source_upstream/.git" ]; then
+if command -v git >/dev/null 2>&1 && { [ -d "$ROOT/source_upstream/.git" ] || [ -f "$ROOT/source_upstream/.git" ]; }; then
     HEAD=$(git -C "$ROOT/source_upstream" rev-parse HEAD 2>/dev/null || true)
     [ "$HEAD" = "$PIN" ] || fail "source_upstream is not at pinned commit $PIN (found ${HEAD:-unknown})"
 fi
@@ -25,11 +25,12 @@ case "${1:-}" in
   mirror)
     OUT="${2:-$OUTROOT/mirror}"
     mkdir -p "$OUT"
-    if [ -x "$UP/mirror_display/build_qnx.sh" ]; then
-        ALT111_MIRROR_BUILD_DIR="$OUT" exec /bin/sh "$UP/mirror_display/build_qnx.sh"
-    else
-        fail "upstream mirror build_qnx.sh is missing"
-    fi
+    [ -x "$UP/mirror_display/build_qnx.sh" ] || fail "upstream mirror build_qnx.sh is missing"
+    /bin/sh "$UP/mirror_display/build_qnx.sh"
+    BIN="$UP/mirror_display/build/carplay-alt111-mirror-display"
+    [ -x "$BIN" ] || fail "Mirror build completed without expected binary: $BIN"
+    cp "$BIN" "$OUT/carplay-alt111-mirror-display"
+    echo "MIRROR_BUILD=PASS output=$OUT/carplay-alt111-mirror-display"
     ;;
   *)
     echo "usage: $0 {hook|universal|mirror} [output-dir]" >&2
