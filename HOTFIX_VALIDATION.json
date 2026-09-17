@@ -1,51 +1,82 @@
 {
   "date": "2026-09-17",
-  "scope": "instrument-mirror-startup-integrity",
-  "result": "host-pass-vehicle-pending",
+  "scope": "instrument-mirror-window58-capture",
+  "result": "source-fixed-host-validated-qnx-sidecar-rebuild-required",
   "captured_vehicle_evidence": {
     "type111_listener": "pass",
     "type111_accept": "pass",
     "stock_screen_start": "pass",
     "first_real_frame_to_window58": "pass",
-    "sustained_type111_bytes": 4535556,
-    "displaymanager_window58": "present",
-    "mirror_sidecar_process": "absent",
-    "mirror_logs": "absent",
-    "instrument_last_hop": "not_proven"
+    "sustained_type111_bytes": 18538484,
+    "displaymanager_window58": "present-1440x542",
+    "mirror_boot_attempt": "pass",
+    "mirror_start_rc": 0,
+    "mirror_sidecar_process": "running",
+    "mirror_waiting_for_window58_first_frame": "observed",
+    "mirror_source_ready": "absent",
+    "mirror_first_frame_marker": "absent",
+    "displayable3_activation": "not_reached",
+    "context76_activation": "not_reached",
+    "instrument_last_hop": "blocked-at-CarPlayWindowSource"
   },
   "fixes": [
     "integrated START transaction token required by known and universal controllers in production",
     "Mirror binary, launcher, and ownership marker required before controller activation",
     "STATUS returns failure when an active chain lacks Mirror autostart or a live sidecar",
     "boot diagnostics capture Mirror runtime state, mirror.log, and mirror_autostart.log",
-    "Mirror boot block now establishes explicit QNX PATH and LD_LIBRARY_PATH before sidecar launch",
+    "Mirror boot block establishes explicit QNX PATH and LD_LIBRARY_PATH before sidecar launch",
     "start_vehicle.sh normalizes the target QNX runtime environment independently of its caller",
-    "Mirror autostart now records boot attempts, launch environment, and MIRROR_START_RC instead of silently swallowing failures",
+    "Mirror autostart records boot attempts, launch environment, and MIRROR_START_RC",
+    "CarPlayWindowSource now creates SCREEN_WINDOW_MANAGER_CONTEXT first and uses SCREEN_DISPLAY_MANAGER_CONTEXT only as fallback",
+    "first Window58 census is logged unconditionally; verbose mode adds periodic census telemetry",
+    "first screen_read_window failure is logged unconditionally and recovery is reported",
+    "sidecar source embeds build id window58-wm-context-v3",
+    "release builder fails closed when the delivered ELF lacks the expected build id",
+    "host full-chain simulation contract now requires WM-first capture before Window58 read",
     "operator documentation distinguishes Window58 frame delivery from instrument output"
   ],
   "host_checks": {
     "modified_shell_syntax": "pass",
-    "git_diff_check": "pass",
-    "package_source_map_all_entries": "pass",
     "mirror_start_vehicle_shell_syntax": "pass",
     "integrated_start_shell_syntax": "pass",
     "generated_startup_shell_syntax": "pass",
     "mirror_host_fixture_launch": "pass",
-    "status_active_autostart_disabled": "pass-returns-1",
-    "status_active_sidecar_running": "pass-returns-0",
-    "status_active_sidecar_missing": "pass-returns-1"
+    "window_manager_first_context_harness": "pass",
+    "display_manager_fallback_harness": "pass",
+    "first_window_census_without_verbose": "pass",
+    "compiled_build_id_source": "pass",
+    "release_binary_source_guard": "implemented",
+    "pixel_plane_parity": "pass",
+    "wm_first_full_chain_ci": "pending-latest-run"
+  },
+  "source_artifacts": {
+    "repository": "yuedizhibo/mib2q-MMI-Cockpit-Carplay",
+    "pinned_commit": "f79908afda4a6658f41a46e3a96c81246c6a2fc4",
+    "mirror_build_id": "window58-wm-context-v3"
   },
   "binary_artifacts": {
-    "rebuilt": false,
-    "reason": "the defect is in package integration scripts; delivered hook and sidecar binaries were not modified"
+    "qnx_sidecar_rebuilt": false,
+    "checked_in_release_binary_still_old": true,
+    "reason": "the Window58 correction changes C++ sidecar code and requires the QNX 6.5 ARMv7 ntoarmv7-gcc toolchain; that toolchain is not available in the current execution environment or standard hosted CI",
+    "do_not_vehicle_test_as_fixed_until_rebuilt": true
   },
-  "remaining_validation": [
-    "repeat INSTALL and integrated START with the repaired Toolbox",
-    "perform a complete MMI reboot",
-    "verify MIRROR_HEALTH=PASS before connecting the iPhone",
-    "verify MIRROR_FIRST_FRAME=READY and visible instrument output during navigation",
-    "confirm autostart.log contains MIRROR_BOOT_ATTEMPT and MIRROR_START_RC=0",
-    "confirm mirror.log contains MIRROR_LAUNCH_ENV=READY and the expected QNX LD_LIBRARY_PATH",
-    "collect the newly added Mirror and autostart logs"
+  "required_qnx_rebuild": [
+    "build carplay-alt111-mirror-display from pinned source with mirror_display/build_qnx.sh",
+    "verify the ELF contains window58-wm-context-v3",
+    "replace Toolbox/carplay_alt_screen/mirror_display/release/carplay-alt111-mirror-display",
+    "regenerate release BUILD_INFO.txt and SHA256SUMS",
+    "regenerate top-level PACKAGE_SOURCE_MAP.json and SHA256SUMS.txt",
+    "repeat INSTALL and integrated START, then perform a complete MMI reboot"
+  ],
+  "next_vehicle_acceptance": [
+    "mirror.log begins with carplay-mirror: BUILD id=window58-wm-context-v3",
+    "mirror.log reports source: WINDOW_MANAGER_CONTEXT ready, or an explicit WM rejection followed by DM fallback",
+    "first census reports Window58 id and 1440x542 size or a precise enumeration errno",
+    "source: bound CarPlay window id=58 appears",
+    "source: capture buffer ready appears",
+    "carplay-mirror: source ready appears",
+    "MIRROR_FIRST_FRAME=READY appears",
+    "displayable3 initializes and context76 activates",
+    "instrument output becomes visible"
   ]
 }
