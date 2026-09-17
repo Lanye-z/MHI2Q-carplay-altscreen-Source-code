@@ -1,0 +1,12 @@
+mode=CARPLAY111_MIRROR_SOURCE_V2_TOOLBOX_INTEGRATED
+source=private111_stock_omx_window58
+source_settle_ms=500
+direct_logo_gate=disabled
+direct_context_route=disabled
+capture=screen_read_window
+mirror_sink=displayable3_gles
+mirror_output=1440x455
+context=76_transition72_restore74
+main110=untouched
+toolbox_profiles=K1004,P1404
+toolbox_autostart=after_START_and_reboot

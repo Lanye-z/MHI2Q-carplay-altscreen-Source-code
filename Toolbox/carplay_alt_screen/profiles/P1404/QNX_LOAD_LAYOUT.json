@@ -1,0 +1,77 @@
+{
+  "ok": true,
+  "path": "Toolbox/carplay_alt_screen/mirror_display/release/profiles/P1404/libairplay.so",
+  "reasons": [],
+  "checks": {
+    "elf32_little_arm": true,
+    "load0_filesz_within_memsz": true,
+    "load0_page_congruent": true,
+    "load1_filesz_within_memsz": true,
+    "load1_page_congruent": true,
+    "exactly_two_loads": true,
+    "first_load_executable": true,
+    "first_load_not_writable": true,
+    "first_load_vaddr_zero": true,
+    "second_load_writable_not_executable": true,
+    "loads_do_not_share_pages": true,
+    "exec_sections_inside_first_load": true,
+    "alloc_sections_inside_a_load": true,
+    "functions_inside_first_load": true
+  },
+  "sha256": "b211bdebcb34baddc70c1bc7388d7d3d11e190fd74aef384b1ef489a2835f370",
+  "size": 224888,
+  "elf_class": 32,
+  "little_endian": true,
+  "machine": "EM_ARM",
+  "type": "ET_DYN",
+  "load_count": 2,
+  "loads": [
+    {
+      "index": 0,
+      "p_offset": 0,
+      "p_vaddr": 0,
+      "p_filesz": 191968,
+      "p_memsz": 191968,
+      "p_flags": 5,
+      "flags": "R-X",
+      "p_align": 4096,
+      "page_congruent": true,
+      "vaddr_end": 191968
+    },
+    {
+      "index": 1,
+      "p_offset": 191968,
+      "p_vaddr": 196064,
+      "p_filesz": 1644,
+      "p_memsz": 384540,
+      "p_flags": 6,
+      "flags": "RW-",
+      "p_align": 4096,
+      "page_congruent": true,
+      "vaddr_end": 580604
+    }
+  ],
+  "first_load_executable": true,
+  "executable_section_count": 2,
+  "executable_sections": [
+    {
+      "name": ".text",
+      "address": 47668,
+      "size": 143444,
+      "outside_first_load": false
+    },
+    {
+      "name": ".plt",
+      "address": 191120,
+      "size": 848,
+      "outside_first_load": false
+    }
+  ],
+  "function_symbol_counts": {
+    ".dynsym": 24,
+    ".symtab": 284
+  },
+  "function_symbol_count": 308,
+  "functions_outside_first_load": 0,
+  "functions_outside_sample": []
+}
