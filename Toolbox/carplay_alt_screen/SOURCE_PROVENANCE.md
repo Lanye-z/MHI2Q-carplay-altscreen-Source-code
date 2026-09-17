@@ -5,12 +5,14 @@ This repository keeps the vehicle runtime package and its development source int
 ## Pinned upstream source
 
 - Repository: `yuedizhibo/mib2q-MMI-Cockpit-Carplay`
-- Commit: `07f821eab733401ccb520305355a0f1eae2eac73`
+- Commit: `f79908afda4a6658f41a46e3a96c81246c6a2fc4`
 - Git submodule path: `Toolbox/carplay_alt_screen/source_upstream`
 
 The pin contains the complete development tree used for the AltScreen hook and Mirror sidecar, including `Toolbox/carplay_alt_screen/src/`, QNX compatibility shims, linker maps, `build_qnx_arm.sh`, and `mirror_display/src/` with its Makefile/build scripts.
 
 The pinned Mirror source includes the 2026-09-17 Window58 capture correction: `CarPlayWindowSource` now creates a `SCREEN_WINDOW_MANAGER_CONTEXT` first and falls back to `SCREEN_DISPLAY_MANAGER_CONTEXT` only when the Window Manager context is rejected. It also emits the first window census and first `screen_read_window` failure unconditionally, and the sidecar source carries the embedded build ID `window58-wm-context-v3`.
+
+The matching host full-chain contract has also been updated to require Window Manager success before the first Window58 read and to reject unnecessary Display Manager context creation when Window Manager succeeds.
 
 ## Runtime boundary
 
