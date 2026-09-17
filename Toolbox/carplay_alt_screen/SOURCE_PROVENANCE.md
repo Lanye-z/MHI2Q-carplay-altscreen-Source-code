@@ -1,41 +1,52 @@
-# AltScreen source snapshot provenance
+# AltScreen source provenance
 
-This repository keeps the vehicle runtime package and its development source intentionally separate.
+This repository is now intentionally **ZIP self-contained for the Mirror sidecar build**. GitHub `Download ZIP` includes the actual C/C++ source files, `Makefile`, and `build_qnx.sh`; no Git submodule initialization is required.
 
-## Pinned upstream source
+## Vendored Mirror source
 
-- Repository: `yuedizhibo/mib2q-MMI-Cockpit-Carplay`
-- Commit: `f79908afda4a6658f41a46e3a96c81246c6a2fc4`
-- Git submodule path: `Toolbox/carplay_alt_screen/source_upstream`
+- Source repository: `yuedizhibo/mib2q-MMI-Cockpit-Carplay`
+- Source commit: `f79908afda4a6658f41a46e3a96c81246c6a2fc4`
+- Original path: `Toolbox/carplay_alt_screen/mirror_display`
+- Vendored path here: `Toolbox/carplay_alt_screen/mirror_display`
+- Embedded sidecar build ID: `window58-wm-context-v3`
 
-The pin contains the complete development tree used for the AltScreen hook and Mirror sidecar, including `Toolbox/carplay_alt_screen/src/`, QNX compatibility shims, linker maps, `build_qnx_arm.sh`, and `mirror_display/src/` with its Makefile/build scripts.
+The vendored source contains the 2026-09-17 Window58 correction: `CarPlayWindowSource` creates `SCREEN_WINDOW_MANAGER_CONTEXT` first, falls back to `SCREEN_DISPLAY_MANAGER_CONTEXT` only when necessary, emits the first Window census unconditionally, and reports the first `screen_read_window` failure even without verbose logging.
 
-The pinned Mirror source includes the 2026-09-17 Window58 capture correction: `CarPlayWindowSource` now creates a `SCREEN_WINDOW_MANAGER_CONTEXT` first and falls back to `SCREEN_DISPLAY_MANAGER_CONTEXT` only when the Window Manager context is rejected. It also emits the first window census and first `screen_read_window` failure unconditionally, and the sidecar source carries the embedded build ID `window58-wm-context-v3`.
+## Download ZIP and build
 
-The matching host full-chain contract has also been updated to require Window Manager success before the first Window58 read and to reject unnecessary Display Manager context creation when Window Manager succeeds.
+1. Download the `main` branch ZIP from `Lanye-z/altscreen-test` and extract it.
+2. Ensure the QNX 6.5 ARMv7 SDK/toolchain is installed. The default expected paths are:
+
+```text
+/usr/qnx650/host/qnx6/x86
+/usr/qnx650/target/qnx6
+```
+
+3. From the extracted repository root run:
+
+```sh
+./BUILD-MIRROR-QNX.sh
+```
+
+or:
+
+```sh
+cd Toolbox/carplay_alt_screen/mirror_display
+sh build_qnx.sh
+```
+
+The output is:
+
+```text
+Toolbox/carplay_alt_screen/mirror_display/build/carplay-alt111-mirror-display
+```
+
+A successful build verifies that the ELF contains `window58-wm-context-v3`. If your SDK is installed elsewhere, provide `QNX_HOST` and `QNX_TARGET` before running the script.
 
 ## Runtime boundary
 
-Adding or updating this source pin does **not** by itself change the installed vehicle runtime. The target repository continues to use the checked-in runtime artifacts under `Toolbox/carplay_alt_screen/universal/` and `Toolbox/carplay_alt_screen/mirror_display/release/` until a deliberate reviewed QNX rebuild replaces them.
+Compiling does **not** automatically overwrite the checked-in vehicle runtime under `mirror_display/release/`. This remains deliberate: the release ELF and its hashes should only be replaced after a reviewed QNX build. The current checked-in release binary may therefore remain older than the vendored source until promotion is performed.
 
-For the Window58 capture correction, a vehicle-testable package is considered rebuilt only when `carplay-alt111-mirror-display` is produced from this pin and its startup log contains:
+## Source update policy
 
-```text
-carplay-mirror: BUILD id=window58-wm-context-v3 source_context=window_manager_first diagnostics=first_scan_unconditional
-```
-
-The upstream release builder now fails closed if the built ELF does not contain that build ID, preventing an old sidecar binary from being published with new source metadata.
-
-In particular, the source sync does not restore the historical K1004/P1404 profile route. The target repository's UNIVERSAL-only INSTALL/START policy remains authoritative.
-
-The pinned upstream source still contains historical names and build comments describing older K1004/P1404/direct-overlay workflows. Treat those as source history, not as the target repository's current installation policy.
-
-## Getting the source
-
-After cloning this repository with credentials that can read the private upstream repository:
-
-```sh
-git submodule update --init Toolbox/carplay_alt_screen/source_upstream
-```
-
-Then use `Toolbox/carplay_alt_screen/build_source_snapshot.sh` for the baseline hook or Mirror build entry points. The Mirror vehicle binary itself still requires the configured QNX 6.5 ARMv7 toolchain used by `mirror_display/build_qnx.sh`.
+There is no `.gitmodules` dependency anymore. When the authoritative development source changes, copy the reviewed Mirror build files into this directory and update `VENDORED_SOURCE.txt` plus this provenance document to the new upstream commit. This keeps GitHub ZIP downloads reproducible and avoids an invisible submodule pointer.

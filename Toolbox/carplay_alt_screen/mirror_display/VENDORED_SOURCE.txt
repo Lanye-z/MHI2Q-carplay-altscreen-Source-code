@@ -1,0 +1,9 @@
+source_repository=yuedizhibo/mib2q-MMI-Cockpit-Carplay
+source_commit=f79908afda4a6658f41a46e3a96c81246c6a2fc4
+source_path=Toolbox/carplay_alt_screen/mirror_display
+vendored_into=Lanye-z/altscreen-test
+vendored_scope=Mirror sidecar standalone QNX build source
+build_id=window58-wm-context-v3
+capture_context=window_manager_then_display_manager_fallback
+capture_diagnostics=first_scan_unconditional_verbose_periodic
+note=This directory is intentionally stored as normal Git files so GitHub Download ZIP contains buildable source. No submodule checkout is required.
