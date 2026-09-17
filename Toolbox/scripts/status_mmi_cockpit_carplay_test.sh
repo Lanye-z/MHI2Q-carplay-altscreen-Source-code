@@ -30,6 +30,9 @@ STATUS_RC=$?
 RUNTIME="$DEVICE_ROOT/mnt/app/root/carplay-altscreen"
 MIRROR="$RUNTIME/bin/mirror"
 MIRROR_ENABLED="$RUNTIME/state/mirror.enabled"
+CHAIN_ACTIVE="$RUNTIME/state/fullchain_probe"
+MIRROR_RUNNING=0
+MIRROR_HEALTH_RC=0
 if [ -x "$MIRROR/carplay-alt111-mirror-display" ] && [ -x "$MIRROR/start_vehicle.sh" ]; then
     echo "MIRROR_INSTALLED=YES path=/mnt/app/root/carplay-altscreen/bin/mirror"
 else
@@ -45,10 +48,29 @@ elif [ -f "$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay.mirror.pid" ]; then
 fi
 if [ -n "$MIRROR_PID" ]; then
     PID=$(cat "$MIRROR_PID" 2>/dev/null || true)
-    if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then echo "MIRROR_PROCESS=RUNNING pid=$PID volatile_mode=$MIRROR_VOLATILE_MODE"; else echo "MIRROR_PROCESS=STALE_PID volatile_mode=$MIRROR_VOLATILE_MODE"; fi
+    if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+        MIRROR_RUNNING=1
+        echo "MIRROR_PROCESS=RUNNING pid=$PID volatile_mode=$MIRROR_VOLATILE_MODE"
+    else
+        echo "MIRROR_PROCESS=STALE_PID volatile_mode=$MIRROR_VOLATILE_MODE"
+    fi
 else
     echo "MIRROR_PROCESS=NOT_RUNNING"
 fi
 if [ -f "$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/mirror/ready" ] || [ -f "$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay.mirror.ready" ]; then echo "MIRROR_FIRST_FRAME=READY"; else echo "MIRROR_FIRST_FRAME=WAITING"; fi
 echo "MIRROR_SOURCE=private111_window58 sink=displayable3 context=76"
-exit "$STATUS_RC"
+if [ -f "$CHAIN_ACTIVE" ]; then
+    if [ ! -f "$MIRROR_ENABLED" ]; then
+        echo "MIRROR_HEALTH=FAIL reason=chain_active_but_autostart_disabled"
+        MIRROR_HEALTH_RC=1
+    elif [ "$MIRROR_RUNNING" != 1 ]; then
+        echo "MIRROR_HEALTH=FAIL reason=chain_active_but_sidecar_not_running"
+        MIRROR_HEALTH_RC=1
+    else
+        echo "MIRROR_HEALTH=PASS chain_active=1 sidecar_running=1"
+    fi
+else
+    echo "MIRROR_HEALTH=INACTIVE chain_active=0"
+fi
+[ "$STATUS_RC" -eq 0 ] || exit "$STATUS_RC"
+exit "$MIRROR_HEALTH_RC"

@@ -6,6 +6,12 @@
 >
 > 需要注意：现有 universal SO 内部仍保留历史 `p1404_*` 命名及若干 P1404 ABI 防护分支。因此本次变更完成的是“统一路由/复用 stock”的架构切换；后续仍需继续清理 universal hook 内部的固件特定实现。
 
+## 2026-09-17：仪表最后一跳启动完整性
+
+实车采集确认 universal type 111 已完成动态端口监听、accept、原厂 Screen StartSession、持续 ProcessFrames 和首个真实帧 POST，DisplayManager 也创建了 Window58；但采集期间不存在 `carplay-alt111-mirror-display` 进程，也没有 Mirror/autostart 日志。当前正式 sidecar 的 `BUILD_INFO.txt` 明确声明 `source=private111_stock_omx_window58`、`direct_context_route=disabled`、`mirror_sink=displayable3_gles`。因此故障位于 Window58 到仪表的最后一跳，不在 iPhone 协商或 type 111 网络输入。
+
+底层 known/universal controller 过去可以被直接调用并创建 ACTIVE/FULL_CHAIN_MODE，从而绕过集成 START launcher。现已要求生产 START 必须携带集成事务标记，并在激活前验证 Mirror 二进制、launcher 和 ownership marker。STATUS 将 active-without-autostart 或 active-without-sidecar 作为失败；boot diagnostics 同步采集 Mirror runtime/state、`mirror.log` 与 `mirror_autostart.log`。现有采集缺少 START operation journal，故无法唯一证明下午那次由哪个入口触发，但这个可复现的半启动缺口已被封闭。
+
 # 2026-09-14：AltScreen 模块运行依赖与影响面审计
 
 > 后续 CarPlay 分析基线：发现、认证后的能力协商、`/info`、SETUP、type 111 建链、数据端口和视频接收均先对照固定提交的 LIVI，并留档提交号、源码位置、dio 证据及平台差异，避免重复分析或用猜测替代证据。
@@ -30,7 +36,7 @@
 
 以下结论记录旧 K1004/P1404 overlay 交付物：它们没有新增任何车机系统库依赖。代理新增的唯一 `DT_NEEDED` 边是包内同时交付的 `libairplax.so`。两版重命名原厂 libairplay 的依赖列表与各自原厂文件逐项、顺序完全一致；两版补丁 Nme 的依赖列表也与各自原厂文件完全一致。
 
-当前 START 启用第二屏协商、type 111 建链、视频帧处理和 `NATIVE_DISPLAY_MODE`。仪表路由不会在 START 时立即切换；原生代码仍要求 type 111 流已建立、`showUI` 已接受、动态配置有效且认证 Logo 首帧已经预提交，随后才调用 `dmdt`。Restore/Stop 会清理该标记并执行恢复路由。
+旧 profile 文档曾把 `NATIVE_DISPLAY_MODE` 和 hook 内 `dmdt` 路由描述为当前仪表路径；正式交付物已由 Mirror sidecar 负责 Window58 → displayable 3 和 context 76/74 生命周期，hook 内 direct context route 为 disabled。
 
 可重复检查：
 
@@ -47,7 +53,7 @@ python Toolbox/carplay_alt_screen/tests/audit_module_runtime_contract.py \
 
 旧 profile 运行入口为 `dio_manager -> libairplay.so 代理 -> libairplax.so 原厂实现`。dio 同时通过 `libNmeSDK.so -> libNmeBaseClasses.so` 装入对应 profile 的补丁 Nme。P1404 实车运行列表证明三份 overlay 都从 `/mnt/app/root/carplay-altscreen/lib` 装入，顺序为代理在前、重命名原厂库和补丁 Nme 在后。
 
-代理构造函数先绑定原始 libc 转发函数并安装原厂库的精确 GOT 重定向，然后启动后台初始化。后台初始化只有在 state rootc��14 个重定向、进程身份、原厂私有符号、转发门和 display 1 几何均准备好后才置为 ready；此前所有包装函数保持原厂路径。初始化失败会让本进程中的扩展保持不活动，原厂 CarPlay 路径仍然可调用。
+代理构造函数先绑定原始 libc 转发函数并安装原厂库的精确 GOT 重定向，然后启动后台初始化。后台初始化只有在 state rootc��14 个重定向、进程身份、原厂私有符号、转发门和 display 1 几何均准备好后才置为 ready；此前所有包装函数保持原厂路径。初始化失败会让本进程中的扩展保持不活动，原厂 CarPlay 路径仍然可调用。
 
 代理实际导出 22 个 AirPlay/Screen/CScreenRender 或私有 Nme 名称，不导出 `open/open64/read/write/send/recv/close/dup`。因此当前交付物不会接管 dio 全进程的通用文件和网络调用。原厂 libairplay 只把 `write/close` 等长改名到代理私有入口；Nme 只把七个指定导入等长改名。特殊处理还受原厂调用者地址、`/dev/otg-cinemo` 路径、iAP2 候选或已管理 FD 限制，其他调用直接转发原函数。
 

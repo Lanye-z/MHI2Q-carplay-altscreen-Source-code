@@ -27,7 +27,7 @@ fi
 CONTROLLER="$SCRIPTDIR/altscreen_chain_test.sh"
 [ -f "$CONTROLLER" ] || { echo "FAIL: installed chain controller is missing: $CONTROLLER"; exit 127; }
 
-/bin/sh "$CONTROLLER" start
+ALTSCREEN_INTEGRATED_START=1 /bin/sh "$CONTROLLER" start
 CHAIN_RC=$?
 [ "$CHAIN_RC" -eq 0 ] || exit "$CHAIN_RC"
 

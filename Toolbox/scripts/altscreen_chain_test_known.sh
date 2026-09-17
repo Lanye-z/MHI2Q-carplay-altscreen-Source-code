@@ -800,6 +800,21 @@ finish_mounts() {
 
 cmd_start() {
     lock_acquire
+    if [ "$TESTING" != 1 ] && [ "${ALTSCREEN_INTEGRATED_START:-0}" != 1 ]; then
+        say "FAIL: direct controller START is disabled; use start_mmi_cockpit_carplay_rx_test.sh so type111 and the instrument Mirror start as one transaction"
+        lock_release
+        exit 1
+    fi
+    if [ "$TESTING" != 1 ]; then
+        mirror_runtime="$(p /mnt/app/root/carplay-altscreen/bin/mirror)"
+        [ -x "$mirror_runtime/carplay-alt111-mirror-display" ] &&
+        [ -x "$mirror_runtime/start_vehicle.sh" ] &&
+        [ -f "$mirror_runtime/.mmi-cockpit-carplay-mirror-owner" ] || {
+            say "FAIL: integrated Mirror runtime is missing or incomplete; run INSTALL again before START"
+            lock_release
+            exit 1
+        }
+    fi
     [ -f "$INSTALLED_MARKER" ] || { say "FAIL: INSTALL must run before START"; lock_release; exit 1; }
     [ -f "$COMPLETE_MARKER" ] || { say "FAIL: backup is not COMPLETE; refusing to arm"; lock_release; exit 1; }
     verify_backup || fail "original backup damaged"

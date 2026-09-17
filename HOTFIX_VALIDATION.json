@@ -1,0 +1,42 @@
+{
+  "date": "2026-09-17",
+  "scope": "instrument-mirror-startup-integrity",
+  "result": "host-pass-vehicle-pending",
+  "captured_vehicle_evidence": {
+    "type111_listener": "pass",
+    "type111_accept": "pass",
+    "stock_screen_start": "pass",
+    "first_real_frame_to_window58": "pass",
+    "sustained_type111_bytes": 4535556,
+    "displaymanager_window58": "present",
+    "mirror_sidecar_process": "absent",
+    "mirror_logs": "absent",
+    "instrument_last_hop": "not_proven"
+  },
+  "fixes": [
+    "integrated START transaction token required by known and universal controllers in production",
+    "Mirror binary, launcher, and ownership marker required before controller activation",
+    "STATUS returns failure when an active chain lacks Mirror autostart or a live sidecar",
+    "boot diagnostics capture Mirror runtime state, mirror.log, and mirror_autostart.log",
+    "operator documentation distinguishes Window58 frame delivery from instrument output"
+  ],
+  "host_checks": {
+    "modified_shell_syntax": "pass",
+    "git_diff_check": "pass",
+    "package_source_map_all_entries": "pass",
+    "status_active_autostart_disabled": "pass-returns-1",
+    "status_active_sidecar_running": "pass-returns-0",
+    "status_active_sidecar_missing": "pass-returns-1"
+  },
+  "binary_artifacts": {
+    "rebuilt": false,
+    "reason": "the defect is in package integration scripts; delivered hook and sidecar binaries were not modified"
+  },
+  "remaining_validation": [
+    "repeat INSTALL and integrated START with the repaired Toolbox",
+    "perform a complete MMI reboot",
+    "verify MIRROR_HEALTH=PASS before connecting the iPhone",
+    "verify MIRROR_FIRST_FRAME=READY and visible instrument output during navigation",
+    "collect the newly added Mirror and autostart logs"
+  ]
+}

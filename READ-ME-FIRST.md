@@ -44,3 +44,22 @@ UNIVERSAL 路径不会替换原车 `dio_manager`、`/eso/lib/libairplay.so` 或�
 K1004/P1404 改走 universal 后需要重新进行实车回归，至少确认：认证、type 111 descriptor、listener/dataPort、accept、StartSession、ProcessFrames、Main110 共存、断连/重连和原车导航恢复。若 universal resolver 在某个固件上无法安全解析必要 ABI，应优先修复动态解析/签名验证，而不是恢复 profile overlay 作为正常安装路径。
 
 历史 K1004/P1404 profile 的 ABI、LIVI 对照和旧 overlay 设计记录仍保留在 `TECHNICAL-NOTES.md` 与 `profiles/` 中，仅供参考。
+
+## 2026-09-17 仪表未点亮修复
+
+本次黑屏采集证明 type 111 已完成 listener、accept、StartSession、持续收帧和首帧 POST，DisplayManager 也创建了 Window58；但三次进程快照均没有 `carplay-alt111-mirror-display`，采集包中也没有 Mirror/autostart 日志。因此这次不是“手机第二屏流没有进入车机”，而是最后的 Window58 → 仪表显示链没有运行。完整证据和边界见 `INCIDENT-20260917-NO-DISPLAY.md`。
+
+正式架构由 universal hook 把真实帧提交到 private111 Window58，再由集成 Mirror sidecar 读取 Window58、输出 displayable 3 并负责 context 76/74；当前交付物的 hook 内 direct context route 为 disabled。只有 Window58 首帧 POST 不能证明仪表已经点亮。
+
+修复后，底层 controller 不再允许绕过集成 START 单独激活 type111，并会在激活前校验 Mirror 二进制、启动脚本和 ownership marker。STATUS 在活动状态下必须同时显示：
+
+```text
+MIRROR_INSTALLED=YES
+MIRROR_AUTOSTART=ENABLED
+MIRROR_PROCESS=RUNNING
+MIRROR_HEALTH=PASS
+```
+
+尚未开始导航时 `MIRROR_FIRST_FRAME=WAITING` 是正常的；开始导航并点亮后应变为 `READY`。若出现 `chain_active_but_autostart_disabled` 或 `chain_active_but_sidecar_not_running`，STATUS 会返回失败，不能继续把 ACTIVE 标记当作点亮成功。boot diagnostics 现在还会采集 Mirror runtime/state、`mirror.log` 和 `mirror_autostart.log`。
+
+包内 `HOST_VALIDATION.json` 是二进制构建时的原始记录；本次启动链热修复的主机验证见 `HOTFIX_VALIDATION.json`。实体仪表回归仍需重新 INSTALL、集成 START、完整重启后执行。
