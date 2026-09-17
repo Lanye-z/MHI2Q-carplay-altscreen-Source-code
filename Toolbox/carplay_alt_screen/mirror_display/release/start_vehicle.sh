@@ -1,6 +1,16 @@
 #!/bin/sh
 set -eu
-ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+case "$0" in
+  */*) ROOT=${0%/*} ;;
+  *)   ROOT=. ;;
+esac
+
+ROOT=$(CDPATH= cd "$ROOT" 2>/dev/null && pwd) || {
+  echo "ERROR: cannot resolve mirror script directory from $0" >&2
+  exit 2
+}
+
 if [ -n "${ALT111_MIRROR_BIN:-}" ]; then
   BIN="$ALT111_MIRROR_BIN"
 elif [ -x "$ROOT/carplay-alt111-mirror-display" ]; then
