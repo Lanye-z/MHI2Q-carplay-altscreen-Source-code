@@ -71,7 +71,7 @@ The universal-hook source was copied read-only from the development repository i
 - Local build-dependency commit: `fc6712ca6b08108ec7e841aaef1a96c0d6775a52`
 - Local successful QNX workflow run: `35293814437`
 
-The checked-in runtime is promoted from the successful `AltScreen Universal QNX Build` artifact produced by this repository, with `SHA256SUMS.txt` and `PACKAGE_SOURCE_MAP.json` updated in the same promotion commit.
+The successful `AltScreen Universal QNX Build` artifact produced by this repository was verified byte-for-byte against the checked-in runtime. Both are `227836` bytes with SHA-256 `0dea2efef91b842cdaae6973a9b8ec3fd95c06cb48e9f3118fc545a78ee288de`; `SHA256SUMS.txt` and `PACKAGE_SOURCE_MAP.json` already record that same digest, so no redundant binary/hash rewrite is required.
 
 The repair has three runtime safety changes:
 
