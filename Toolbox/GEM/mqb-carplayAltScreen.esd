@@ -1,11 +1,11 @@
 ###########################################################################################
-# MMI-Cockpit-Carplay - Standalone CarPlay Second Screen / BaseVideo3
+# MMI-Cockpit-Carplay - CarPlay Second Screen / Context80 Readback V1
 ###########################################################################################
 screen "MMI-Cockpit-Carplay" Customization
 
 keyValue
     value   String sys 0x00000000 0
-    label   "Standalone flow: INSTALL (type111 + Java80) -> reboot -> START -> reboot; no MMI Mirror sidecar required"
+    label   "Readback flow: type111 -> Window58 -> screen_read_window -> GLES displayable3 -> Java Context80"
     poll    0
 
 script

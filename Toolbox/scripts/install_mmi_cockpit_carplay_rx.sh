@@ -1,7 +1,7 @@
 #!/bin/sh
-# Standalone CarPlay Second Screen / BaseVideo3 INSTALL.
-# Installs type111 native runtime + Java80 HMI control plane only.
-# No MMI Mirror renderer/sidecar and no RGI98 native renderer are installed.
+# CarPlay Second Screen / Context80 Readback V1 INSTALL.
+# Installs type111 Window58 producer + integrated readback/GLES displayable3
+# sidecar + Java80 HMI control plane. RGI98 native renderer is not installed.
 set -u
 
 BASE="$0"
@@ -129,17 +129,21 @@ jar_valid "$JAR_SOURCE" || {
     exit 1
 }
 
-echo "PACKAGE_MODE=CARPLAY_SECOND_SCREEN_STANDALONE"
-echo "NATIVE_SOURCE=private111_stock_omx_cscreenrender"
+echo "PACKAGE_MODE=CARPLAY_SECOND_SCREEN_CONTEXT80_READBACK_V1"
+echo "NATIVE_SOURCE=private111_stock_omx_cscreenrender source_window=58"
+echo "PIXEL_BRIDGE=screen_read_window+BGRA+GLES"
 echo "PIXEL_TARGET=displayable3"
 echo "HMI_CONTEXT=ctx80"
-echo "MMI_MIRROR_RUNTIME=NOT_INCLUDED"
+echo "READBACK_SIDECAR=INCLUDED"
 echo "RGI98_NATIVE_RENDERER=NOT_INCLUDED"
 
 backup_original_jar || exit 1
 /bin/sh "$CONTROLLER" install "${1:-}"
 CHAIN_RC=$?
 [ "$CHAIN_RC" -eq 0 ] || exit "$CHAIN_RC"
+MIRROR_RUNTIME="$DEVICE_ROOT/mnt/app/root/carplay-altscreen/bin/mirror"
+[ -x "$MIRROR_RUNTIME/carplay-alt111-mirror-display" ] || { echo "FAIL: integrated readback binary was not staged"; exit 1; }
+[ -x "$MIRROR_RUNTIME/start_vehicle.sh" ] || { echo "FAIL: integrated readback launcher was not staged"; exit 1; }
 
 APP_RW=0
 rollback(){
@@ -173,5 +177,5 @@ APP_RW=0
 
 echo "HMI_CONTROL_PLANE=INSTALLED target=/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar size=$EXPECTED_SIZE cksum=$EXPECTED_CKSUM"
 echo "HMI_CONTRACT=JAVA80 ctx80=98,101,102,3 basevideo=3"
-echo "INSTALL=PASS integrated=AltScreen+BaseVideo3+Java80 reboot_required=YES"
+echo "INSTALL=PASS integrated=AltScreen+Window58Readback+Displayable3+Java80 reboot_required=YES"
 exit 0

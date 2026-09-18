@@ -1,7 +1,8 @@
 #!/bin/sh
-# Standalone BaseVideo3 START.
-# Arms type111, persists the BaseVideo demand marker across reboot, and leaves
-# terminal1/ctx80 ownership exclusively to the installed Java HMI controller.
+# Context80 readback START.
+# Arms type111 + Window58 readback. Java/HMI remains the sole terminal1/ctx80
+# owner; /tmp/mmi-mirror-basevideo.ready is published only after the GLES
+# destination has successfully presented its first frame.
 set -u
 
 BASE="$0"
@@ -40,6 +41,11 @@ EXPECTED_CKSUM=2378993239
 ACTIVE="$DEVICE_ROOT/tmp/mmi-mirror-active"
 READY="$DEVICE_ROOT/tmp/mmi-mirror-basevideo.ready"
 STARTED="$DEVICE_ROOT/tmp/mmi-mirror-controller.started"
+MIRROR="$RUNTIME/bin/mirror"
+MIRROR_START="$MIRROR/start_vehicle.sh"
+MIRROR_STOP="$MIRROR/stop_vehicle.sh"
+MIRROR_PID="$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/mirror/pid"
+MIRROR_LOG="$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/mirror/mirror.log"
 
 file_size(){ n=$(wc -c < "$1" 2>/dev/null) || { echo 0; return; }; set -- $n; echo "${1:-0}"; }
 file_cksum(){ if command -v cksum >/dev/null 2>&1; then cksum < "$1" 2>/dev/null | awk '{print $1}'; else echo unavailable; fi; }
@@ -55,11 +61,14 @@ mount_system_rw(){ [ "$TESTING" = 1 ] || mount -uw /mnt/system; }
 mount_system_ro(){ [ "$TESTING" = 1 ] || mount -ur /mnt/system; }
 
 jar_valid || {
-    echo "FAIL: standalone Java80 HMI JAR missing or mismatched"
+    echo "FAIL: Java80 HMI JAR missing or mismatched"
     echo "expected_size=$EXPECTED_SIZE expected_cksum=$EXPECTED_CKSUM"
     [ -f "$JAR" ] && echo "actual_size=$(file_size "$JAR") actual_cksum=$(file_cksum "$JAR")"
     exit 1
 }
+
+[ -x "$MIRROR/carplay-alt111-mirror-display" ] || { echo "FAIL: readback sidecar binary missing"; exit 1; }
+[ -x "$MIRROR_START" ] || { echo "FAIL: readback sidecar launcher missing"; exit 1; }
 
 STARTUP=""
 for candidate in "$DEVICE_ROOT/mnt/system/etc/boot/startup.sh" "$DEVICE_ROOT/etc/boot/startup.sh"; do
@@ -99,6 +108,7 @@ rollback(){
         [ "$APP_RW" != 1 ] || rm -f "$ENABLED" >/dev/null 2>&1 || true
     fi
     [ "$APP_RW" != 1 ] || { mount_app_ro >/dev/null 2>&1 || true; APP_RW=0; }
+    [ ! -x "$MIRROR_STOP" ] || /bin/sh "$MIRROR_STOP" >/dev/null 2>&1 || true
     rm -f "$ACTIVE" "$READY" 2>/dev/null || true
     cleanup
 }
@@ -120,8 +130,10 @@ strip_blocks "$STARTUP" > "$CLEAN" || fail "invalid existing BaseVideo3/Mirror a
 cat > "$BLOCK" <<'BASEVIDEO3_BOOT'
 # BEGIN ALT111 BASEVIDEO3 AUTOSTART
 if [ -f /mnt/app/root/carplay-altscreen/state/basevideo3.enabled ]; then
+    mkdir -p /tmp/MMI-Cockpit-Carplay/mirror >/dev/null 2>&1 || true
     rm -f /tmp/mmi-mirror-basevideo.ready >/dev/null 2>&1 || true
     touch /tmp/mmi-mirror-active >/dev/null 2>&1 || true
+    /mnt/app/root/carplay-altscreen/bin/mirror/start_vehicle.sh >>/tmp/MMI-Cockpit-Carplay/mirror_autostart.log 2>&1 &
 fi
 # END ALT111 BASEVIDEO3 AUTOSTART
 BASEVIDEO3_BOOT
@@ -142,13 +154,18 @@ ALTSCREEN_INTEGRATED_START=1 /bin/sh "$CONTROLLER" start
 RC=$?
 [ "$RC" -eq 0 ] || { rollback; exit "$RC"; }
 
+mkdir -p "$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/mirror" 2>/dev/null || true
+/bin/sh "$MIRROR_START"
+MIRROR_RC=$?
+[ "$MIRROR_RC" -eq 0 ] || { rollback; exit "$MIRROR_RC"; }
+
 cleanup
-echo "DISPLAY_PATH=BASEVIDEO3_NATIVE source=private111_stock_omx_cscreenrender displayable=3"
+echo "DISPLAY_PATH=WINDOW58_READBACK source=private111_stock_omx_cscreenrender source_window=58 capture=screen_read_window sink=displayable3_gles"
 echo "HMI_CONTROL_PLANE=JAVA80 context=80 composite=98,101,102,3"
-echo "CONTEXT_POLICY=JAVA_ONLY native_dmdt=0"
+echo "CONTEXT_POLICY=JAVA_ONLY native_dmdt=0 sidecar_dmdt=0"
 echo "BASEVIDEO3_BOOT_DEMAND=ENABLED marker=/tmp/mmi-mirror-active"
-echo "READY_MARKER=/tmp/mmi-mirror-basevideo.ready first_successful_stock_post_only=1"
+echo "READY_MARKER=/tmp/mmi-mirror-basevideo.ready meaning=destination_first_successful_gles_present"
 if [ -f "$STARTED" ]; then echo "JAVA_CONTROLLER=OBSERVED current_boot=YES"; else echo "JAVA_CONTROLLER=NOT_YET_OBSERVED current_boot=NO_or_reboot_pending"; fi
-echo "MMI_MIRROR_SIDECAR=DISABLED"
-echo "START=PASS integrated=AltScreen+BaseVideo3+Java80 reboot_required=YES"
+echo "READBACK_SIDECAR=RUNNING_OR_WAITING_FOR_PHONE_REQUEST_111 pidfile=$MIRROR_PID log=$MIRROR_LOG"
+echo "START=PASS integrated=AltScreen+Window58Readback+Displayable3+Java80 reboot_required=YES"
 exit 0

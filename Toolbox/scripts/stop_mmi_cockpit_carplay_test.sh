@@ -1,5 +1,5 @@
 #!/bin/sh
-# Standalone BaseVideo3 RESTORE ORIGINAL.
+# Context80 readback RESTORE ORIGINAL.
 # Releases Java80 demand, restores the exact pre-install carplay_hook.jar, then
 # restores the native AltScreen/preload transaction. No MMI Mirror is involved.
 set -u
@@ -45,6 +45,7 @@ BACKUP="$VOLUME/MMI-Cockpit-Carplay/backup/basevideo3-hmi-original"
 ACTIVE="$DEVICE_ROOT/tmp/mmi-mirror-active"
 READY="$DEVICE_ROOT/tmp/mmi-mirror-basevideo.ready"
 STARTED="$DEVICE_ROOT/tmp/mmi-mirror-controller.started"
+MIRROR_STOP="$RUNTIME/bin/mirror/stop_vehicle.sh"
 
 mount_app_rw(){ [ "$TESTING" = 1 ] || mount -uw /mnt/app; }
 mount_app_ro(){ [ "$TESTING" = 1 ] || mount -ur /mnt/app; }
@@ -76,8 +77,10 @@ strip_blocks(){
     ' "$1"
 }
 
+# Stop the pixel sidecar first. It has no context writer in this branch.
+[ ! -x "$MIRROR_STOP" ] || /bin/sh "$MIRROR_STOP" >/dev/null 2>&1 || true
 # Release demand while the current Java controller is still resident. It will
-# observe active/ready withdrawal and return terminal1 to ctx74 before reboot.
+# observe active/ready withdrawal and return terminal1 to its stock context.
 rm -f "$ACTIVE" "$READY" 2>/dev/null || true
 sleep 1
 
@@ -139,6 +142,6 @@ RC=$?
 [ "$RC" -eq 0 ] || exit "$RC"
 
 echo "BASEVIDEO3_BOOT_DEMAND=DISABLED"
-echo "MMI_MIRROR_SIDECAR=NOT_USED"
-echo "RESTORE=PASS integrated=AltScreen+BaseVideo3+Java80 reboot_required=YES"
+echo "READBACK_SIDECAR=STOPPED native_dmdt=DISABLED"
+echo "RESTORE=PASS integrated=AltScreen+Window58Readback+Java80 reboot_required=YES"
 exit 0

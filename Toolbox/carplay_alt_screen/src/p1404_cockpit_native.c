@@ -5,9 +5,9 @@
  * Its stock config assigns every renderer window to displayable 59.  That is
  * correct for MainScreen 110 but unsafe for a second stream.  We bind the exact
  * renderer owned by our private ScreenStream, rewrite only its 44-byte
- * st_screen_config from Main110 identity 59 to project BaseVideo identity 3,
- * and register that exact stock-created window with DisplayManager before
- * stock creates its NV12 buffers. Java/HMI remains the sole ctx80 writer. Compressed Main110 data, physical-screen
+ * st_screen_config to displayable 58 using display 1's runtime-reported pixel
+ * geometry, and register that renderer's native window with DisplayManager
+ * before stock creates its NV12 buffers. Compressed Main110 data, physical-screen
  * pixels, RFB and bootstrap images are never accepted here.
  *
  * Route activation depends on the private renderer's successful dynamic config,
@@ -29,7 +29,6 @@
 #include <stdlib.h>
 #include <dlfcn.h>
 #include <unistd.h>
-#include <stdio.h>
 
 /* Host fixtures and the legacy preload build may omit the K1004 direct
  * resolver. Keep it optional there; the exact direct overlay provides it. */
@@ -47,18 +46,14 @@ extern void *p1404_direct_stock_symbol_named(const char *name)
 #define P1404_P_WAIT                 0
 #define NATIVE_CONFIG_REFUSED_STATUS (-58796)
 #define P1404_RTLD_NOW                2
+#define SCREEN_WINDOW_MANAGER_CONTEXT 1
 #define SCREEN_DISPLAY_MANAGER_CONTEXT 8
 #define SCREEN_PROPERTY_SIZE          40
 #define SCREEN_PROPERTY_DISPLAY_COUNT 59
 #define SCREEN_PROPERTY_DISPLAYS      60
 #define SCREEN_PROPERTY_ID            87
-#define SCREEN_PROPERTY_BUFFER_SIZE     5
-#define SCREEN_PROPERTY_FORMAT         14
-#define SCREEN_PROPERTY_USAGE          48
-#define SCREEN_PROPERTY_VISIBLE        51
-#define SCREEN_MAX_DISPLAYS             8
+#define SCREEN_MAX_DISPLAYS            8
 #define DISPLAY_MANAGER_SECRET         "How are you gentlemen?"
-#define BASEVIDEO_READY_PATH          "/tmp/mmi-mirror-basevideo.ready"
 #define DMDT_PATH                    "/eso/bin/apps/dmdt"
 
 #define CSCREEN_CONFIG_SYMBOL "_ZN3dio13CScreenRender6configERKNS_16st_screen_configE"
@@ -87,8 +82,6 @@ typedef int (*f_screen_get_display_iv_t)(screen_display_t, int, int *);
 typedef int (*f_screen_create_window_group_t)(screen_window_t, const char *);
 typedef int (*f_screen_create_window_buffers_t)(screen_window_t, int);
 typedef int (*f_screen_manage_window_t)(screen_window_t, const char *);
-typedef int (*f_screen_get_window_iv_t)(screen_window_t, int, int *);
-typedef int (*f_screen_set_window_iv_t)(screen_window_t, int, const int *);
 
 enum native_route_action {
     NATIVE_ROUTE_NONE = 0,
@@ -168,8 +161,6 @@ static void *g_screen_buffer_lib;
 static f_screen_create_window_group_t g_screen_create_window_group;
 static f_screen_create_window_buffers_t g_screen_create_window_buffers;
 static f_screen_manage_window_t g_screen_manage_window;
-static f_screen_get_window_iv_t g_screen_get_window_iv;
-static f_screen_set_window_iv_t g_screen_set_window_iv;
 static struct {
     void *renderer;
     screen_window_t window;
@@ -210,10 +201,8 @@ static int bind_screen_native_api(void) {
     f_screen_create_window_group_t create_group;
     f_screen_create_window_buffers_t create_buffers;
     f_screen_manage_window_t manage_window;
-    f_screen_get_window_iv_t get_window_iv;
-    f_screen_set_window_iv_t set_window_iv;
     if (g_screen_create_window_group && g_screen_create_window_buffers &&
-        g_screen_manage_window && g_screen_get_window_iv && g_screen_set_window_iv)
+        g_screen_manage_window)
         return 1;
     lib = dlopen("libscreen.so.1", P1404_RTLD_NOW);
     if (!lib) return 0;
@@ -222,33 +211,25 @@ static int bind_screen_native_api(void) {
     create_buffers = (f_screen_create_window_buffers_t)
         dlsym(lib, "screen_create_window_buffers");
     manage_window = (f_screen_manage_window_t)dlsym(lib, "screen_manage_window");
-    get_window_iv = (f_screen_get_window_iv_t)
-        dlsym(lib, "screen_get_window_property_iv");
-    set_window_iv = (f_screen_set_window_iv_t)
-        dlsym(lib, "screen_set_window_property_iv");
     native_lock();
     if (!g_screen_buffer_lib) {
         g_screen_buffer_lib = lib;
         g_screen_create_window_group = create_group;
         g_screen_create_window_buffers = create_buffers;
         g_screen_manage_window = manage_window;
-        g_screen_get_window_iv = get_window_iv;
-        g_screen_set_window_iv = set_window_iv;
         lib = NULL;
     }
     native_unlock();
     if (lib) dlclose(lib);
     return g_screen_create_window_group && g_screen_create_window_buffers &&
-           g_screen_manage_window && g_screen_get_window_iv &&
-           g_screen_set_window_iv;
+           g_screen_manage_window;
 }
 
 
 
 static int native_route_requested(void) {
-    /* BaseVideo3 experiment: Native owns pixels only. Java/HMI is the sole
-     * terminal1/ctx80 writer, so all legacy native dmdt route workers are
-     * deliberately unreachable even if old FULL/NATIVE markers exist. */
+    /* Context80 is owned by the Java/HMI controller in the readback build.
+     * Native code is pixels-only: private111 -> stock OMX -> Window58. */
     return 0;
 }
 
@@ -332,13 +313,8 @@ int p1404_cockpit_native_refresh_geometry(void) {
     get_display_iv = (f_screen_get_display_iv_t)dlsym(lib, "screen_get_display_property_iv");
     if (!create_context || !destroy_context || !get_context_iv ||
         !get_context_pv || !get_display_iv) goto done;
-    /* Native-direct experiment: querying physical display geometry does not
-     * require a global WindowManager role. Use only DISPLAY_MANAGER_CONTEXT so
-     * no pre-session WindowManager context is ever created by this path. */
-    if (create_context(&context, SCREEN_DISPLAY_MANAGER_CONTEXT) != 0) {
-        altscreen_log("ERROR PHASE=NATIVE_111_GEOMETRY_CONTEXT result=REFUSED context=DISPLAY_MANAGER no_window_manager_fallback=1");
-        goto done;
-    }
+    if (create_context(&context, SCREEN_WINDOW_MANAGER_CONTEXT) != 0 &&
+        create_context(&context, SCREEN_DISPLAY_MANAGER_CONTEXT) != 0) goto done;
     if (get_context_iv(context, SCREEN_PROPERTY_DISPLAY_COUNT, &count) != 0 ||
         count <= 0 || count > SCREEN_MAX_DISPLAYS) goto done;
     if (get_context_pv(context, SCREEN_PROPERTY_DISPLAYS, (void **)displays) != 0)
@@ -362,7 +338,7 @@ done:
     if (context && destroy_context) (void)destroy_context(context);
     if (lib) dlclose(lib);
     if (!ok) {
-        altscreen_log("ERROR PHASE=NATIVE_111_GEOMETRY_QUERY_FAILED target_display=1 count=%d fixed_fallback=0 private111_refused=1 context=DISPLAY_MANAGER",
+        altscreen_log("ERROR PHASE=NATIVE_111_GEOMETRY_QUERY_FAILED target_display=1 count=%d fixed_fallback=0 private111_refused=1",
                       count);
         return 0;
     }
@@ -371,7 +347,7 @@ done:
     g_target_height = height;
     native_unlock();
     (void)altscreen_set_cluster_geometry(width, height);
-    altscreen_log("PHASE=NATIVE_111_GEOMETRY_READY target_display=1 size=%ux%u source=SCREEN_PROPERTY_SIZE fixed_fallback=0 context=DISPLAY_MANAGER",
+    altscreen_log("PHASE=NATIVE_111_GEOMETRY_READY target_display=1 size=%ux%u source=SCREEN_PROPERTY_SIZE fixed_fallback=0",
                   width, height);
     return 1;
 }
@@ -424,14 +400,12 @@ int p1404_cockpit_native_bind_stock(void) {
         g_pthread_create = (f_pthread_create_t)dlsym(RTLD_DEFAULT, "pthread_create");
     if (!g_pthread_detach)
         g_pthread_detach = (f_pthread_detach_t)dlsym(RTLD_DEFAULT, "pthread_detach");
-    /* Do not bind spawnl on BaseVideo3: native context routing is forbidden.
-     * Keeping this NULL also fail-closes any dormant legacy route worker. */
-    g_spawnl = NULL;
+    if (!g_spawnl)
+        g_spawnl = (f_spawnl_t)dlsym(RTLD_DEFAULT, "spawnl");
     /* Loader constructors must resolve symbols only. Creating a Screen manager
      * context here can fault or deadlock dio_manager before authorization and
      * before the logger exists. Geometry is queried lazily at Alt advertisement
      * and again before the private renderer attaches. */
-    altscreen_log("PHASE=BASEVIDEO3_NATIVE_POLICY build=basevideo3-native-v1-visible-probe data_plane=stock_omx_cscreenrender displayable=3 java_context_owner=80 native_context_writer=0 force_visible=1 capture=0 gles=0 mirror=0 geometry_context=DISPLAY_MANAGER_ONLY");
     altscreen_log("PHASE=NATIVE_111_STOCK_BIND config=%d render=%d stream_start=%d screen_copy_main=%d screen_create=%d copy_delegates=%d register_delegates=%d pthread_create=%d pthread_detach=%d spawnl=%d geometry=%d",
                   g_real_config != NULL, g_real_render != NULL,
                   g_real_stream_start != NULL, g_real_screen_copy_main != NULL,
@@ -557,8 +531,8 @@ static void *native_route_worker(void *arg) {
                               "private111-context76-activation-after-config-and-showui");
         alt_state_mark_native(receiver, state_generation,
                               ALT_STATE_NATIVE_COCKPIT_VISIBLE,
-                              "private111-stock-omx->displayable3-context76-dynamic-geometry");
-        altscreen_log("PHASE=NATIVE_111_COCKPIT_ACTIVE receiver=%p stream=%p requested_geometry=%ux%u displayable=3 context=76 gate=first_real_type111_frame_posted",
+                              "private111-stock-omx->displayable58-context76-dynamic-geometry");
+        altscreen_log("PHASE=NATIVE_111_COCKPIT_ACTIVE receiver=%p stream=%p requested_geometry=%ux%u displayable=58 context=76 gate=first_real_type111_frame_posted",
                       receiver, stream, width, height);
     }
     free(job);
@@ -881,7 +855,7 @@ static int finalize_private_attach(void *receiver, void *stream) {
         return 0;
     }
     (void)g_pthread_detach(monitor);
-    altscreen_log("[ALT111] PHASE=NATIVE_111_ATTACH receiver=%p stream=%p video_impl=%p renderer=%p displayable=3 java_context_owner=80 first_config_rewritten=1 main110_untouched=1 capture=0 readback=0 gles=0 scaling=0 fixed_geometry=0",
+    altscreen_log("PHASE=NATIVE_111_ATTACH receiver=%p stream=%p video_impl=%p renderer=%p displayable=58 first_config_rewritten=1 main110_untouched=1 capture=0 rfb=0 scaling=0 fixed_geometry=0",
                   receiver, stream, video_impl, renderer);
     return 1;
 }
@@ -995,12 +969,18 @@ int p1404_cockpit_native_attach(void *receiver, void *stream) {
 void p1404_cockpit_native_detach(void *receiver, void *stream) {
     struct native_slot *slot;
     uint32_t generation = 0;
+    uint32_t state_generation = 0;
     int send_stop = 0;
+    int restore = 0;
+    int restored = 0;
     native_lock();
     slot = find_stream_locked(receiver, stream);
     if (slot) {
         generation = slot->generation;
+        state_generation = slot->state_generation;
         send_stop = slot->monitor_started;
+        restore = slot->visible ||
+                  (slot->action_pending && slot->action == NATIVE_ROUTE_ACTIVATE);
         slot->stream = NULL;
         slot->receiver = NULL;
         slot->renderer = NULL;
@@ -1010,9 +990,24 @@ void p1404_cockpit_native_detach(void *receiver, void *stream) {
     if (generation && send_stop)
         (void)alt_send_cluster_event(receiver, stream, generation,
                                      ALT111_EVENT_STOP_UI);
-    if (generation) (void)unlink(BASEVIDEO_READY_PATH);
-    altscreen_log("PHASE=BASEVIDEO3_DETACH receiver=%p stream=%p generation=%u ready_cleared=%d native_context_restore=0",
-                  receiver, stream, generation, generation ? 1 : 0);
+    if (restore) {
+        route_lock();
+        /* A pending old activation either completed and restored itself before
+         * we acquired this lock, or will observe the invalidated generation
+         * after release and perform no display mutation. Only the generation
+         * that actually owns context76 may restore it here. */
+        if (g_route_generation == generation) {
+            restored = run_restore_route();
+            if (restored) g_route_generation = 0;
+        }
+        route_unlock();
+    }
+    if (restored)
+        alt_state_mark_native(receiver, state_generation,
+                              ALT_STATE_NATIVE_COCKPIT_HIDDEN,
+                              "private111-detach-restored-context74");
+    altscreen_log("PHASE=NATIVE_111_DETACH receiver=%p stream=%p restore=%d restored=%d",
+                  receiver, stream, restore, restored);
 }
 
 #ifdef ALTSCREEN_NATIVE_HOST_TEST
@@ -1063,47 +1058,6 @@ int p1404_cockpit_native_test_route_visible(void *receiver, void *stream) {
 }
 #endif
 
-static void basevideo3_probe_window(const char *stage, screen_window_t window) {
-    int id = -1;
-    int visible = -1;
-    int format = -1;
-    int usage = -1;
-    int size[2] = { -1, -1 };
-    int buffer_size[2] = { -1, -1 };
-    int rc_id = -1, rc_visible = -1, rc_format = -1, rc_usage = -1;
-    int rc_size = -1, rc_buffer_size = -1;
-    if (g_screen_get_window_iv && window) {
-        rc_id = g_screen_get_window_iv(window, SCREEN_PROPERTY_ID, &id);
-        rc_visible = g_screen_get_window_iv(window, SCREEN_PROPERTY_VISIBLE, &visible);
-        rc_format = g_screen_get_window_iv(window, SCREEN_PROPERTY_FORMAT, &format);
-        rc_usage = g_screen_get_window_iv(window, SCREEN_PROPERTY_USAGE, &usage);
-        rc_size = g_screen_get_window_iv(window, SCREEN_PROPERTY_SIZE, size);
-        rc_buffer_size = g_screen_get_window_iv(window, SCREEN_PROPERTY_BUFFER_SIZE,
-                                                buffer_size);
-    }
-    altscreen_log("PHASE=BASEVIDEO3_WINDOW_PROBE stage=%s window=%p qnx_id=%d visible=%d format=%d usage=0x%x size=%dx%d buffer_size=%dx%d rc_id=%d rc_visible=%d rc_format=%d rc_usage=%d rc_size=%d rc_buffer_size=%d",
-                  stage ? stage : "unknown", window, id, visible, format, usage,
-                  size[0], size[1], buffer_size[0], buffer_size[1],
-                  rc_id, rc_visible, rc_format, rc_usage, rc_size, rc_buffer_size);
-}
-
-static int basevideo3_publish_ready(void *stream, uint32_t generation,
-                                    uint32_t width, uint32_t height) {
-    FILE *f = fopen(BASEVIDEO_READY_PATH, "w");
-    if (!f) return 0;
-    fprintf(f, "stream=%p\n", stream);
-    fprintf(f, "generation=%u\n", generation);
-    fprintf(f, "displayable=3\n");
-    fprintf(f, "size=%ux%u\n", width, height);
-    fprintf(f, "java_context_owner=80\n");
-    fprintf(f, "force_visible=1\n");
-    if (fclose(f) != 0) {
-        (void)unlink(BASEVIDEO_READY_PATH);
-        return 0;
-    }
-    return 1;
-}
-
 /* CScreenRender submits its fixed static group as a delayed Screen operation.
  * For the thread-qualified private renderer, suppress only that group request.
  * Main110 and every unrelated caller keep the stock group and behavior. */
@@ -1131,11 +1085,8 @@ int screen_create_window_buffers(screen_window_t window, int count) {
     int private_config = 0;
     int group_skipped = 0;
     int manage_rc = -1;
-    int visible = 1;
-    int visible_rc = -1;
     int buffers_rc;
-    if (!g_screen_create_window_buffers || !g_screen_manage_window ||
-        !g_screen_get_window_iv || !g_screen_set_window_iv)
+    if (!g_screen_create_window_buffers || !g_screen_manage_window)
         (void)bind_screen_native_api();
     native_lock();
     if (g_managed_config.active &&
@@ -1149,36 +1100,16 @@ int screen_create_window_buffers(screen_window_t window, int count) {
     if (!private_config)
         return g_screen_create_window_buffers ?
             g_screen_create_window_buffers(window, count) : -1;
-
-    basevideo3_probe_window("pre_manage", window);
     if (group_skipped && g_screen_manage_window)
         manage_rc = g_screen_manage_window(window, DISPLAY_MANAGER_SECRET);
-    basevideo3_probe_window("post_manage", window);
     if (manage_rc != 0) {
         native_lock();
         g_managed_config.manage_rc = manage_rc;
         native_unlock();
         return manage_rc;
     }
-
-    /* V1-visible-probe changes exactly one producer property beyond the
-     * BaseVideo3 identity rewrite: make the managed private window visible
-     * before stock creates decoder buffers. Main110 never enters this scope. */
-    if (g_screen_set_window_iv)
-        visible_rc = g_screen_set_window_iv(window, SCREEN_PROPERTY_VISIBLE, &visible);
-    basevideo3_probe_window("post_force_visible", window);
-    altscreen_log("PHASE=BASEVIDEO3_FORCE_VISIBLE window=%p requested=1 rc=%d private_only=1 main110_untouched=1",
-                  window, visible_rc);
-    if (visible_rc != 0) {
-        native_lock();
-        g_managed_config.manage_rc = visible_rc;
-        native_unlock();
-        return visible_rc;
-    }
-
     buffers_rc = g_screen_create_window_buffers ?
         g_screen_create_window_buffers(window, count) : -1;
-    basevideo3_probe_window("post_buffers", window);
     native_lock();
     g_managed_config.manage_rc = manage_rc;
     g_managed_config.buffers_rc = buffers_rc;
@@ -1235,10 +1166,6 @@ int p1404_hook_cscreen_config(void *self, const struct p1404_screen_config *conf
         owned_private = 1;
     }
     native_unlock();
-    if (!owned_private && config) {
-        altscreen_log("[MAIN110] PHASE=CSCREEN_CONFIG renderer=%p window_id=%u rewrite=0 ownership=stock",
-                      self, config->window_id);
-    }
     if (owned_private)
         rewritten = p1404_cockpit_native_rewrite_config(config, &native_config);
     if (owned_private && !rewritten) {
@@ -1282,7 +1209,7 @@ int p1404_hook_cscreen_config(void *self, const struct p1404_screen_config *conf
         (void)p1404_cockpit_native_get_geometry(&target_width, &target_height);
         geometry_match = native_config.source_width == target_width &&
                          native_config.source_height == target_height;
-        altscreen_log("PHASE=NATIVE_111_CONFIG_RETURN receiver=%p stream=%p renderer=%p rc=%d input=%ux%u_source_%ux%u output=%ux%u_source_%ux%u target=%ux%u geometry_match=%d displayable=3 scaling=0 fixed_geometry=0 dm_managed=%d",
+        altscreen_log("PHASE=NATIVE_111_CONFIG_RETURN receiver=%p stream=%p renderer=%p rc=%d input=%ux%u_source_%ux%u output=%ux%u_source_%ux%u target=%ux%u geometry_match=%d displayable=58 scaling=0 fixed_geometry=0 dm_managed=%d",
                       receiver, stream, self, rc,
                       config ? config->window_width : 0u,
                       config ? config->window_height : 0u,
@@ -1308,7 +1235,7 @@ int p1404_hook_cscreen_config(void *self, const struct p1404_screen_config *conf
             if (geometry_match) {
                 alt_state_mark_native(receiver, state_generation,
                     ALT_STATE_NATIVE_VIDEO_CONFIG,
-                    "stock-omx-cscreen-config-dynamic-geometry-displayable3");
+                    "stock-omx-cscreen-config-dynamic-geometry-displayable58");
             } else {
                 altscreen_log("PHASE=NATIVE_111_CONFIG_WAIT_NEGOTIATED_GEOMETRY receiver=%p stream=%p renderer=%p current=%ux%u target=%ux%u route_ready=0",
                               receiver, stream, self, native_config.source_width,
@@ -1389,21 +1316,16 @@ int p1404_hook_cscreen_render(void *self, unsigned char *buffer) {
     }
     native_unlock();
 
-    if (first_real_post) {
-        int ready_ok = basevideo3_publish_ready(stream, generation,
-                                                config_width, config_height);
-        altscreen_log("PHASE=NATIVE_111_FIRST_REAL_FRAME receiver=%p stream=%p renderer=%p generation=%u result=POSTED geometry=%ux%u route_gate=java80_only",
+    if (first_real_post)
+        altscreen_log("PHASE=NATIVE_111_FIRST_REAL_FRAME receiver=%p stream=%p renderer=%p generation=%u result=POSTED geometry=%ux%u route_gate=eligible",
                       receiver, stream, self, generation, config_width, config_height);
-        altscreen_log("[BASEVIDEO3] PHASE=BASEVIDEO3_READY stream=%p renderer=%p generation=%u ready=%d displayable=3 java_context_owner=80 readback=0 gles=0 force_visible=1",
-                      stream, self, generation, ready_ok);
-    }
 
     memset(&snap, 0, sizeof(snap));
     if (!alt_state_snapshot(receiver, 1, &snap) ||
         snap.generation != generation || snap.alt_screen_stream != stream)
         return rc;
-    if (posts >= NATIVE_MIN_POSTS && snap.nal_sps && snap.nal_pps && snap.nal_idr &&
-        snap.video_config_seen && now <= first_post_at + NATIVE_POST_WINDOW_SECONDS) {
+    if (posts >= NATIVE_MIN_POSTS && snap.video_config_seen &&
+        now <= first_post_at + NATIVE_POST_WINDOW_SECONDS) {
         native_lock();
         slot = find_renderer_locked(self);
         if (slot && slot->generation == generation && !slot->decoder_marked) {
@@ -1415,8 +1337,8 @@ int p1404_hook_cscreen_render(void *self, unsigned char *buffer) {
     if (should_mark) {
         alt_state_mark_native(receiver, state_generation,
             ALT_STATE_NATIVE_DECODER_READY,
-            "private111-stock-omx-three-successful-native-posts-after-sps-pps-idr");
-        altscreen_log("PHASE=NATIVE_111_DECODER_READY receiver=%p stream=%p renderer=%p posts=%u sps=%u pps=%u idr=%u negotiated_geometry=%ux%u fixed_geometry=0",
+            "private111-stock-omx-three-successful-posts-stock-avcc-config-observed");
+        altscreen_log("PHASE=NATIVE_111_DECODER_READY receiver=%p stream=%p renderer=%p posts=%u sps=%u pps=%u idr=%u negotiated_geometry=%ux%u fixed_geometry=0 bitstream=stock_avcc annexb_observer_optional=1",
                       receiver, stream, self, posts, snap.nal_sps, snap.nal_pps,
                       snap.nal_idr, config_width, config_height);
     }

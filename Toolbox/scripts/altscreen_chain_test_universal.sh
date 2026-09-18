@@ -522,15 +522,17 @@ cmd_start(){
     ensure_dirs "$session" "$STATE_DIR" || { lock_release; return 1; }
     echo "$run_id" > "$STATE_DIR/run_id"; echo "$session" > "$STATE_DIR/session_path"
     echo observe > "$STATE_DIR/IAP2_PROFILE"; rm -f "$STATE_DIR/ARMED_IAP2"
-    for m in ARMED ARMED_MUTATE ARMED_INFO ARMED_FEATURE ARMED_CREATE111 FULL_CHAIN_MODE NATIVE_DISPLAY_MODE ACTIVE FORCE_START; do
+    for m in ARMED ARMED_MUTATE ARMED_INFO ARMED_FEATURE ARMED_CREATE111 ACTIVE FORCE_START; do
         touch "$STATE_DIR/$m" || { lock_release; return 1; }
     done
+    # Java/HMI is the sole context owner in context80-readback-v1.
+    rm -f "$STATE_DIR/FULL_CHAIN_MODE" "$STATE_DIR/NATIVE_DISPLAY_MODE"
     mount_rw "$(p /mnt/app)" || { lock_release; return 1; }; MR_APP=1
     ensure_dirs "$(dirname -- "$PROBE_MARKER")" || { finish_mounts; lock_release; return 1; }
     echo "$run_id" > "$PROBE_MARKER" || { finish_mounts; lock_release; return 1; }
     finish_mounts || { lock_release; return 1; }
     say "AUTH_PRIVATE111_CORE=UNCHANGED resolver=dynamic"
-    say "DISPLAY_PATH=BASEVIDEO3_NATIVE source=private111_stock_omx_cscreenrender displayable=3 context_owner=JAVA80 mirror_sidecar=DISABLED"
+    say "DISPLAY_PATH=WINDOW58_READBACK source=private111_stock_omx_cscreenrender source_window=58 sink=displayable3_gles context_owner=JAVA80 mirror_sidecar=REQUIRED"
     lock_release || return 1
     say "START=PASS profile=UNIVERSAL run_id=$run_id reboot_required=YES"
 }

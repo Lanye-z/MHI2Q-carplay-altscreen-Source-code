@@ -14,9 +14,5 @@ if [ -n "$PIDFILE" ]; then
     if kill -0 "$PID" 2>/dev/null; then kill -KILL "$PID" 2>/dev/null || true; fi
   fi
 fi
-rm -f "$NS/pid" "$NS/ready" "$NS/basevideo.ready" "$FLAT.pid" "$FLAT.ready" "$FLAT.basevideo.ready"
-/eso/bin/apps/dmdt dc 76 3 >/dev/null 2>&1 || true
-/eso/bin/apps/dmdt sc 1 72 >/dev/null 2>&1 || true
-sleep 1
-/eso/bin/apps/dmdt sc 1 74 >/dev/null 2>&1 || true
-echo "MIRROR_DISPLAY=STOPPED context=74"
+rm -f "$NS/pid" "$NS/ready" "$NS/basevideo.ready" "$FLAT.pid" "$FLAT.ready" "$FLAT.basevideo.ready" /tmp/mmi-mirror-basevideo.ready
+echo "MIRROR_DISPLAY=STOPPED context_writer=JAVA80 native_dmdt=DISABLED"

@@ -10,7 +10,7 @@
 
 static volatile sig_atomic_t g_stop = 0;
 static const unsigned kTargetFps = 30;
-static const char kBuildId[] = "window58-wm-event-v4";
+static const char kBuildId[] = "context80-readback-v1";
 
 static const char *volatile_path(const char *key, const char *fallback) {
     const char *v = getenv(key);
@@ -239,30 +239,17 @@ static void marker(bool on) {
     }
 }
 
-static int cmd(const char *s) {
-    const int rc = system(s);
-    fprintf(stderr, "route: '%s' rc=%d\n", s, rc);
-    return rc;
-}
-
 /*
- * Keep the existing diagnostic compatibility route unchanged for this V4.
- * K1004 reverse engineering still points to the stock Window58/context76 path
- * as the preferred eventual production route; displayable3 remains only the
- * copied Mirror pixel-plane test used after Window58 capture succeeds.
+ * Context ownership is intentionally outside this pixel sidecar.
+ * The sidecar only proves Window58 readback and posts to displayable3.
+ * Java/HMI owns terminal1 and ctx80={98,101,102,3}.
  */
 static bool activate() {
-    if (cmd("/eso/bin/apps/dmdt dc 76 3") != 0) return false;
-    if (cmd("/eso/bin/apps/dmdt sc 1 72") != 0) return false;
-    usleep(180000);
-    return cmd("/eso/bin/apps/dmdt sc 1 76") == 0;
+    fprintf(stderr, "route: native context writer disabled; waiting for Java/HMI ctx80\n");
+    return true;
 }
-
 static void restore() {
-    (void)cmd("/eso/bin/apps/dmdt dc 76 3");
-    (void)cmd("/eso/bin/apps/dmdt sc 1 72");
-    usleep(180000);
-    (void)cmd("/eso/bin/apps/dmdt sc 1 74");
+    fprintf(stderr, "route: native restore disabled; Java/HMI owns stock release\n");
 }
 
 int main(int argc, char **argv) {
@@ -345,7 +332,7 @@ int main(int argc, char **argv) {
 
     fprintf(stderr,
             "carplay-mirror: ACTIVE source=window58 sink=displayable3 "
-            "context=76 first_present=1 pixel_plane=lanye-pinned "
+            "context=80 first_present=1 pixel_plane=lanye-pinned "
             "target_fps=%u\n",
             kTargetFps);
 
@@ -404,7 +391,7 @@ int main(int argc, char **argv) {
             fprintf(stderr,
                     "carplay-mirror: RUN source=window58 size=%dx%d stride=%d "
                     "source_frames=%lu presented_frames=%lu "
-                    "present_fps=%lu.%02lu target_fps=%u context=76\n",
+                    "present_fps=%lu.%02lu target_fps=%u context=80\n",
                     frame.width,
                     frame.height,
                     frame.stride,
@@ -429,7 +416,7 @@ int main(int argc, char **argv) {
     display.shutdown();
     source.shutdown();
     fprintf(stderr,
-            "carplay-mirror: stopped; stock context74 restored "
+            "carplay-mirror: stopped; Java/HMI context release requested "
             "source_frames=%lu presented_frames=%lu\n",
             source_frames,
             presented_frames);

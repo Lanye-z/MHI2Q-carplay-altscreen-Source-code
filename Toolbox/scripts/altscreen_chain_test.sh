@@ -68,6 +68,8 @@ LEGACY_ROUTE_FILE="$LEGACY_STATE_DIR/firmware_profile.txt"
 LEGACY_INSTALLED_MARKER="$LEGACY_STATE_DIR/INSTALLED"
 ARTIFACT_DIR="$VOLUME/Toolbox/carplay_alt_screen"
 SD_SCRIPTS="$VOLUME/Toolbox/scripts"
+MIRROR_SD="$ARTIFACT_DIR/mirror_display/release"
+MIRROR_OWNER=".mmi-cockpit-carplay-mirror-owner"
 PERSIST_DIAG_SD="$SD_SCRIPTS/altscreen_persistent_diag.sh"
 LIVE_DIO_CANDIDATES="/eso/bin/apps/dio_manager /mnt/app/eso/bin/apps/dio_manager"
 LIVE_LIBAIRPLAY="/eso/lib/libairplay.so"
@@ -161,6 +163,11 @@ validate_runtime_sources(){
         [ -s "$src" ] || { echo "FAIL: runtime companion missing/empty: $src" >&2; return 1; }
         case "$name" in *.sh) sh -n "$src" || { echo "FAIL: runtime companion shell syntax: $name" >&2; return 1; } ;; esac
     done
+    for name in carplay-alt111-mirror-display start_vehicle.sh stop_vehicle.sh BUILD_INFO.txt; do
+        [ -s "$MIRROR_SD/$name" ] || { echo "FAIL: integrated readback sidecar missing/empty: $MIRROR_SD/$name" >&2; return 1; }
+    done
+    sh -n "$MIRROR_SD/start_vehicle.sh" || return 1
+    sh -n "$MIRROR_SD/stop_vehicle.sh" || return 1
     return 0
 }
 
@@ -210,6 +217,21 @@ install_runtime_scripts(){
             return 1
         }
     done
+    ensure_dirs "$RUNTIME_STAGE/bin/mirror" || { rm -rf "$RUNTIME_STAGE" 2>/dev/null || true; mount_app_ro >/dev/null 2>&1 || true; return 1; }
+    for name in carplay-alt111-mirror-display start_vehicle.sh stop_vehicle.sh BUILD_INFO.txt LICENSE.MMI-MIRROR SHA256SUMS; do
+        [ -f "$MIRROR_SD/$name" ] || continue
+        cp "$MIRROR_SD/$name" "$RUNTIME_STAGE/bin/mirror/$name" || {
+            rm -rf "$RUNTIME_STAGE" 2>/dev/null || true
+            mount_app_ro >/dev/null 2>&1 || true
+            return 1
+        }
+    done
+    chmod 755 "$RUNTIME_STAGE/bin/mirror/carplay-alt111-mirror-display"               "$RUNTIME_STAGE/bin/mirror/start_vehicle.sh"               "$RUNTIME_STAGE/bin/mirror/stop_vehicle.sh" || {
+        rm -rf "$RUNTIME_STAGE" 2>/dev/null || true
+        mount_app_ro >/dev/null 2>&1 || true
+        return 1
+    }
+    printf '%s\n' 'owner=MMI-Cockpit-Carplay' 'mode=context80-readback-v1' > "$RUNTIME_STAGE/bin/mirror/$MIRROR_OWNER" || return 1
     printf '%s\n' 'owner=MMI-Cockpit-Carplay' 'runtime=carplay-altscreen' > "$RUNTIME_STAGE/$RUNTIME_OWNER" || {
         rm -rf "$RUNTIME_STAGE" 2>/dev/null || true
         mount_app_ro >/dev/null 2>&1 || true

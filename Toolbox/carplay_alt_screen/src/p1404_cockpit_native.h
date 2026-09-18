@@ -3,7 +3,7 @@
  *
  * The P1404/K1004 stock OMX decoder already owns a CScreenRender instance for
  * every ScreenStream.  This adapter associates only the independently-created
- * type-111 ScreenStream with project BaseVideo displayable 3 and leaves MainScreen type 110 on
+ * type-111 ScreenStream with displayable 58 and leaves MainScreen type 110 on
  * the stock displayable 59 path.
  */
 #ifndef P1404_COCKPIT_NATIVE_H
@@ -12,8 +12,11 @@
 #include <stdint.h>
 
 #define ALT111_TARGET_DISPLAY_ID      1u
-#define ALT111_DISPLAYABLE_ID         3u
+#define ALT111_DISPLAYABLE_ID        58u
+#define ALT111_COCKPIT_CONTEXT       76u /* historical only; native writer disabled */
 #define ALT111_JAVA_CONTEXT          80u
+#define ALT111_STOCK_CONTEXT         74u
+#define ALT111_TRANSITION_CONTEXT    72u
 
 /* Exact 44-byte dio::st_screen_config layout recovered from libairplay.so. */
 struct p1404_screen_config {

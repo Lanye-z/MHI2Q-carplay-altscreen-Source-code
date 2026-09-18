@@ -41,7 +41,7 @@ if [ -d "$VOLATILE" ]; then
   PIDFILE="$VOLATILE/pid"
   LOGFILE="$VOLATILE/mirror.log"
   READY="$VOLATILE/ready"
-  BASE_READY="$VOLATILE/basevideo.ready"
+  BASE_READY="${ALT111_JAVA_BASE_READY_FILE:-/tmp/mmi-mirror-basevideo.ready}"
   GATE_TOKEN="$VOLATILE/phone111.gate"
   HOOK_LOG="$PROJECT_TMP/altscreen_hook.log"
   VOLATILE_MODE=NAMESPACE
@@ -49,7 +49,7 @@ else
   PIDFILE="$TMP_ROOT/MMI-Cockpit-Carplay.mirror.pid"
   LOGFILE="$TMP_ROOT/MMI-Cockpit-Carplay.mirror.log"
   READY="$TMP_ROOT/MMI-Cockpit-Carplay.mirror.ready"
-  BASE_READY="$TMP_ROOT/MMI-Cockpit-Carplay.mirror.basevideo.ready"
+  BASE_READY="${ALT111_JAVA_BASE_READY_FILE:-/tmp/mmi-mirror-basevideo.ready}"
   GATE_TOKEN="$TMP_ROOT/MMI-Cockpit-Carplay.mirror.phone111.gate"
   HOOK_LOG="$TMP_ROOT/altscreen_hook.log"
   VOLATILE_MODE=FLAT_TMP
@@ -82,7 +82,8 @@ rm -f "$READY" "$BASE_READY"
   echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-<unset>}"
   echo "HOOK_LOG=$HOOK_LOG"
   echo "GATE_TOKEN=$GATE_TOKEN"
-  echo "SCREEN_CONTEXT_POLICY=NONE_BEFORE_PHONE_REQUEST_111"
+  echo "SCREEN_CONTEXT_POLICY=JAVA80_ONLY native_context_writer=0"
+  echo "READY_POLICY=destination_first_present_only base_ready=$BASE_READY"
 } >> "$LOGFILE"
 
 "$BIN" --verbose >>"$LOGFILE" 2>&1 &
