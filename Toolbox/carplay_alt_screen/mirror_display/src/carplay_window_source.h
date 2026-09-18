@@ -50,6 +50,7 @@ private:
     typedef int (*get_event_iv_fn)(void *, int, int *);
     typedef int (*get_event_pv_fn)(void *, int, void **);
     typedef int (*get_window_iv_fn)(void *, int, int *);
+    typedef int (*get_window_cv_fn)(void *, int, int, char *);
     typedef int (*destroy_window_fn)(void *);
     typedef int (*create_pixmap_fn)(void **, void *);
     typedef int (*destroy_pixmap_fn)(void *);
@@ -68,6 +69,7 @@ private:
     get_event_iv_fn get_event_iv_;
     get_event_pv_fn get_event_pv_;
     get_window_iv_fn get_window_iv_;
+    get_window_cv_fn get_window_cv_;
     destroy_window_fn destroy_window_;
     create_pixmap_fn create_pixmap_;
     destroy_pixmap_fn destroy_pixmap_;

@@ -164,7 +164,7 @@ validate_runtime_sources(){
         [ -s "$src" ] || { echo "FAIL: runtime companion missing/empty: $src" >&2; return 1; }
         case "$name" in *.sh) sh -n "$src" || { echo "FAIL: runtime companion shell syntax: $name" >&2; return 1; } ;; esac
     done
-    for name in carplay-alt111-mirror-display start_vehicle.sh stop_vehicle.sh BUILD_INFO.txt; do
+    for name in carplay-alt111-mirror-display libscreen_id_bridge.so start_vehicle.sh stop_vehicle.sh BUILD_INFO.txt; do
         [ -s "$MIRROR_SD/$name" ] || { echo "FAIL: integrated readback sidecar missing/empty: $MIRROR_SD/$name" >&2; return 1; }
     done
     sh -n "$MIRROR_SD/start_vehicle.sh" || return 1
@@ -219,7 +219,7 @@ install_runtime_scripts(){
         }
     done
     ensure_dirs "$RUNTIME_STAGE/bin/mirror" || { rm -rf "$RUNTIME_STAGE" 2>/dev/null || true; mount_app_ro >/dev/null 2>&1 || true; return 1; }
-    for name in carplay-alt111-mirror-display start_vehicle.sh stop_vehicle.sh BUILD_INFO.txt LICENSE.MMI-MIRROR SHA256SUMS; do
+    for name in carplay-alt111-mirror-display libscreen_id_bridge.so start_vehicle.sh stop_vehicle.sh BUILD_INFO.txt LICENSE.MMI-MIRROR SHA256SUMS; do
         [ -f "$MIRROR_SD/$name" ] || continue
         cp "$MIRROR_SD/$name" "$RUNTIME_STAGE/bin/mirror/$name" || {
             rm -rf "$RUNTIME_STAGE" 2>/dev/null || true
@@ -227,7 +227,7 @@ install_runtime_scripts(){
             return 1
         }
     done
-    chmod 755 "$RUNTIME_STAGE/bin/mirror/carplay-alt111-mirror-display"               "$RUNTIME_STAGE/bin/mirror/start_vehicle.sh"               "$RUNTIME_STAGE/bin/mirror/stop_vehicle.sh" || {
+    chmod 755 "$RUNTIME_STAGE/bin/mirror/carplay-alt111-mirror-display"               "$RUNTIME_STAGE/bin/mirror/libscreen_id_bridge.so"               "$RUNTIME_STAGE/bin/mirror/start_vehicle.sh"               "$RUNTIME_STAGE/bin/mirror/stop_vehicle.sh" || {
         rm -rf "$RUNTIME_STAGE" 2>/dev/null || true
         mount_app_ro >/dev/null 2>&1 || true
         return 1

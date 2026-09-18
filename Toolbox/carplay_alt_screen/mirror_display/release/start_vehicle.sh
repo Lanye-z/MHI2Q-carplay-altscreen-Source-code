@@ -31,6 +31,8 @@ else
   BIN="$ROOT/release/carplay-alt111-mirror-display"
 fi
 
+ID_BRIDGE="$ROOT/libscreen_id_bridge.so"
+
 TMP_ROOT="${ALT111_MIRROR_TMP_ROOT:-/tmp}"
 PROJECT_TMP="$TMP_ROOT/MMI-Cockpit-Carplay"
 VOLATILE="$PROJECT_TMP/mirror"
@@ -64,6 +66,10 @@ if [ ! -x "$BIN" ]; then
   echo "ERROR: mirror display binary not found/executable: $BIN" >&2
   exit 2
 fi
+if [ ! -s "$ID_BRIDGE" ]; then
+  echo "ERROR: Window58 ID-string bridge missing: $ID_BRIDGE" >&2
+  exit 2
+fi
 
 if [ -f "$PIDFILE" ]; then
   OLD="$(cat "$PIDFILE" 2>/dev/null || true)"
@@ -84,9 +90,14 @@ rm -f "$READY" "$BASE_READY"
   echo "GATE_TOKEN=$GATE_TOKEN"
   echo "SCREEN_CONTEXT_POLICY=JAVA80_ONLY native_context_writer=0"
   echo "READY_POLICY=destination_first_present_only base_ready=$BASE_READY"
+  echo "WINDOW58_ID_POLICY=ID_STRING_PRIMARY numeric_id=diagnostic bridge=$ID_BRIDGE"
+  echo "SIDECAR_PRELOAD_POLICY=ISOLATED helper_only=1 inherited_preload_ignored=${LD_PRELOAD:-<unset>}"
 } >> "$LOGFILE"
 
-"$BIN" --verbose >>"$LOGFILE" 2>&1 &
+# Deliberately do not inherit the CarPlay/dio_manager preload into the helper.
+# The ID bridge exists only inside this sidecar process and interposes one Screen
+# property getter; the known-good CarPlay hook remains byte-for-byte untouched.
+LD_PRELOAD="$ID_BRIDGE" "$BIN" --verbose >>"$LOGFILE" 2>&1 &
 PID=$!
 echo "$PID" > "$PIDFILE"
 sleep 1

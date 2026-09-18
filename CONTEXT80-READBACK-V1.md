@@ -24,3 +24,26 @@ Context80      = Java/HMI only
 Readiness is split into source post, destination present, Java Context80 request,
 and final human VC confirmation. The old source-post BASEVIDEO3_READY false
 positive is no longer used.
+
+
+## Final pre-vehicle proof gates
+
+The final vehicle candidate adds two explicit observations before software-route
+completion is reported:
+
+```text
+Window58 event
+  -> numeric QNX ID (diagnostic only)
+  -> SCREEN_PROPERTY_ID string == "58" (authoritative)
+  -> screen_read_window
+  -> GLES first present
+  -> Java ctx80 request
+  -> IDisplayManager.getCurrentContextID(1)
+  -> CTX80_OBSERVED actual=80
+```
+
+The promoted V4 sidecar ELF remains unchanged. A small sidecar-only
+`libscreen_id_bridge.so` adapts its legacy integer-ID query to the verified
+string identity without loading into dio_manager. The CarPlay-facing universal
+hook remains pinned to the known-good SHA-256
+`07a96cad6121cfc9fae259d47e6c95142b5e09b7ef3e8cd7a180de009579cb39`.

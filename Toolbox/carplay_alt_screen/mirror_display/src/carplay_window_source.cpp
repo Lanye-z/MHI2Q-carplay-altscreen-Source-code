@@ -62,6 +62,7 @@ CarPlayWindowSource::CarPlayWindowSource(int window_id, bool verbose)
       get_event_iv_(0),
       get_event_pv_(0),
       get_window_iv_(0),
+      get_window_cv_(0),
       destroy_window_(0),
       create_pixmap_(0),
       destroy_pixmap_(0),
@@ -108,6 +109,8 @@ bool CarPlayWindowSource::open_api() {
         (get_event_pv_fn)dlsym(lib_, "screen_get_event_property_pv");
     get_window_iv_ =
         (get_window_iv_fn)dlsym(lib_, "screen_get_window_property_iv");
+    get_window_cv_ =
+        (get_window_cv_fn)dlsym(lib_, "screen_get_window_property_cv");
     destroy_window_ =
         (destroy_window_fn)dlsym(lib_, "screen_destroy_window");
     create_pixmap_ =
@@ -138,7 +141,7 @@ bool CarPlayWindowSource::open_api() {
                 "source: required Screen API missing "
                 "ctx_create=%p ctx_destroy=%p event_create=%p "
                 "event_destroy=%p get_event=%p event_iv=%p event_pv=%p "
-                "win_iv=%p win_destroy=%p pixmap=%p pixbuf=%p "
+                "win_iv=%p win_cv=%p win_destroy=%p pixmap=%p pixbuf=%p "
                 "read_window=%p\n",
                 (void *)create_context_,
                 (void *)destroy_context_,
@@ -148,11 +151,17 @@ bool CarPlayWindowSource::open_api() {
                 (void *)get_event_iv_,
                 (void *)get_event_pv_,
                 (void *)get_window_iv_,
+                (void *)get_window_cv_,
                 (void *)destroy_window_,
                 (void *)create_pixmap_,
                 (void *)create_pixmap_buffer_,
                 (void *)read_window_);
         return false;
+    }
+    if (!get_window_cv_) {
+        fprintf(stderr,
+                "source: WARN screen_get_window_property_cv unavailable; "
+                "Window58 identity will use numeric fallback only\n");
     }
     return true;
 }
@@ -356,35 +365,65 @@ bool CarPlayWindowSource::pump_event(unsigned long long timeout_ns) {
         return true;
     }
 
-    int id = -1;
+    int numeric_id = -1;
+    char id_string[64];
+    char target_string[24];
     int size[2] = {0, 0};
+    memset(id_string, 0, sizeof(id_string));
+    memset(target_string, 0, sizeof(target_string));
+    (void)snprintf(target_string, sizeof(target_string), "%d", target_id_);
 
     errno = 0;
     const int id_rc =
-        get_window_iv_(event_window, SCREEN_PROPERTY_ID, &id);
+        get_window_iv_(event_window, SCREEN_PROPERTY_ID, &numeric_id);
     const int id_errno = errno;
+
+    int id_string_rc = -1;
+    int id_string_errno = 0;
+    if (get_window_cv_) {
+        errno = 0;
+        id_string_rc = get_window_cv_(
+            event_window, SCREEN_PROPERTY_ID,
+            (int)sizeof(id_string) - 1, id_string);
+        id_string_errno = errno;
+    }
 
     errno = 0;
     const int size_rc =
         get_window_iv_(event_window, SCREEN_PROPERTY_SIZE, size);
     const int size_errno = errno;
 
-    const bool target = id_rc == 0 && id == target_id_;
+    const bool string_match =
+        id_string_rc == 0 && strcmp(id_string, target_string) == 0;
+    const bool numeric_fallback =
+        !string_match && id_string_rc != 0 &&
+        id_rc == 0 && numeric_id == target_id_;
+    const bool target = string_match || numeric_fallback;
+    const char *match_basis =
+        string_match ? "STRING" : (numeric_fallback ? "NUMERIC_FALLBACK" : "NO");
+
     if (target || (verbose_ && event_count_ <= 24u)) {
         fprintf(stderr,
                 "source: event seq=%u type=%d handle=%p "
-                "id_rc=%d id=%d id_errno=%d "
-                "size_rc=%d size=%dx%d size_errno=%d%s\n",
+                "numeric_id_rc=%d numeric_id=%d numeric_id_errno=%d "
+                "id_string_rc=%d id_string='%s' id_string_errno=%d "
+                "size_rc=%d size=%dx%d size_errno=%d "
+                "target=%s match=%s%s\n",
                 event_count_,
                 type,
                 event_window,
                 id_rc,
-                id,
+                numeric_id,
                 id_errno,
+                id_string_rc,
+                id_string,
+                id_string_errno,
                 size_rc,
                 size[0],
                 size[1],
                 size_errno,
+                target ? "YES" : "NO",
+                match_basis,
                 target ? " [target]" : "");
     }
 
@@ -559,6 +598,7 @@ void CarPlayWindowSource::shutdown() {
     get_event_iv_ = 0;
     get_event_pv_ = 0;
     get_window_iv_ = 0;
+    get_window_cv_ = 0;
     destroy_window_ = 0;
     create_pixmap_ = 0;
     destroy_pixmap_ = 0;
