@@ -45,8 +45,8 @@ Window58 event
 The promoted V4 sidecar ELF remains unchanged. A small sidecar-only
 `libscreen_id_bridge.so` adapts its legacy integer-ID query to the owner-defined
 SCREEN_PROPERTY_ID_STRING identity without loading into dio_manager. The CarPlay-facing universal
-hook remains pinned to the known-good SHA-256
-`07a96cad6121cfc9fae259d47e6c95142b5e09b7ef3e8cd7a180de009579cb39`.
+hook is rebuilt only for the narrowly scoped Private111 post-accept/runtime containment fix below;
+the Window58/readback/displayable3/Java Context80 path remains frozen.
 
 
 Window58 identity is fail-closed: a QNX-generated numeric ID of 58 is never
@@ -61,20 +61,27 @@ then the worker stalled before `STREAM_111_NETSOCKET_CREATE_RETURN`. The accepte
 dio_manager process had inherited this hook into `sh` / `pfctl` while removing the
 temporary exact-port PF rule.
 
-This branch therefore ports only the already-validated mainline containment:
+The branch now keeps the already-validated child-process containment and fixes the
+actual post-accept blocking hazard:
 - remove only `libcarplay_altscreen.so` from dio_manager's inherited `LD_PRELOAD`;
 - reject non-CarPlay helper processes in the constructor before libc/GOT/runtime setup;
-- `FORCE_START` remains an authorization marker and cannot override process identity.
+- `FORCE_START` remains an authorization marker and cannot override process identity;
+- after `ACCEPT_RETURN`, close only the listener and immediately continue to
+  `NetSocket_CreateWithNative`; do **not** run `popen/system/pfctl` on that worker path;
+- retain the exact-port PF rule until Private111 teardown;
+- stop/delete the private ScreenSession before PF cleanup, and treat PF cleanup failure
+  as non-fatal to the CarPlay session teardown.
 
 Deliberately unchanged in this fix:
 - Main110 / stock Window59 handling;
-- type111 split/merge, listener, security and accept sequencing;
-- the stock-equivalent post-accept PF close ordering;
+- type111 split/merge, listener creation, security derivation and accept semantics;
 - Window58 producer identity and readback sidecar;
 - displayable3 GLES sink and Java-only Context80 ownership;
 - global send/write/recv/close interception surface.
 
 The next vehicle proof must first show:
-`ACCEPT_RETURN -> FIREWALL_REMOVE result=OK -> NETSOCKET_CREATE_RETURN ->
+`ACCEPT_RETURN -> FIREWALL_DEFERRED -> NETSOCKET_CREATE_RETURN ->
 START_CALL -> START_RETURN -> PROCESSFRAMES_BEGIN`.
-Only after that sequence is proven should Window58/readback/Context80 be evaluated.
+The accepted 65500 socket should be actively consumed rather than accumulating a
+fixed Recv-Q. Only after that sequence is proven should Window58/readback/Context80
+be evaluated.
