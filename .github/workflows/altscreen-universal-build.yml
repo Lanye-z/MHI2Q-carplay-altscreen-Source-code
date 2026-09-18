@@ -61,7 +61,7 @@ jobs:
         if: github.ref == 'refs/heads/test/carplay-basevideo3-native-v1-visible-probe'
         run: |
           set -euo pipefail
-          out="$RUNNER_TEMP/altscreen-native-direct"
+          out="$RUNNER_TEMP/altscreen-basevideo3-visible"
           dst="Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so"
           cp "$out/libcarplay_altscreen.so" "$dst"
 
