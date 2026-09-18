@@ -37,12 +37,13 @@ EXPECTED_CKSUM=1515795662
 file_size(){ n=$(wc -c < "$1" 2>/dev/null) || { echo 0; return; }; set -- $n; echo "${1:-0}"; }
 file_cksum(){ if command -v cksum >/dev/null 2>&1; then cksum < "$1" 2>/dev/null | awk '{print $1}'; else echo unavailable; fi; }
 
-echo "=== Context80 Readback V1 ==="
-echo "SOURCE_PATH=private111_stock_omx_cscreenrender window=58 role=producer_only"
-echo "READBACK_PIPELINE=ENABLED capture=screen_read_window cpu_format=BGRA8888"
-echo "DESTINATION=displayable3_gles role=sole_consumer"
-echo "CONTEXT_POLICY=JAVA_ONLY context=80 composite=98,101,102,3 native_dmdt=0 sidecar_dmdt=0"
-echo "AVCC_OBSERVER=NON_AUTHORITATIVE decoder_truth=stock_render_posts_plus_readback"
+echo "=== CarPlay private111 Direct Display V1 ==="
+echo "SOURCE_PATH=private111_ScreenStreamProcessData"
+echo "H264_TAP=/carplay111_h264"
+echo "DECODER_BACKEND=stock_omx_buffer_tap_v1 decoded_shm=/carplay111_decoded"
+echo "DESTINATION=displayable3_gles"
+echo "CONTEXT_POLICY=JAVA_ONLY context=80 composite=98,101,102,3 native_dmdt=0"
+echo "WINDOW58_READBACK=DISABLED sidecar_screen_read_window=0"
 
 if [ -s "$JAR" ]; then
     SIZE=$(file_size "$JAR"); SUM=$(file_cksum "$JAR")
@@ -57,7 +58,7 @@ else
     [ "$STATUS_RC" -ne 0 ] || STATUS_RC=1
 fi
 
-[ -f "$ENABLED" ] && echo "READBACK_ENABLE=ENABLED" || echo "READBACK_ENABLE=DISABLED"
+[ -f "$ENABLED" ] && echo "DIRECT_DISPLAY_ENABLE=ENABLED" || echo "DIRECT_DISPLAY_ENABLE=DISABLED"
 [ -f "$ACTIVE" ] && echo "JAVA80_DEMAND=YES" || echo "JAVA80_DEMAND=NO"
 
 MIRROR_RUNNING=0
@@ -66,78 +67,67 @@ if [ -f "$MIRROR_PID" ]; then
     PID=$(cat "$MIRROR_PID" 2>/dev/null || true)
     if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then MIRROR_RUNNING=1; fi
 fi
-[ "$MIRROR_RUNNING" = 1 ] && echo "READBACK_SIDECAR=RUNNING pid=$PID" || echo "READBACK_SIDECAR=NOT_RUNNING"
-[ -x "$MIRROR/carplay-alt111-mirror-display" ] && echo "READBACK_BINARY=INSTALLED" || echo "READBACK_BINARY=MISSING"
-[ -s "$MIRROR/libscreen_id_bridge.so" ] && echo "WINDOW58_ID_BRIDGE=INSTALLED" || echo "WINDOW58_ID_BRIDGE=MISSING"
+[ "$MIRROR_RUNNING" = 1 ] && echo "DIRECT_DISPLAY_SIDECAR=RUNNING pid=$PID" || echo "DIRECT_DISPLAY_SIDECAR=NOT_RUNNING"
+[ -x "$MIRROR/carplay-alt111-mirror-display" ] && echo "DIRECT_DISPLAY_BINARY=INSTALLED" || echo "DIRECT_DISPLAY_BINARY=MISSING"
 
 HOOK_LOG=""
 for candidate in "$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/altscreen_hook.log" "$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay.altscreen_hook.log" "$DEVICE_ROOT/tmp/altscreen_hook.log"; do
     [ -f "$candidate" ] && { HOOK_LOG=$candidate; break; }
 done
-SOURCE_READY=0
-if [ -n "$HOOK_LOG" ] && grep -q 'PHASE=NATIVE_111_FIRST_REAL_FRAME.*result=POSTED' "$HOOK_LOG" 2>/dev/null; then
-    SOURCE_READY=1
-    echo "NATIVE_FRAME_POSTED=YES meaning=Window58_stock_CScreenRender_post"
+
+H264_DATA=0
+H264_SPS=0
+H264_PPS=0
+H264_IDR=0
+DECODER_FRAME=0
+if [ -n "$HOOK_LOG" ]; then
+    grep -q 'PHASE=H264_TAP_FIRST_DATA' "$HOOK_LOG" 2>/dev/null && H264_DATA=1
+    grep -q 'PHASE=H264_TAP_FIRST_SPS' "$HOOK_LOG" 2>/dev/null && H264_SPS=1
+    grep -q 'PHASE=H264_TAP_FIRST_PPS' "$HOOK_LOG" 2>/dev/null && H264_PPS=1
+    grep -q 'PHASE=H264_TAP_FIRST_IDR' "$HOOK_LOG" 2>/dev/null && H264_IDR=1
+    grep -q 'PHASE=DECODER_FIRST_FRAME backend=stock-omx-tap' "$HOOK_LOG" 2>/dev/null && DECODER_FRAME=1
+
+    echo "H264_TAP_DATA=$H264_DATA SPS=$H264_SPS PPS=$H264_PPS IDR=$H264_IDR"
+    echo "DECODER_FIRST_FRAME=$DECODER_FRAME backend=stock-omx-tap"
+    echo "HOOK_DIRECT111_LOG_TAIL_BEGIN"
+    grep -E 'PHASE=(STREAM_111_|VIDEO_111_|H264_TAP_|DIRECT111_TAP_|FRAME_TAP_|DECODER_)' "$HOOK_LOG" 2>/dev/null | tail -n 80 || true
+    echo "HOOK_DIRECT111_LOG_TAIL_END"
 else
-    echo "NATIVE_FRAME_POSTED=NO"
+    echo "H264_TAP_DATA=UNKNOWN hook_log_missing=1"
+    echo "DECODER_FIRST_FRAME=UNKNOWN hook_log_missing=1"
 fi
 
-READBACK_OK=0
-PIXEL_VALID=0
-GLES_PRESENT=0
-GRID_PRESENT=0
+H264_VALID=0
+SIDECAR_DECODE=0
+DISPLAY3=0
+DIRECT_ACTIVE=0
 if [ -f "$MIRROR_LOG" ]; then
-    if grep -q 'SOURCE_READBACK_RC=OK' "$MIRROR_LOG" 2>/dev/null; then
-        READBACK_OK=1
-        RB_LINE=$(grep 'SOURCE_READBACK_RC=OK' "$MIRROR_LOG" 2>/dev/null | tail -n 1)
-        echo "SOURCE_READBACK_RC=OK proof='$RB_LINE'"
-    else
-        echo "SOURCE_READBACK_RC=PENDING_OR_FAILED"
-    fi
-    if grep -q 'SOURCE_PIXEL_VALID=YES' "$MIRROR_LOG" 2>/dev/null; then
-        PIXEL_VALID=1
-        PX_LINE=$(grep 'SOURCE_PIXEL_VALID=YES' "$MIRROR_LOG" 2>/dev/null | tail -n 1)
-        echo "SOURCE_PIXEL_VALID=YES proof='$PX_LINE'"
-    else
-        echo "SOURCE_PIXEL_VALID=NO_OR_PENDING"
-    fi
-    if grep -q 'GLES_PRESENT=YES' "$MIRROR_LOG" 2>/dev/null; then
-        GLES_PRESENT=1
-        GL_LINE=$(grep 'GLES_PRESENT=YES' "$MIRROR_LOG" 2>/dev/null | tail -n 1)
-        echo "GLES_PRESENT=YES proof='$GL_LINE'"
-    else
-        echo "GLES_PRESENT=NO"
-    fi
-    if grep -q 'SINK_TEST_GRID_PRESENT=YES' "$MIRROR_LOG" 2>/dev/null; then
-        GRID_PRESENT=1
-        GRID_LINE=$(grep 'SINK_TEST_GRID_PRESENT=YES' "$MIRROR_LOG" 2>/dev/null | tail -n 1)
-        echo "SINK_TEST_GRID_PRESENT=YES proof='$GRID_LINE'"
-    else
-        echo "SINK_TEST_GRID_PRESENT=NO"
-    fi
+    grep -q 'PHASE=H264_STREAM_VALID' "$MIRROR_LOG" 2>/dev/null && H264_VALID=1
+    grep -q 'PHASE=DECODER_FIRST_FRAME' "$MIRROR_LOG" 2>/dev/null && SIDECAR_DECODE=1
+    grep -q 'PHASE=DISPLAYABLE3_FIRST_PRESENT result=OK' "$MIRROR_LOG" 2>/dev/null && DISPLAY3=1
+    grep -q 'PHASE=DIRECT111_ACTIVE' "$MIRROR_LOG" 2>/dev/null && DIRECT_ACTIVE=1
+
+    echo "H264_STREAM_VALID=$H264_VALID"
+    echo "SIDECAR_DECODER_FRAME=$SIDECAR_DECODE"
+    echo "DISPLAYABLE3_FIRST_PRESENT=$DISPLAY3"
+    echo "DIRECT111_ACTIVE=$DIRECT_ACTIVE"
+    echo "DIRECT111_LOG_TAIL_BEGIN"
+    tail -n 80 "$MIRROR_LOG" 2>/dev/null || true
+    echo "DIRECT111_LOG_TAIL_END"
 else
-    echo "SOURCE_READBACK_RC=UNKNOWN log_missing=1"
-    echo "SOURCE_PIXEL_VALID=UNKNOWN log_missing=1"
-    echo "GLES_PRESENT=UNKNOWN log_missing=1"
-    echo "SINK_TEST_GRID_PRESENT=UNKNOWN log_missing=1"
+    echo "H264_STREAM_VALID=UNKNOWN mirror_log_missing=1"
+    echo "SIDECAR_DECODER_FRAME=UNKNOWN mirror_log_missing=1"
+    echo "DISPLAYABLE3_FIRST_PRESENT=UNKNOWN mirror_log_missing=1"
+    echo "DIRECT111_ACTIVE=UNKNOWN mirror_log_missing=1"
 fi
 
 DEST=0
 if [ -f "$DEST_READY" ]; then
     DEST=1
-    echo "DEST_FRAME_READY=YES meaning=first_successful_gles_present_marker"
+    echo "DEST_FRAME_READY=YES"
     cat "$DEST_READY" 2>/dev/null || true
 else
     echo "DEST_FRAME_READY=NO"
-fi
-
-WINDOW58_ID_OK=0
-if [ -f "$MIRROR_LOG" ] && grep -q "WINDOW58_ID_BRIDGE .*id_string='58'.*target=YES.*match=ID_STRING" "$MIRROR_LOG" 2>/dev/null; then
-    WINDOW58_ID_OK=1
-    ID_LINE=$(grep "WINDOW58_ID_BRIDGE .*id_string='58'.*target=YES.*match=ID_STRING" "$MIRROR_LOG" 2>/dev/null | tail -n 1)
-    echo "WINDOW58_IDENTITY=ID_STRING_MATCH $ID_LINE"
-else
-    echo "WINDOW58_IDENTITY=PENDING expected_id_string=58 property=SCREEN_PROPERTY_ID_STRING numeric_id=diagnostic_only"
 fi
 
 [ -f "$STARTED" ] && echo "JAVA_CONTROLLER=STARTED" || echo "JAVA_CONTROLLER=NOT_STARTED"
@@ -153,7 +143,7 @@ if [ -f "$JAVA_LOG" ]; then
     if grep -q 'CTX80_OBSERVED actual=80' "$JAVA_LOG" 2>/dev/null; then
         CTXACT=1
         CTX_LINE=$(grep 'CTX80_OBSERVED actual=80' "$JAVA_LOG" 2>/dev/null | tail -n 1)
-        echo "JAVA_CTX80_ACTUAL=80 source=IDisplayManager.getCurrentContextID proof='$CTX_LINE'"
+        echo "JAVA_CTX80_ACTUAL=80 proof='$CTX_LINE'"
     else
         echo "JAVA_CTX80_ACTUAL=NOT_OBSERVED desired=80"
     fi
@@ -165,29 +155,14 @@ else
     echo "JAVA_CTX80_ACTUAL=UNKNOWN log_missing=1"
 fi
 
-if [ -f "$MIRROR_LOG" ]; then
-    echo "READBACK_LOG_TAIL_BEGIN"
-    tail -n 50 "$MIRROR_LOG" 2>/dev/null || true
-    echo "READBACK_LOG_TAIL_END"
+if [ "$H264_DATA" = 1 ] && [ "$H264_SPS" = 1 ] &&
+   [ "$H264_PPS" = 1 ] && [ "$H264_IDR" = 1 ] &&
+   [ "$DECODER_FRAME" = 1 ] && [ "$DISPLAY3" = 1 ] &&
+   [ "$DEST" = 1 ] && [ "$MIRROR_RUNNING" = 1 ] &&
+   [ "$CTXACT" = 1 ]; then
+    echo "PHYSICAL_ROUTE_READY=SOFTWARE_CHAIN_COMPLETE h264=1 decoder=1 displayable3=1 ctx80=1 human_vc_confirmation_required=YES"
+else
+    echo "PHYSICAL_ROUTE_READY=NO h264_data=$H264_DATA sps=$H264_SPS pps=$H264_PPS idr=$H264_IDR decoder=$DECODER_FRAME displayable3=$DISPLAY3 destination=$DEST sidecar=$MIRROR_RUNNING ctx80_actual=$CTXACT"
 fi
 
-if [ "$GRID_PRESENT" = 1 ]; then
-    if [ "$DEST" = 1 ] && [ "$GLES_PRESENT" = 1 ] && [ "$MIRROR_RUNNING" = 1 ] && [ "$CTXACT" = 1 ]; then
-        echo "SINK_TEST_GRID_ROUTE_READY=SOFTWARE_CHAIN_COMPLETE human_vc_confirmation_required=YES"
-    else
-        echo "SINK_TEST_GRID_ROUTE_READY=NO destination=$DEST gles=$GLES_PRESENT sidecar=$MIRROR_RUNNING ctx80_actual=$CTXACT"
-    fi
-    echo "PHYSICAL_ROUTE_READY=DIAGNOSTIC_ONLY mode=sink-test-grid stream111_source_not_required=1"
-elif [ "$SOURCE_READY" = 1 ] &&
-     [ "$WINDOW58_ID_OK" = 1 ] &&
-     [ "$READBACK_OK" = 1 ] &&
-     [ "$PIXEL_VALID" = 1 ] &&
-     [ "$GLES_PRESENT" = 1 ] &&
-     [ "$DEST" = 1 ] &&
-     [ "$MIRROR_RUNNING" = 1 ] &&
-     [ "$CTXACT" = 1 ]; then
-    echo "PHYSICAL_ROUTE_READY=SOFTWARE_CHAIN_COMPLETE source_post=1 window58_id=1 readback=1 pixel_valid=1 gles=1 ctx80=1 human_vc_confirmation_required=YES"
-else
-    echo "PHYSICAL_ROUTE_READY=NO source_post=$SOURCE_READY window58_id=$WINDOW58_ID_OK readback=$READBACK_OK pixel_valid=$PIXEL_VALID gles=$GLES_PRESENT destination=$DEST sidecar=$MIRROR_RUNNING ctx80_actual=$CTXACT"
-fi
 exit "$STATUS_RC"
