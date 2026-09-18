@@ -41,12 +41,20 @@ jobs:
           assert 'if (!process_allowed || !p1404_probe_stack())' in hook
           assert '(!process_allowed && !force_start)' not in hook
 
-          # Keep the measured stock-equivalent post-accept firewall ordering.
+          # The accepted Stream111 path must contain no synchronous PF work.
           a = backend.index('PHASE=STREAM_111_ACCEPT_RETURN')
-          f = backend.index('(void)pair_close_firewall(p, "listener_closed");', a)
-          n = backend.index('be.net_socket_create_native(&net_socket, native_fd)', f)
-          assert a < f < n
-          print('POSTACCEPT_SOURCE_CONTRACT=PASS child_preload=isolated firewall_order=unchanged')
+          n = backend.index('be.net_socket_create_native(&net_socket, native_fd)', a)
+          s = backend.index('PHASE=STREAM_111_START_CALL', n)
+          assert 'pair_close_firewall(p, "listener_closed")' not in backend[a:n]
+          assert 'PHASE=STREAM_111_FIREWALL_DEFERRED' in backend[a:n]
+          assert a < n < s
+
+          # Teardown must release the private ScreenSession before best-effort PF cleanup.
+          t = backend.index('static int teardown_private')
+          d = backend.index('if (be.del) be.del(alt_screen_session);', t)
+          f = backend.index('pair_close_firewall(p, "teardown_post_session")', d)
+          assert d < f
+          print('POSTACCEPT_SOURCE_CONTRACT=PASS child_preload=isolated accept_to_netsocket_pf_free=1 teardown_pf_after_delete=1')
           PY
 
           # Freeze the display path that this fix must not touch.
@@ -68,7 +76,9 @@ jobs:
           strings "$out/libcarplay_altscreen.so" | grep -Fq 'identity_override=DISABLED'
           strings "$out/libcarplay_altscreen.so" | grep -Fq '/mnt/app/root/carplay-altscreen/lib/libcarplay_altscreen.so'
           strings "$out/libcarplay_altscreen.so" | grep -Fq 'PHASE=STREAM_111_ACCEPT_RETURN'
+          strings "$out/libcarplay_altscreen.so" | grep -Fq 'PHASE=STREAM_111_FIREWALL_DEFERRED'
           strings "$out/libcarplay_altscreen.so" | grep -Fq 'PHASE=STREAM_111_NETSOCKET_CREATE_RETURN'
+          strings "$out/libcarplay_altscreen.so" | grep -Fq 'reason=teardown_post_session'
           strings "$out/libcarplay_altscreen.so" | grep -Fq 'displayable=58'
           arm-linux-gnueabihf-readelf -d "$out/libcarplay_altscreen.so" | grep -q 'libc.so.3'
           arm-linux-gnueabihf-readelf -d "$out/libcarplay_altscreen.so" | grep -q 'libm.so.2'
@@ -92,7 +102,7 @@ jobs:
           info = root/'Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt'
           text = info.read_text()
           text = re.sub(r'^universal_runtime_sha256=.*$', 'universal_runtime_sha256='+hook_sha, text, flags=re.M)
-          text = re.sub(r'^universal_runtime_policy=.*$', 'universal_runtime_policy=POSTACCEPT_CHILD_PRELOAD_ISOLATED', text, flags=re.M)
+          text = re.sub(r'^universal_runtime_policy=.*$', 'universal_runtime_policy=PRIVATE111_POSTACCEPT_NONBLOCKING_PF_CHILD_PRELOAD_ISOLATED', text, flags=re.M)
           info.write_text(text)
 
           p = root/'PACKAGE_SOURCE_MAP.json'
@@ -137,7 +147,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add             Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so             Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt             PACKAGE_SOURCE_MAP.json SHA256SUMS.txt
           if ! git diff --cached --quiet; then
-            git commit -m "build(postaccept): promote child-preload-isolated runtime [skip ci]"
+            git commit -m "build(private111): promote postaccept-nonblocking runtime [skip ci]"
             git fetch origin test/carplay-basevideo3-context80-readback-v1
             git rebase origin/test/carplay-basevideo3-context80-readback-v1
             git push origin HEAD:test/carplay-basevideo3-context80-readback-v1
