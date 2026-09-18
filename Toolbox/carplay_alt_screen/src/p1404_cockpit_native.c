@@ -46,7 +46,6 @@ extern void *p1404_direct_stock_symbol_named(const char *name)
 #define P1404_P_WAIT                 0
 #define NATIVE_CONFIG_REFUSED_STATUS (-58796)
 #define P1404_RTLD_NOW                2
-#define SCREEN_WINDOW_MANAGER_CONTEXT 1
 #define SCREEN_DISPLAY_MANAGER_CONTEXT 8
 #define SCREEN_PROPERTY_SIZE          40
 #define SCREEN_PROPERTY_DISPLAY_COUNT 59
@@ -312,8 +311,13 @@ int p1404_cockpit_native_refresh_geometry(void) {
     get_display_iv = (f_screen_get_display_iv_t)dlsym(lib, "screen_get_display_property_iv");
     if (!create_context || !destroy_context || !get_context_iv ||
         !get_context_pv || !get_display_iv) goto done;
-    if (create_context(&context, SCREEN_WINDOW_MANAGER_CONTEXT) != 0 &&
-        create_context(&context, SCREEN_DISPLAY_MANAGER_CONTEXT) != 0) goto done;
+    /* Native-direct experiment: querying physical display geometry does not
+     * require a global WindowManager role. Use only DISPLAY_MANAGER_CONTEXT so
+     * no pre-session WindowManager context is ever created by this path. */
+    if (create_context(&context, SCREEN_DISPLAY_MANAGER_CONTEXT) != 0) {
+        altscreen_log("ERROR PHASE=NATIVE_111_GEOMETRY_CONTEXT result=REFUSED context=DISPLAY_MANAGER no_window_manager_fallback=1");
+        goto done;
+    }
     if (get_context_iv(context, SCREEN_PROPERTY_DISPLAY_COUNT, &count) != 0 ||
         count <= 0 || count > SCREEN_MAX_DISPLAYS) goto done;
     if (get_context_pv(context, SCREEN_PROPERTY_DISPLAYS, (void **)displays) != 0)
@@ -337,7 +341,7 @@ done:
     if (context && destroy_context) (void)destroy_context(context);
     if (lib) dlclose(lib);
     if (!ok) {
-        altscreen_log("ERROR PHASE=NATIVE_111_GEOMETRY_QUERY_FAILED target_display=1 count=%d fixed_fallback=0 private111_refused=1",
+        altscreen_log("ERROR PHASE=NATIVE_111_GEOMETRY_QUERY_FAILED target_display=1 count=%d fixed_fallback=0 private111_refused=1 context=DISPLAY_MANAGER",
                       count);
         return 0;
     }
@@ -346,7 +350,7 @@ done:
     g_target_height = height;
     native_unlock();
     (void)altscreen_set_cluster_geometry(width, height);
-    altscreen_log("PHASE=NATIVE_111_GEOMETRY_READY target_display=1 size=%ux%u source=SCREEN_PROPERTY_SIZE fixed_fallback=0",
+    altscreen_log("PHASE=NATIVE_111_GEOMETRY_READY target_display=1 size=%ux%u source=SCREEN_PROPERTY_SIZE fixed_fallback=0 context=DISPLAY_MANAGER",
                   width, height);
     return 1;
 }
@@ -405,6 +409,7 @@ int p1404_cockpit_native_bind_stock(void) {
      * context here can fault or deadlock dio_manager before authorization and
      * before the logger exists. Geometry is queried lazily at Alt advertisement
      * and again before the private renderer attaches. */
+    altscreen_log("PHASE=NATIVE_DIRECT_POLICY build=native-direct-v1 data_plane=stock_omx_cscreenrender displayable=58 context=76 restore=74 capture=0 gles=0 mirror=0 geometry_context=DISPLAY_MANAGER_ONLY");
     altscreen_log("PHASE=NATIVE_111_STOCK_BIND config=%d render=%d stream_start=%d screen_copy_main=%d screen_create=%d copy_delegates=%d register_delegates=%d pthread_create=%d pthread_detach=%d spawnl=%d geometry=%d",
                   g_real_config != NULL, g_real_render != NULL,
                   g_real_stream_start != NULL, g_real_screen_copy_main != NULL,

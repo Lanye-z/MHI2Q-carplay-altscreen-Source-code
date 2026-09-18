@@ -507,16 +507,6 @@ cmd_start(){
         lock_release
         return 1
     fi
-    if [ "$TESTING" != 1 ]; then
-        mirror_runtime="$(p /mnt/app/root/carplay-altscreen/bin/mirror)"
-        [ -x "$mirror_runtime/carplay-alt111-mirror-display" ] &&
-        [ -x "$mirror_runtime/start_vehicle.sh" ] &&
-        [ -f "$mirror_runtime/.mmi-cockpit-carplay-mirror-owner" ] || {
-            say "FAIL: integrated Mirror runtime is missing or incomplete; run INSTALL again before START"
-            lock_release
-            return 1
-        }
-    fi
     [ -f "$INSTALLED_MARKER" ] || { say "FAIL: INSTALL must run before START"; lock_release; return 1; }
     verify_backup || { say "FAIL: original backup damaged"; lock_release; return 1; }
     verify_firewall_backup || { say "FAIL: firewall backup damaged"; lock_release; return 1; }
@@ -540,6 +530,7 @@ cmd_start(){
     echo "$run_id" > "$PROBE_MARKER" || { finish_mounts; lock_release; return 1; }
     finish_mounts || { lock_release; return 1; }
     say "AUTH_PRIVATE111_CORE=UNCHANGED resolver=dynamic"
+    say "DISPLAY_PATH=NATIVE_DIRECT source=private111_stock_omx_cscreenrender displayable=58 context=76 restore=74 mirror_sidecar=DISABLED"
     lock_release || return 1
     say "START=PASS profile=UNIVERSAL run_id=$run_id reboot_required=YES"
 }

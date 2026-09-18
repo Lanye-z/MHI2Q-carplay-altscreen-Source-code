@@ -18,7 +18,6 @@
 #include <string.h>
 #include <dlfcn.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <unistd.h>
 #include <pthread.h>
 #ifdef ALTSCREEN_HOOK_HOST_TEST
@@ -1416,48 +1415,6 @@ void altscreen_runtime_ensure_initialized(void) { }
 int altscreen_runtime_is_ready(void) { return 1; }
 #else
 static volatile unsigned g_runtime_init_state; /* 0 idle, 1 worker, 2 ready, 3 inert */
-
-/* Stream 111 firewall setup spawns /bin/sh and pfctl. The universal hook must
- * not propagate into those helpers through inherited LD_PRELOAD. */
-#define ALTSCREEN_SELF_PRELOAD "/mnt/app/root/carplay-altscreen/lib/libcarplay_altscreen.so"
-#define ALTSCREEN_SELF_PRELOAD_LEGACY "/mnt/app/root/hooks/libcarplay_altscreen.so"
-
-static int altscreen_preload_token_is_self(const char *token, size_t length) {
-    const size_t current_len = sizeof(ALTSCREEN_SELF_PRELOAD) - 1u;
-    const size_t legacy_len = sizeof(ALTSCREEN_SELF_PRELOAD_LEGACY) - 1u;
-    return (length == current_len && !memcmp(token, ALTSCREEN_SELF_PRELOAD, current_len)) ||
-           (length == legacy_len && !memcmp(token, ALTSCREEN_SELF_PRELOAD_LEGACY, legacy_len));
-}
-static void altscreen_strip_self_from_child_preload(void) {
-    const char *value = getenv("LD_PRELOAD");
-    const char *cursor;
-    char *clean, *out;
-    size_t value_len;
-    int kept = 0;
-    if (!value || !*value) return;
-    value_len = strlen(value);
-    clean = (char *)malloc(value_len + 1u);
-    if (!clean) {
-        if (altscreen_preload_token_is_self(value, value_len)) (void)unsetenv("LD_PRELOAD");
-        return;
-    }
-    cursor = value; out = clean;
-    while (*cursor) {
-        const char *end = strchr(cursor, ':');
-        size_t length = end ? (size_t)(end - cursor) : strlen(cursor);
-        if (length && !altscreen_preload_token_is_self(cursor, length)) {
-            if (kept) *out++ = ':';
-            memcpy(out, cursor, length); out += length; kept = 1;
-        }
-        if (!end) break;
-        cursor = end + 1;
-    }
-    *out = 0;
-    if (kept) (void)setenv("LD_PRELOAD", clean, 1);
-    else (void)unsetenv("LD_PRELOAD");
-    free(clean);
-}
-
 #define ALTSCREEN_STATE_ROOT_WAIT_STEPS 600u
 #define ALTSCREEN_STATE_ROOT_WAIT_US    100000u
 #define ALTSCREEN_GEOMETRY_WAIT_STEPS    30u
@@ -1526,10 +1483,10 @@ static void *altscreen_runtime_init_worker(void *unused) {
     pname = p1404_process_name();
     force_start = altscreen_marker_present("FORCE_START");
     process_allowed = process_is_allowed(pname);
-    altscreen_log("PHASE=RUNTIME_PROCESS_IDENTITY result=%s process=%s force_start=%d identity_override=DISABLED worker_started=1 stock_until_ready=1",
-                  process_allowed ? "PASS" : "REFUSED",
+    altscreen_log("PHASE=RUNTIME_PROCESS_IDENTITY result=%s process=%s force_start=%d worker_started=1 stock_until_ready=1",
+                  (process_allowed || force_start) ? "PASS" : "REFUSED",
                   pname, force_start);
-    if (!process_allowed || !p1404_probe_stack()) {
+    if ((!process_allowed && !force_start) || !p1404_probe_stack()) {
         p1404_armed = 0;
         p1404_mutate_armed = 0;
         __sync_lock_test_and_set(&g_runtime_init_state, 3u);
@@ -1617,15 +1574,10 @@ void altscreen_runtime_ensure_initialized(void) {
 }
 
 __attribute__((constructor)) static void altscreen_ctor(void) {
-    const char *pname;
-    altscreen_strip_self_from_child_preload();
-    pname = p1404_process_name();
-    if (!process_is_allowed(pname)) {
-        p1404_armed = 0;
-        p1404_mutate_armed = 0;
-        __sync_lock_test_and_set(&g_runtime_init_state, 3u);
-        return;
-    }
+    /* Only resolve raw libc forwarding, install the prevalidated exact GOT
+     * redirects, and launch a detached initialization worker. The constructor
+     * never waits for profile, ABI, logging, Screen or backend work. Process
+     * identity is checked by that worker only after its bounded logger starts. */
     bind_bearer();
     (void)p1404_direct_install_internal_redirects();
     altscreen_runtime_ensure_initialized();
