@@ -15,7 +15,7 @@ on:
 
 concurrency:
   group: private111-direct-display-v1
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: read
