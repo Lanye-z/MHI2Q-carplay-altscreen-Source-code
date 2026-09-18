@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   qnx-universal:
@@ -42,3 +42,37 @@ jobs:
             ${{ runner.temp }}/altscreen-universal/BUILD_INFO.txt
             ${{ runner.temp }}/altscreen-universal/MANIFEST.txt
           if-no-files-found: error
+      - name: Promote built runtime to main
+        if: github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/altscreen-universal"
+          dst="Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so"
+          cp "$out/libcarplay_altscreen.so" "$dst"
+          sha="$(sha256sum "$dst" | awk '{print $1}')"
+          python3 - "$sha" <<'PY'
+          import json, pathlib, sys
+          sha = sys.argv[1]
+          rel = "Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so"
+          sums = pathlib.Path("SHA256SUMS.txt")
+          lines = sums.read_text().splitlines()
+          found = 0
+          for i, line in enumerate(lines):
+              if line.endswith("  " + rel):
+                  lines[i] = f"{sha}  {rel}"
+                  found += 1
+          if found != 1:
+              raise SystemExit(f"expected one SHA256SUMS entry, found {found}")
+          sums.write_text("\n".join(lines) + "\n")
+          path = pathlib.Path("PACKAGE_SOURCE_MAP.json")
+          data = json.loads(path.read_text())
+          data[rel] = sha
+          path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$dst" SHA256SUMS.txt PACKAGE_SOURCE_MAP.json
+          if ! git diff --cached --quiet; then
+            git commit -m "build(altscreen): promote universal QNX runtime [skip ci]"
+            git push origin HEAD:main
+          fi

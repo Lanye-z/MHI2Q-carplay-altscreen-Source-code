@@ -63,14 +63,15 @@ The generated binary is written under `Toolbox/carplay_alt_screen/dev-build/univ
 
 ## Universal hook runtime: 2026-09-18 helper isolation fix
 
-The checked-in universal runtime `Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so` was rebuilt from the reviewed AltScreen development source after the in-car Stream 111 regression where firewall helper processes inherited the preload and re-entered hook initialization.
+The universal-hook source was copied read-only from the development repository into `Toolbox/carplay_alt_screen/src/`, and the helper-process isolation repair was then applied and built in **this repository**. Future changes should follow the same rule: read upstream when necessary, vendor missing source here, and perform all edits/builds in `Lanye-z/altscreen-test`.
 
-- Development repository: `yuedizhibo/mib2q-MMI-Cockpit-Carplay`
-- Source/build trigger commit: `06e61fc90f256adefbcb685e9d14823848f1f3d2`
-- Published build-branch commit: `42763e5126b6bee93bf294b5a411c3cf5330d572`
-- Built binary Git blob: `646943d2fe8fd2f3be2968d9bd1368d66fe1e7e1`
-- Runtime SHA-256: `0dea2efef91b842cdaae6973a9b8ec3fd95c06cb48e9f3118fc545a78ee288de`
-- Runtime size: `227836` bytes
+- Read-only source snapshot repository: `yuedizhibo/mib2q-MMI-Cockpit-Carplay`
+- Source snapshot commit: `36b0cf681871c2e2a7b4753a45cfdd56d588f058`
+- Local vendoring/fix commit: `cdb5271a64a2ef4af500b96e99958194324ea617`
+- Local build-dependency commit: `fc6712ca6b08108ec7e841aaef1a96c0d6775a52`
+- Local successful QNX workflow run: `35293814437`
+
+The checked-in runtime is promoted from the successful `AltScreen Universal QNX Build` artifact produced by this repository, with `SHA256SUMS.txt` and `PACKAGE_SOURCE_MAP.json` updated in the same promotion commit.
 
 The repair has three runtime safety changes:
 
@@ -78,7 +79,7 @@ The repair has three runtime safety changes:
 2. Process identity is now the first hook safety gate. Non-CarPlay helper processes return before stock AirPlay binding, Native111 binding, CF setup, internal GOT redirects, or the asynchronous runtime worker.
 3. `FORCE_START` can no longer override process identity. It remains limited to the existing transaction-authorization bypass inside an already validated CarPlay host.
 
-GitHub Actions' `universal-qnx-build` job completed successfully for this source and verified the QNX ELF surface. The binary remains `ELF32 ARM EABI5`, depends only on `libc.so.3` and `libm.so.2`, and contains the `identity_override=DISABLED` runtime marker. The unrelated full host certification job still reports the pre-existing `cfl_proof_invocation_drift` scope failure; that failure occurs before these helper-isolation checks and is not the QNX build result.
+GitHub Actions' `AltScreen Universal QNX Build` completed successfully in this repository and verified the QNX ELF surface. The binary remains `ELF32 ARM EABI5`, depends only on `libc.so.3` and `libm.so.2`, and contains the `identity_override=DISABLED` runtime marker.
 
 ## Runtime boundary
 
