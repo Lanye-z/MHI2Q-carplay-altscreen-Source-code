@@ -55,13 +55,12 @@ The last line still requires visual confirmation on the VC.
 
 
 
-
 ## Finalized HMI artifact
 
 The vehicle JAR is rebuilt only at ClusterStateController.class; all other entries stay inherited from the pinned BaseVideo3 JAR.
 
 size    = 143072
-cksum   = 1019325195
-SHA256  = 278c5777077d6f4b5799c1557fa92c0a422c45b2f07e54a200dc0286d0754fd4
+cksum   = 1956287696
+SHA256  = a5f8e8aff04061897c9aa3be772bb0dabdea61d0e342409e44c7dcf114d0f1be
 ctx80   = {98,101,102,3}
 proof   = CTX80_OBSERVED actual=80
