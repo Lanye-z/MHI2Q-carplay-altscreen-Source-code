@@ -4,7 +4,7 @@ QNX_HOST ?= /usr/qnx650/host/qnx6/x86
 QNX_TARGET ?= /usr/qnx650/target/qnx6
 CC ?= $(QNX_HOST)/usr/bin/ntoarmv7-gcc
 STATIC_STDCXX ?= $(QNX_TARGET)/armle-v7/lib/gcc/4.4.2/libstdc++.a
-SOURCES = src/main.cpp src/carplay_window_source.cpp src/cluster_video_display.cpp src/mhi2q_backend.cpp src/gl_renderer.cpp
+SOURCES = src/main.cpp src/private111_direct_source.cpp src/cluster_video_display.cpp src/mhi2q_backend.cpp src/gl_renderer.cpp
 CXXFLAGS += -O2 -Wall -Wextra -fno-exceptions -fno-rtti
 LDFLAGS += -lEGL -lGLESv2 -lm
 .PHONY: all clean
