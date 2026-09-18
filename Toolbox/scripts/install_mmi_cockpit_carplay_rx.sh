@@ -1,165 +1,177 @@
 #!/bin/sh
-# MMI-Cockpit-Carplay GEM INSTALL action.
-#
-# INSTALL is one operator transaction: the canonical AltScreen controller installs
-# the CarPlay type111 overlay, then this launcher installs the matching Mirror
-# sidecar runtime. START/reboot later enables both. Mirror replacement keeps one
-# owned previous runtime until the whole /mnt/app transaction is safely read-only.
+# Standalone CarPlay Second Screen / BaseVideo3 INSTALL.
+# Installs type111 native runtime + Java80 HMI control plane only.
+# No MMI Mirror renderer/sidecar and no RGI98 native renderer are installed.
+set -u
+
 BASE="$0"
 RESOLVED=$(command -v -- "$BASE" 2>/dev/null)
 [ -n "$RESOLVED" ] || RESOLVED="$BASE"
 SCRIPTDIR=$(cd -P -- "$(dirname -- "$RESOLVED")" 2>/dev/null && pwd -P)
-[ -n "$SCRIPTDIR" ] || { echo "FAIL: cannot resolve installed installer directory"; exit 126; }
+[ -n "$SCRIPTDIR" ] || { echo "FAIL: cannot resolve installer directory"; exit 126; }
 
 TESTING=${ALTSCREEN_CHAIN_TESTING:-0}
+DEVICE_ROOT=""
+VOLUME=""
 if [ "$TESTING" = 1 ]; then
     VOLUME=${ALTSCREEN_CHAIN_VOLUME:-}
-    [ -n "$VOLUME" ] || { echo "FAIL: ALTSCREEN_CHAIN_TESTING=1 requires ALTSCREEN_CHAIN_VOLUME"; exit 1; }
     DEVICE_ROOT=${ALTSCREEN_CHAIN_ROOT:-}
+    [ -n "$VOLUME" ] || { echo "FAIL: testing volume missing"; exit 1; }
     case "$DEVICE_ROOT" in /tmp/*|/var/tmp/*) ;; *) echo "FAIL: invalid ALTSCREEN_CHAIN_ROOT"; exit 2 ;; esac
 else
-    DEVICE_ROOT=""
-    VOLUME=""
     for candidate in /net/mmx/fs/sda0 /net/mmx/fs/sda1 /net/mmx/fs/sdb0 /net/mmx/fs/sdb1 /fs/sda0 /fs/sda1 /fs/sdb0 /fs/sdb1; do
         if [ -d "$candidate/Toolbox" ]; then VOLUME=$candidate; break; fi
     done
 fi
 
 [ -n "$VOLUME" ] || { echo "FAIL: no Toolbox SD card discovered"; exit 1; }
-[ -d "$VOLUME/Toolbox" ] || { echo "FAIL: selected SD lacks a root-level Toolbox: $VOLUME"; exit 1; }
-
 CONTROLLER="$VOLUME/Toolbox/scripts/altscreen_chain_test.sh"
-[ -f "$CONTROLLER" ] || { echo "FAIL: SD chain controller is missing: $CONTROLLER"; exit 127; }
-MIRROR_SRC="$VOLUME/Toolbox/carplay_alt_screen/mirror_display/release"
-PARENT="$DEVICE_ROOT/mnt/app/root"
-RUNTIME_ROOT="$PARENT/carplay-altscreen"
-RUNTIME_BIN="$RUNTIME_ROOT/bin"
-RUNTIME_STATE="$RUNTIME_ROOT/state"
-RUNTIME_TMP="$RUNTIME_ROOT/tmp"
-RUNTIME_OWNER="$RUNTIME_ROOT/.mmi-cockpit-carplay-runtime-owner"
-MIRROR_DST="$RUNTIME_BIN/mirror"
-MIRROR_OWNER="$MIRROR_DST/.mmi-cockpit-carplay-mirror-owner"
-MIRROR_PREV="$RUNTIME_TMP/mirror.previous"
-PREV_OWNER="$MIRROR_PREV/.mmi-cockpit-carplay-mirror-owner"
-LEGACY_MIRROR="$PARENT/carplay-alt111-mirror"
-LEGACY_MIRROR_PREV="$PARENT/.carplay-alt111-mirror.previous"
+JAR_SOURCE="$VOLUME/Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar"
+JAR_TARGET="$DEVICE_ROOT/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar"
+JAR_TARGET_DIR=$(dirname -- "$JAR_TARGET")
+BACKUP="$VOLUME/MMI-Cockpit-Carplay/backup/basevideo3-hmi-original"
+BACKUP_TMP="$BACKUP.new.$$"
+EXPECTED_SIZE=141858
+EXPECTED_CKSUM=2378993239
 
-# Old controller-only host fixtures intentionally do not carry the sidecar. A
-# production package is fail-closed: integrated INSTALL requires every runtime
-# member so the two-reboot flow can never arm a CarPlay-only half-install.
-if [ ! -d "$MIRROR_SRC" ]; then
-    if [ "$TESTING" = 1 ]; then
-        echo "MIRROR_RUNTIME=TEST_FIXTURE_ABSENT integration_skipped=1"
-        echo "source_volume=$VOLUME"
-        echo "chain_controller=$CONTROLLER"
-        exec /bin/sh "$CONTROLLER" install "${1:-}"
+[ -f "$CONTROLLER" ] || { echo "FAIL: chain controller missing: $CONTROLLER"; exit 127; }
+[ -s "$JAR_SOURCE" ] || { echo "FAIL: Java80 HMI JAR missing: $JAR_SOURCE"; exit 1; }
+
+file_size(){
+    n=$(wc -c < "$1" 2>/dev/null) || { echo 0; return; }
+    set -- $n
+    echo "${1:-0}"
+}
+file_cksum(){
+    if command -v cksum >/dev/null 2>&1; then
+        cksum < "$1" 2>/dev/null | awk '{print $1}'
+    else
+        echo unavailable
     fi
-    echo "FAIL: integrated Mirror runtime missing: $MIRROR_SRC" >&2
-    exit 1
-fi
-for f in carplay-alt111-mirror-display start_vehicle.sh stop_vehicle.sh BUILD_INFO.txt SHA256SUMS LICENSE.MMI-MIRROR; do
-    [ -s "$MIRROR_SRC/$f" ] || { echo "FAIL: integrated Mirror runtime member missing/empty: $f" >&2; exit 1; }
-done
-if [ -e "$MIRROR_DST" ] && [ ! -f "$MIRROR_OWNER" ]; then
-    echo "FAIL: refusing to replace unowned Mirror runtime directory: $MIRROR_DST" >&2
-    exit 1
-fi
-if [ -e "$MIRROR_PREV" ] && [ ! -f "$PREV_OWNER" ]; then
-    echo "FAIL: refusing to replace unowned previous Mirror runtime: $MIRROR_PREV" >&2
-    exit 1
-fi
+}
+jar_valid(){
+    f=$1
+    [ -s "$f" ] || return 1
+    [ "$(file_size "$f")" = "$EXPECTED_SIZE" ] || return 1
+    sum=$(file_cksum "$f")
+    [ "$sum" = unavailable ] || [ "$sum" = "$EXPECTED_CKSUM" ] || return 1
+}
+same_bytes(){
+    [ -f "$1" ] && [ -f "$2" ] || return 1
+    [ "$(file_size "$1")" = "$(file_size "$2")" ] || return 1
+    a=$(file_cksum "$1"); b=$(file_cksum "$2")
+    if [ "$a" != unavailable ] && [ "$b" != unavailable ]; then
+        [ "$a" = "$b" ]
+    else
+        cmp "$1" "$2" >/dev/null 2>&1
+    fi
+}
+mount_app_rw(){ [ "$TESTING" = 1 ] || mount -uw /mnt/app; }
+mount_app_ro(){ [ "$TESTING" = 1 ] || mount -ur /mnt/app; }
 
-echo "source_volume=$VOLUME"
-echo "chain_controller=$CONTROLLER"
+verify_backup(){
+    [ -f "$BACKUP/COMPLETE" ] || return 1
+    [ -f "$BACKUP/target" ] || return 1
+    [ "$(cat "$BACKUP/target" 2>/dev/null)" = "/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar" ] || return 1
+    if [ -f "$BACKUP/present" ]; then
+        [ -s "$BACKUP/carplay_hook.jar" ] || return 1
+        if [ -f "$BACKUP/cksum" ] && command -v cksum >/dev/null 2>&1; then
+            [ "$(cksum < "$BACKUP/carplay_hook.jar")" = "$(cat "$BACKUP/cksum")" ] || return 1
+        fi
+    elif [ -f "$BACKUP/absent" ]; then
+        [ ! -e "$BACKUP/carplay_hook.jar" ] || return 1
+    else
+        return 1
+    fi
+}
+
+backup_original_jar(){
+    if [ -e "$BACKUP" ]; then
+        verify_backup || { echo "FAIL: existing Java HMI backup is damaged"; return 1; }
+        echo "HMI_BACKUP=PRESERVED path=$BACKUP"
+        return 0
+    fi
+    rm -rf "$BACKUP_TMP" 2>/dev/null || true
+    mkdir -p "$(dirname -- "$BACKUP")" "$BACKUP_TMP" || return 1
+    echo "/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar" > "$BACKUP_TMP/target" || return 1
+    if [ -f "$JAR_TARGET" ]; then
+        cp "$JAR_TARGET" "$BACKUP_TMP/carplay_hook.jar" || return 1
+        touch "$BACKUP_TMP/present" || return 1
+        if command -v cksum >/dev/null 2>&1; then cksum < "$BACKUP_TMP/carplay_hook.jar" > "$BACKUP_TMP/cksum" || return 1; fi
+        echo "HMI_BACKUP=SNAPSHOT original=present"
+    else
+        touch "$BACKUP_TMP/absent" || return 1
+        echo "HMI_BACKUP=SNAPSHOT original=absent"
+    fi
+    touch "$BACKUP_TMP/COMPLETE" || return 1
+    mv "$BACKUP_TMP" "$BACKUP" || return 1
+    verify_backup
+}
+
+restore_original_jar(){
+    verify_backup || return 1
+    mkdir -p "$JAR_TARGET_DIR" || return 1
+    rm -f "$JAR_TARGET.basevideo3.tmp" 2>/dev/null || true
+    if [ -f "$BACKUP/present" ]; then
+        cp "$BACKUP/carplay_hook.jar" "$JAR_TARGET.basevideo3.tmp" || return 1
+        chmod 644 "$JAR_TARGET.basevideo3.tmp" || return 1
+        mv "$JAR_TARGET.basevideo3.tmp" "$JAR_TARGET" || return 1
+        same_bytes "$BACKUP/carplay_hook.jar" "$JAR_TARGET" || return 1
+    else
+        rm -f "$JAR_TARGET" "$JAR_TARGET.basevideo3.tmp" || return 1
+    fi
+}
+
+jar_valid "$JAR_SOURCE" || {
+    echo "FAIL: Java80 HMI JAR identity mismatch"
+    echo "expected_size=$EXPECTED_SIZE expected_cksum=$EXPECTED_CKSUM"
+    echo "actual_size=$(file_size "$JAR_SOURCE") actual_cksum=$(file_cksum "$JAR_SOURCE")"
+    exit 1
+}
+
+echo "PACKAGE_MODE=CARPLAY_SECOND_SCREEN_STANDALONE"
+echo "NATIVE_SOURCE=private111_stock_omx_cscreenrender"
+echo "PIXEL_TARGET=displayable3"
+echo "HMI_CONTEXT=ctx80"
+echo "MMI_MIRROR_RUNTIME=NOT_INCLUDED"
+echo "RGI98_NATIVE_RENDERER=NOT_INCLUDED"
+
+backup_original_jar || exit 1
 /bin/sh "$CONTROLLER" install "${1:-}"
 CHAIN_RC=$?
 [ "$CHAIN_RC" -eq 0 ] || exit "$CHAIN_RC"
-[ -f "$RUNTIME_OWNER" ] && [ -d "$RUNTIME_BIN" ] && [ -d "$RUNTIME_STATE" ] && [ -d "$RUNTIME_TMP" ] || {
-    echo "FAIL: unified runtime root was not published by the controller" >&2
-    /bin/sh "$CONTROLLER" restore >/dev/null 2>&1 || true
-    exit 1
-}
 
-mount_app_rw(){ [ "$TESTING" = 1 ] && return 0; mount -uw /mnt/app; }
-mount_app_ro(){ [ "$TESTING" = 1 ] && return 0; mount -ur /mnt/app; }
-rollback_chain(){
-    echo "WARN: Mirror runtime deployment failed; restoring AltScreen installation"
-    /bin/sh "$CONTROLLER" restore >/dev/null 2>&1 || echo "WARN: AltScreen rollback also failed; use RESTORE ORIGINAL before reboot"
-}
-
-STAGE="$RUNTIME_TMP/mirror.new.$$"
 APP_RW=0
-PUBLISHED=0
-HAD_CURRENT=0
-rollback_runtime(){
-    # Keep /mnt/app writable long enough to restore the exact pre-INSTALL runtime.
+rollback(){
+    echo "WARN: Java80 deployment failed; restoring pre-install state"
     if [ "$APP_RW" != 1 ]; then
         if mount_app_rw >/dev/null 2>&1; then APP_RW=1; fi
     fi
     if [ "$APP_RW" = 1 ]; then
-        [ "$PUBLISHED" != 1 ] || rm -rf "$MIRROR_DST" 2>/dev/null || true
-        if [ "$HAD_CURRENT" = 1 ] && [ -d "$MIRROR_PREV" ]; then
-            mv "$MIRROR_PREV" "$MIRROR_DST" 2>/dev/null || echo "WARN: could not restore previous Mirror runtime"
-        fi
-        rm -rf "$STAGE" 2>/dev/null || true
+        restore_original_jar >/dev/null 2>&1 || echo "WARN: Java HMI rollback failed"
         sync >/dev/null 2>&1 || true
         mount_app_ro >/dev/null 2>&1 || true
         APP_RW=0
     fi
-    rollback_chain
+    /bin/sh "$CONTROLLER" restore >/dev/null 2>&1 || echo "WARN: native rollback failed"
 }
-fail_runtime(){ msg=$1; rollback_runtime; echo "FAIL: $msg" >&2; exit 1; }
+fail(){ msg=$1; rollback; echo "FAIL: $msg" >&2; exit 1; }
 
-rm -rf "$STAGE" 2>/dev/null || true
-if ! mount_app_rw; then rollback_chain; echo "FAIL: cannot mount /mnt/app writable for Mirror runtime" >&2; exit 1; fi
+mount_app_rw || fail "cannot mount /mnt/app writable"
 APP_RW=1
-
-# Router rotation may already have copied the immediately previous Mirror into
-# the unified tmp/ namespace. Keep it until START safely retires rollback state.
-if [ -d "$MIRROR_PREV" ]; then
-    [ -f "$PREV_OWNER" ] || fail_runtime "previous Mirror runtime lost its ownership marker"
-    HAD_CURRENT=1
-fi
-# First migration from the pre-unification standalone Mirror: copy it into the
-# unified rollback slot but leave the legacy tree in place until START. Thus a
-# failure through the final remount still has an exact old runtime available.
-if [ ! -d "$MIRROR_PREV" ] && [ -d "$LEGACY_MIRROR" ]; then
-    [ -f "$LEGACY_MIRROR/.mmi-cockpit-carplay-mirror-owner" ] || fail_runtime "legacy Mirror runtime is unowned"
-    cp -R "$LEGACY_MIRROR" "$MIRROR_PREV" || fail_runtime "cannot preserve legacy Mirror runtime"
-    HAD_CURRENT=1
-fi
-mkdir -p "$STAGE" || fail_runtime "cannot create Mirror staging directory"
-for f in carplay-alt111-mirror-display start_vehicle.sh stop_vehicle.sh BUILD_INFO.txt SHA256SUMS LICENSE.MMI-MIRROR; do
-    cp "$MIRROR_SRC/$f" "$STAGE/$f" || fail_runtime "cannot copy Mirror runtime member: $f"
-done
-chmod 755 "$STAGE/carplay-alt111-mirror-display" "$STAGE/start_vehicle.sh" "$STAGE/stop_vehicle.sh" ||
-    fail_runtime "cannot chmod Mirror runtime"
-chmod 644 "$STAGE/BUILD_INFO.txt" "$STAGE/SHA256SUMS" "$STAGE/LICENSE.MMI-MIRROR" ||
-    fail_runtime "cannot chmod Mirror metadata"
-printf '%s\n' 'owner=MMI-Cockpit-Carplay' 'mode=CARPLAY111_MIRROR_SOURCE' > "$STAGE/.mmi-cockpit-carplay-mirror-owner" ||
-    fail_runtime "cannot create Mirror ownership marker"
-
-if [ -d "$MIRROR_DST" ]; then
-    [ ! -d "$MIRROR_PREV" ] || rm -rf "$MIRROR_PREV" || fail_runtime "cannot refresh previous Mirror runtime"
-    mv "$MIRROR_DST" "$MIRROR_PREV" || fail_runtime "cannot rotate previous Mirror runtime"
-    HAD_CURRENT=1
-fi
-if ! mv "$STAGE" "$MIRROR_DST"; then fail_runtime "cannot publish Mirror runtime"; fi
-PUBLISHED=1
-sync || fail_runtime "sync failed after Mirror runtime install"
-# Previous unified/legacy trees are intentionally retained through the first
-# reboot. START is the next safe app-RW transaction and retires them only after
-# the new runtime has survived INSTALL completely.
-RUNTIME_PREV="$PARENT/.carplay-altscreen.previous"
-if [ -d "$RUNTIME_PREV" ]; then
-    [ -f "$RUNTIME_PREV/.mmi-cockpit-carplay-runtime-owner" ] || fail_runtime "previous unified runtime is unowned"
-fi
-if ! mount_app_ro; then fail_runtime "cannot remount /mnt/app read-only"; fi
+mkdir -p "$JAR_TARGET_DIR" || fail "cannot create HMI JAR directory"
+TMP="$JAR_TARGET.basevideo3.tmp"
+rm -f "$TMP" 2>/dev/null || true
+cp "$JAR_SOURCE" "$TMP" || fail "cannot stage Java80 HMI JAR"
+chmod 644 "$TMP" || fail "cannot chmod Java80 HMI JAR"
+jar_valid "$TMP" || fail "staged Java80 HMI JAR identity check failed"
+mv "$TMP" "$JAR_TARGET" || fail "cannot publish Java80 HMI JAR"
+jar_valid "$JAR_TARGET" || fail "installed Java80 HMI JAR identity check failed"
+sync || fail "sync failed after Java80 HMI install"
+mount_app_ro || fail "cannot remount /mnt/app read-only"
 APP_RW=0
 
-# MIRROR_PREV intentionally remains only until START/RESTORE next obtains a safe
-# writable /mnt/app. It is ignored at runtime and gives INSTALL exact rollback for
-# every failure up through the final read-only remount.
-echo "MIRROR_RUNTIME=INSTALLED path=/mnt/app/root/carplay-altscreen/bin/mirror autostart=armed_by_START unified_runtime=YES"
-echo "INSTALL=PASS integrated=AltScreen+Mirror reboot_required=YES"
+echo "HMI_CONTROL_PLANE=INSTALLED target=/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar size=$EXPECTED_SIZE cksum=$EXPECTED_CKSUM"
+echo "HMI_CONTRACT=JAVA80 ctx80=98,101,102,3 basevideo=3"
+echo "INSTALL=PASS integrated=AltScreen+BaseVideo3+Java80 reboot_required=YES"
 exit 0
