@@ -23,7 +23,11 @@ if { [ "$TESTING" != 1 ] || [ -z "${ALTSCREEN_FAKE_RECORD:-}" ]; } &&
    [ "$SCRIPTDIR" != "$APP_BIN" ] && [ -f "$APP_SELF" ] &&
    [ -f "$APP_BIN/altscreen_chain_test.sh" ]; then
     echo "APP_RUNTIME_FORWARD action=STORE_RESTORE from=$SCRIPTDIR to=/mnt/app/root/carplay-altscreen/bin"
-    exec /bin/sh "$APP_SELF" "$@"
+    if [ "$#" -gt 0 ]; then
+        exec /bin/sh "$APP_SELF" "$@"
+    else
+        exec /bin/sh "$APP_SELF"
+    fi
 fi
 
 CONTROLLER="$SCRIPTDIR/altscreen_chain_test.sh"
