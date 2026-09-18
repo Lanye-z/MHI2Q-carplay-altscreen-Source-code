@@ -120,6 +120,8 @@ jobs:
           git add "$dst" PACKAGE_SOURCE_MAP.json SHA256SUMS.txt                   Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS
           if ! git diff --cached --quiet; then
             git commit -m "build(altscreen): promote BaseVideo3 standalone runtime [skip ci]"
+            git fetch origin test/carplay-basevideo3-standalone-v1
+            git rebase origin/test/carplay-basevideo3-standalone-v1
             git push origin HEAD:test/carplay-basevideo3-standalone-v1
           fi
 
