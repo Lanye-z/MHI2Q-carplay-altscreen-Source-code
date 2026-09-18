@@ -211,13 +211,15 @@ static int bridge_get_window_iv(void *window, int property, int *value) {
     char id_string[64];
 
     if (!g_real_iv) return -1;
-    if (property != SCREEN_PROPERTY_ID || !value || !g_real_cv)
+    if (property != SCREEN_PROPERTY_ID || !value)
         return g_real_iv(window, property, value);
 
     rc = g_real_iv(window, property, &numeric);
     for (i = 0; i < (int)sizeof(id_string); ++i) id_string[i] = 0;
-    cv_rc = g_real_cv(window, SCREEN_PROPERTY_ID_STRING,
-                      (int)sizeof(id_string) - 1, id_string);
+    cv_rc = g_real_cv
+        ? g_real_cv(window, SCREEN_PROPERTY_ID_STRING,
+                    (int)sizeof(id_string) - 1, id_string)
+        : -1;
 
     if (cv_rc == 0 && strcmp(id_string, "58") == 0) {
         *value = 58;
@@ -225,7 +227,12 @@ static int bridge_get_window_iv(void *window, int property, int *value) {
         return 0;
     }
 
-    *value = numeric;
+    /*
+     * Fail closed: never allow a QNX-generated numeric 58 to masquerade as
+     * Audi/CScreenRender owner identity "58". Preserve other numeric IDs only
+     * so the legacy observer can keep ignoring non-target windows normally.
+     */
+    *value = (numeric == 58) ? -1 : numeric;
     return rc;
 }
 

@@ -47,7 +47,8 @@ PHYSICAL_ROUTE_READY=SOFTWARE_CHAIN_COMPLETE
 ```
 
 The QNX-generated numeric `SCREEN_PROPERTY_ID` is diagnostic only. Window58
-matching is based on the owner-defined `SCREEN_PROPERTY_ID_STRING="58"`. The ID compatibility helper is loaded only
+matching is based exclusively on the owner-defined
+`SCREEN_PROPERTY_ID_STRING="58"`; numeric-ID fallback is disabled. The ID compatibility helper is loaded only
 inside the readback sidecar; it is never added to the CarPlay/dio_manager preload.
 
 The last line still requires visual confirmation on the VC.

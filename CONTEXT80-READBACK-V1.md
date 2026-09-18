@@ -47,3 +47,8 @@ The promoted V4 sidecar ELF remains unchanged. A small sidecar-only
 SCREEN_PROPERTY_ID_STRING identity without loading into dio_manager. The CarPlay-facing universal
 hook remains pinned to the known-good SHA-256
 `07a96cad6121cfc9fae259d47e6c95142b5e09b7ef3e8cd7a180de009579cb39`.
+
+
+Window58 identity is fail-closed: a QNX-generated numeric ID of 58 is never
+accepted as the CarPlay source unless the owner-defined
+`SCREEN_PROPERTY_ID_STRING` also reads exactly `"58"`.

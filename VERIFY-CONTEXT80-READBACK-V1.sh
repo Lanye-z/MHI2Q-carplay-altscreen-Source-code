@@ -48,6 +48,8 @@ binary_strings "$BRIDGE" | grep -Fq 'screen_get_window_property_cv' ||
   fail "ID bridge does not read Screen owner identity"
 binary_strings "$BRIDGE" | grep -Fq 'ID_STRING(20)' ||
   fail "ID bridge is not using SCREEN_PROPERTY_ID_STRING=20"
+grep -Fq 'numeric == 58' "$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/screen_id_bridge.c" ||
+  fail "ID bridge lacks fail-closed numeric-58 suppression"
 grep -Fq 'LD_PRELOAD="$ID_BRIDGE" "$BIN"' "$MIRROR_START" ||
   fail "sidecar launcher does not isolate/load ID bridge"
 grep -Fq 'SIDECAR_PRELOAD_POLICY=ISOLATED' "$MIRROR_START" ||
@@ -60,7 +62,10 @@ grep -Fq 'SCREEN_PROPERTY_ID_STRING 20' "$SOURCE" ||
 grep -Fq 'id_string' "$SOURCE" ||
   fail "vendored Window58 source lacks string identity diagnostics"
 grep -Fq 'match_basis' "$SOURCE" ||
-  fail "vendored Window58 source lacks STRING/fallback match diagnostics"
+  fail "vendored Window58 source lacks ID_STRING match diagnostics"
+if grep -Fq 'NUMERIC_FALLBACK' "$SOURCE"; then
+  fail "vendored Window58 source still permits numeric-ID target fallback"
+fi
 
 [ -s "$JAR" ] || fail "Java80 HMI JAR missing"
 if command -v unzip >/dev/null 2>&1; then

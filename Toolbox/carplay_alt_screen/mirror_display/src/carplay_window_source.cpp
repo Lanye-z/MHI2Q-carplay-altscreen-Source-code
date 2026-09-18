@@ -162,7 +162,7 @@ bool CarPlayWindowSource::open_api() {
     if (!get_window_cv_) {
         fprintf(stderr,
                 "source: WARN screen_get_window_property_cv unavailable; "
-                "Window58 identity will use numeric fallback only\n");
+                "Window58 identity cannot be proven; numeric fallback is disabled\n");
     }
     return true;
 }
@@ -396,12 +396,12 @@ bool CarPlayWindowSource::pump_event(unsigned long long timeout_ns) {
 
     const bool string_match =
         id_string_rc == 0 && strcmp(id_string, target_string) == 0;
-    const bool numeric_fallback =
-        !string_match && id_string_rc != 0 &&
-        id_rc == 0 && numeric_id == target_id_;
-    const bool target = string_match || numeric_fallback;
-    const char *match_basis =
-        string_match ? "STRING" : (numeric_fallback ? "NUMERIC_FALLBACK" : "NO");
+    /*
+     * SCREEN_PROPERTY_ID is QNX-generated and may be unrelated to the Audi
+     * displayable identity. Do not fall back to numeric equality.
+     */
+    const bool target = string_match;
+    const char *match_basis = string_match ? "ID_STRING" : "NO";
 
     if (target || (verbose_ && event_count_ <= 24u)) {
         fprintf(stderr,
