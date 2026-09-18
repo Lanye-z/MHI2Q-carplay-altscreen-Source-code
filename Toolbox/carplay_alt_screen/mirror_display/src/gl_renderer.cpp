@@ -152,11 +152,78 @@ bool GlRenderer::upload_packed_rgba_bytes(const unsigned char *pixels,
     return true;
 }
 
-bool GlRenderer::upload_frame(const VideoFrame &frame) {
+static unsigned char clamp_u8(int v) {
+    if (v < 0) return 0;
+    if (v > 255) return 255;
+    return (unsigned char)v;
+}
+
+bool GlRenderer::upload_nv12(const VideoFrame &frame) {
     if (!ready_ || !frame.data || frame.width <= 0 || frame.height <= 0 ||
-        frame.stride < frame.width * 4) {
+        frame.stride < frame.width || (frame.width & 1) || (frame.height & 1)) {
         return false;
     }
+
+    const size_t rgba_bytes =
+        (size_t)frame.width * (size_t)frame.height * 4u;
+    if (!ensure_upload_buffer(rgba_bytes)) {
+        fprintf(stderr, "renderer: cannot allocate NV12 CSC buffer (%lu bytes)\n",
+                (unsigned long)rgba_bytes);
+        return false;
+    }
+
+    const unsigned char *y_plane = frame.data;
+    const unsigned char *uv_plane =
+        frame.data + (size_t)frame.stride * (size_t)frame.height;
+
+    for (int y = 0; y < frame.height; ++y) {
+        const unsigned char *yrow =
+            y_plane + (size_t)y * (size_t)frame.stride;
+        const unsigned char *uvrow =
+            uv_plane + (size_t)(y >> 1) * (size_t)frame.stride;
+        unsigned char *dst =
+            upload_buffer_ + (size_t)y * (size_t)frame.width * 4u;
+
+        for (int x = 0; x < frame.width; ++x) {
+            int c = (int)yrow[x] - 16;
+            const int uv = x & ~1;
+            const int d = (int)uvrow[uv] - 128;
+            const int e = (int)uvrow[uv + 1] - 128;
+            if (c < 0) c = 0;
+
+            const int r = (298 * c + 409 * e + 128) >> 8;
+            const int g = (298 * c - 100 * d - 208 * e + 128) >> 8;
+            const int b = (298 * c + 516 * d + 128) >> 8;
+
+            dst[(size_t)x * 4u + 0u] = clamp_u8(r);
+            dst[(size_t)x * 4u + 1u] = clamp_u8(g);
+            dst[(size_t)x * 4u + 2u] = clamp_u8(b);
+            dst[(size_t)x * 4u + 3u] = 255u;
+        }
+    }
+
+    static bool reported = false;
+    if (!reported) {
+        reported = true;
+        fprintf(stderr,
+                "renderer: PHASE=NV12_CSC_READY backend=cpu-bt601 "
+                "input=%dx%d stride=%d output=RGBA8888\n",
+                frame.width, frame.height, frame.stride);
+    }
+
+    return upload_packed_rgba_bytes(
+        upload_buffer_, frame.width, frame.height, false);
+}
+
+bool GlRenderer::upload_frame(const VideoFrame &frame) {
+    if (!ready_ || !frame.data || frame.width <= 0 || frame.height <= 0)
+        return false;
+
+    if (frame.format == PIXEL_FORMAT_NV12)
+        return upload_nv12(frame);
+
+    if (frame.stride < frame.width * 4)
+        return false;
 
     const bool swap_rb =
         frame.format == PIXEL_FORMAT_BGRA8888 ||
