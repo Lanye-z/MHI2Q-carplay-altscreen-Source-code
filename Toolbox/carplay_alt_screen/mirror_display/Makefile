@@ -13,7 +13,7 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 $(TARGET): $(SOURCES) | $(BUILD_DIR)
 	@test -f "$(STATIC_STDCXX)" || { echo "ERROR: static QNX ARMv7 libstdc++ not found: $(STATIC_STDCXX)"; exit 1; }
-	QNX_HOST="$(QNX_HOST)" QNX_TARGET="$(QNX_TARGET)" "$(CC)" $(CXXFLAGS) -Isrc $(SOURCES) -o "$@" "$(STATIC_STDCXX)" $(LDFLAGS)
+	QNX_HOST="$(QNX_HOST)" QNX_TARGET="$(QNX_TARGET)" "$(CC)" $(CXXFLAGS) -Isrc -I../src $(SOURCES) -o "$@" "$(STATIC_STDCXX)" $(LDFLAGS)
 	@echo "Built: $@"
 clean:
 	rm -rf $(BUILD_DIR)
