@@ -1,7 +1,7 @@
 {
-  "date": "2026-09-17",
+  "date": "2026-09-18",
   "scope": "instrument-mirror-window58-capture",
-  "result": "source-fixed-host-validated-qnx-sidecar-rebuild-required",
+  "result": "wm-first-v3-qnx-sidecar-built-promoted-and-host-validated",
   "captured_vehicle_evidence": {
     "type111_listener": "pass",
     "type111_accept": "pass",
@@ -45,7 +45,10 @@
     "display_manager_fallback_harness": "pass",
     "first_window_census_without_verbose": "pass",
     "compiled_build_id_source": "pass",
-    "release_binary_source_guard": "implemented",
+    "release_binary_source_guard": "pass",
+    "release_binary_qnx_armv7": "pass",
+    "release_binary_v3_markers": "pass",
+    "release_manifest_consistency": "pass",
     "pixel_plane_parity": "pass",
     "wm_first_full_chain_ci": "pass"
   },
@@ -55,12 +58,15 @@
     "mirror_build_id": "window58-wm-context-v3"
   },
   "binary_artifacts": {
-    "qnx_sidecar_rebuilt": false,
-    "checked_in_release_binary_still_old": true,
-    "reason": "the Window58 correction changes C++ sidecar code and requires the QNX 6.5 ARMv7 ntoarmv7-gcc toolchain; that toolchain is not available in the current execution environment or standard hosted CI",
-    "do_not_vehicle_test_as_fixed_until_rebuilt": true
+    "qnx_sidecar_rebuilt": true,
+    "checked_in_release_binary_still_old": false,
+    "toolchain": "QNX 6.5 ntoarmv7-gcc",
+    "architecture": "ELF32 little-endian ARM EABI5",
+    "mirror_sha256": "ef3beae9087b166baacc05b9e25769f9f864be5e7f4c4e1afc6b79df4d86934c",
+    "validated_hook_sha256": "0dea2efef91b842cdaae6973a9b8ec3fd95c06cb48e9f3118fc545a78ee288de",
+    "do_not_vehicle_test_as_fixed_until_rebuilt": false
   },
-  "required_qnx_rebuild": [
+  "completed_qnx_rebuild": [
     "build carplay-alt111-mirror-display from pinned source with mirror_display/build_qnx.sh",
     "verify the ELF contains window58-wm-context-v3",
     "replace Toolbox/carplay_alt_screen/mirror_display/release/carplay-alt111-mirror-display",

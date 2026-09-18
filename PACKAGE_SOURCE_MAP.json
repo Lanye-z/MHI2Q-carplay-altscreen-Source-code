@@ -33,13 +33,15 @@
   "Toolbox/carplay_alt_screen/profiles/P1404/PROFILE_CONTRACT.json": "51f2bedb80981f2c7250fb3f834312455593c3a003595fe7541e1e0ba41edaa5",
   "Toolbox/carplay_alt_screen/profiles/P1404/QNX_LOAD_LAYOUT.json": "62894ca7e59489f6cec1de24bf5c88b55d466149ba4f64838d6e322c32e01b01",
   "Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so": "0dea2efef91b842cdaae6973a9b8ec3fd95c06cb48e9f3118fc545a78ee288de",
-  "Toolbox/carplay_alt_screen/mirror_display/release/carplay-alt111-mirror-display": "36bf2d46c37cbdf2c5d79337e1dd5ae7989f4a1c287f883db59d038ed6f561fd",
+  "Toolbox/carplay_alt_screen/mirror_display/Makefile": "ed57b894a3bfd3f94db333bef4d37aa89b4245174da7062287e8acac7ed3708c",
+  "Toolbox/carplay_alt_screen/mirror_display/release/carplay-alt111-mirror-display": "ef3beae9087b166baacc05b9e25769f9f864be5e7f4c4e1afc6b79df4d86934c",
   "Toolbox/carplay_alt_screen/mirror_display/release/start_vehicle.sh": "6eb6c3e1bc2aee3c291eb7307f0cc2648c0d160cd6d6f666b541e98fa9a04345",
   "Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh": "0dedaef187e13965cefa254c14f19386efd91b9385ee2907463810b5d6379fc8",
-  "Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt": "45f5e1132d555623f5f218fb0aefaa12b73911cb06beccc2286e60ce926a5d74",
-  "Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS": "b2ce5d1e0865779b659602c4ff4c53d98a3f0d1cfe9ba132ba2aa5a02aad11ca",
+  "Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt": "90c084f3c1c56c2d5df944416a66e09518a1175f2f92b0619ef1da8b11ab9737",
+  "Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS": "dde682a1469404f7ab50b5c309eb9b91ede53fe38db790bd9bee5954f7d6d303",
   "Toolbox/carplay_alt_screen/mirror_display/release/LICENSE.MMI-MIRROR": "436a6d536138f203ac333858cff92a568be62797752b3adb94bcaa0f6ffe7ef6",
   "Toolbox/carplay_alt_screen/profiles/REFERENCE_ONLY.txt": "0aaec0c7975c0a05fcaa867c22546a37740d7f6c9ae0f5c164c29c1d0c52f31f",
   "INCIDENT-20260917-NO-DISPLAY.md": "036f6d9bc5bb7d22e57e56782ffc2ba7f3c8fcc30cc465e0a47c90d5284356b2",
-  "HOTFIX_VALIDATION.json": "4425b7f4ae517bffdf2ec4514f061048fc857cb5deddfb9c72b1076dcbb033bb"
+  "HOTFIX_VALIDATION.json": "1a22d920010bf407ff04063722701f6efa294b4a25d4811916f60b73c845f83a",
+  "VERIFY-V3-RELEASE.sh": "a03db646ff5ee2f858f01b866422ed26034d809cb1bdf266d2161b9af94d43b3"
 }

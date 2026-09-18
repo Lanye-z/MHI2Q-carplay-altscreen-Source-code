@@ -6,7 +6,7 @@ CC ?= $(QNX_HOST)/usr/bin/ntoarmv7-gcc
 STATIC_STDCXX ?= $(QNX_TARGET)/armle-v7/lib/gcc/4.4.2/libstdc++.a
 SOURCES = src/main.cpp src/carplay_window_source.cpp src/cluster_video_display.cpp src/mhi2q_backend.cpp src/gl_renderer.cpp
 CXXFLAGS += -O2 -Wall -Wextra -fno-exceptions -fno-rtti
-LDFLAGS += -lEGL -lGLESv2 -lm -ldl
+LDFLAGS += -lEGL -lGLESv2 -lm
 .PHONY: all clean
 all: $(TARGET)
 $(BUILD_DIR):
