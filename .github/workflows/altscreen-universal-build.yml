@@ -1,8 +1,8 @@
-name: AltScreen BaseVideo3 Visible Probe QNX Build
+name: AltScreen BaseVideo3 Standalone QNX Build
 
 on:
   push:
-    branches: ['test/carplay-basevideo3-native-v1-visible-probe']
+    branches: ['test/carplay-basevideo3-standalone-v1']
     paths:
       - 'Toolbox/carplay_alt_screen/src/**'
       - 'Toolbox/carplay_alt_screen/tests/validate_qnx_load_layout.py'
@@ -11,7 +11,12 @@ on:
       - 'Toolbox/scripts/altscreen_chain_test_universal.sh'
       - 'Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh'
       - 'Toolbox/scripts/status_mmi_cockpit_carplay_test.sh'
-      - 'VERIFY-BASEVIDEO3-VISIBLE-PROBE.sh'
+      - 'Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh'
+      - 'Toolbox/scripts/stop_mmi_cockpit_carplay_test.sh'
+      - 'Toolbox/GEM/mqb-carplayAltScreen.esd'
+      - 'Toolbox/carplay_alt_screen/hmi/**'
+      - 'READ-ME-FIRST.md'
+      - 'VERIFY-BASEVIDEO3-STANDALONE.sh'
       - '.github/workflows/altscreen-universal-build.yml'
   workflow_dispatch:
 
@@ -19,7 +24,7 @@ permissions:
   contents: write
 
 jobs:
-  qnx-basevideo3-visible:
+  qnx-basevideo3-standalone:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,10 +34,10 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends binutils-arm-linux-gnueabihf python3-pyelftools
 
-      - name: Build BaseVideo3 visible-probe universal hook
+      - name: Build BaseVideo3 standalone universal hook
         run: |
           set -euo pipefail
-          out="$RUNNER_TEMP/altscreen-basevideo3-visible"
+          out="$RUNNER_TEMP/altscreen-basevideo3-standalone"
           sh Toolbox/carplay_alt_screen/build_source_snapshot.sh universal "$out"
           test -s "$out/libcarplay_altscreen.so"
           strings "$out/libcarplay_altscreen.so" | grep -q 'PHASE=BASEVIDEO3_NATIVE_POLICY'
@@ -41,27 +46,30 @@ jobs:
           strings "$out/libcarplay_altscreen.so" | grep -q 'screen_manage_window'
           strings "$out/libcarplay_altscreen.so" | grep -q '/tmp/mmi-mirror-basevideo.ready'
           if strings "$out/libcarplay_altscreen.so" | grep -q 'identity_override=DISABLED'; then
-            echo 'helper-isolation runtime leaked into BaseVideo3 visible-probe branch' >&2
+            echo 'helper-isolation runtime leaked into BaseVideo3 standalone branch' >&2
             exit 1
           fi
           arm-linux-gnueabihf-readelf -d "$out/libcarplay_altscreen.so" | grep -q 'libc.so.3'
           arm-linux-gnueabihf-readelf -d "$out/libcarplay_altscreen.so" | grep -q 'libm.so.2'
+          jar='Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar'
+          test "$(wc -c < "$jar")" = 141858
+          test "$(sha256sum "$jar" | awk '{print tolower($1)}')" = eafebf9fd1a7f4d3962fa5330b6908f45570756ade24676baf1f2bf66edc2c8a
 
-      - name: Upload BaseVideo3 visible-probe artifact
+      - name: Upload BaseVideo3 standalone hook artifact
         uses: actions/upload-artifact@v4
         with:
-          name: altscreen-basevideo3-native-v1-visible-probe
+          name: altscreen-basevideo3-standalone-hook-v1
           path: |
-            ${{ runner.temp }}/altscreen-basevideo3-visible/libcarplay_altscreen.so
-            ${{ runner.temp }}/altscreen-basevideo3-visible/BUILD_INFO.txt
-            ${{ runner.temp }}/altscreen-basevideo3-visible/MANIFEST.txt
+            ${{ runner.temp }}/altscreen-basevideo3-standalone/libcarplay_altscreen.so
+            ${{ runner.temp }}/altscreen-basevideo3-standalone/BUILD_INFO.txt
+            ${{ runner.temp }}/altscreen-basevideo3-standalone/MANIFEST.txt
           if-no-files-found: error
 
-      - name: Promote BaseVideo3 visible-probe runtime to experiment branch
-        if: github.ref == 'refs/heads/test/carplay-basevideo3-native-v1-visible-probe'
+      - name: Promote BaseVideo3 standalone runtime to experiment branch
+        if: github.ref == 'refs/heads/test/carplay-basevideo3-standalone-v1'
         run: |
           set -euo pipefail
-          out="$RUNNER_TEMP/altscreen-basevideo3-visible"
+          out="$RUNNER_TEMP/altscreen-basevideo3-standalone"
           dst="Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so"
           cp "$out/libcarplay_altscreen.so" "$dst"
 
@@ -105,12 +113,38 @@ jobs:
           relsums.write_text("\n".join(lines) + "\n")
           PY
 
-          sh VERIFY-BASEVIDEO3-VISIBLE-PROBE.sh
+          sh VERIFY-BASEVIDEO3-STANDALONE.sh
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "$dst" PACKAGE_SOURCE_MAP.json SHA256SUMS.txt                   Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS
           if ! git diff --cached --quiet; then
-            git commit -m "build(altscreen): promote BaseVideo3 visible-probe runtime [skip ci]"
-            git push origin HEAD:test/carplay-basevideo3-native-v1-visible-probe
+            git commit -m "build(altscreen): promote BaseVideo3 standalone runtime [skip ci]"
+            git push origin HEAD:test/carplay-basevideo3-standalone-v1
           fi
+
+      - name: Verify standalone package contract
+        run: |
+          set -euo pipefail
+          sh VERIFY-BASEVIDEO3-STANDALONE.sh
+
+      - name: Stage standalone SD package
+        run: |
+          set -euo pipefail
+          pkg="$RUNNER_TEMP/carplay-basevideo3-standalone-sd"
+          rm -rf "$pkg"
+          mkdir -p "$pkg"
+          cp -a Toolbox "$pkg/Toolbox"
+          cp READ-ME-FIRST.md "$pkg/READ-ME-FIRST.md"
+          cp BASEVIDEO3-VISIBLE-PROBE.md "$pkg/BASEVIDEO3-VISIBLE-PROBE.md"
+          cp VERIFY-BASEVIDEO3-STANDALONE.sh "$pkg/VERIFY-BASEVIDEO3-STANDALONE.sh"
+          cp SHA256SUMS.txt PACKAGE_SOURCE_MAP.json "$pkg/"
+          test -s "$pkg/Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so"
+          test -s "$pkg/Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar"
+
+      - name: Upload standalone SD ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: carplay-basevideo3-standalone-v1-sd
+          path: ${{ runner.temp }}/carplay-basevideo3-standalone-sd/
+          if-no-files-found: error
