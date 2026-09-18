@@ -77,15 +77,55 @@ done
 SOURCE_READY=0
 if [ -n "$HOOK_LOG" ] && grep -q 'PHASE=NATIVE_111_FIRST_REAL_FRAME.*result=POSTED' "$HOOK_LOG" 2>/dev/null; then
     SOURCE_READY=1
-    echo "NATIVE_FRAME_READY=YES meaning=Window58_stock_post"
+    echo "NATIVE_FRAME_POSTED=YES meaning=Window58_stock_CScreenRender_post"
 else
-    echo "NATIVE_FRAME_READY=NO"
+    echo "NATIVE_FRAME_POSTED=NO"
+fi
+
+READBACK_OK=0
+PIXEL_VALID=0
+GLES_PRESENT=0
+GRID_PRESENT=0
+if [ -f "$MIRROR_LOG" ]; then
+    if grep -q 'SOURCE_READBACK_RC=OK' "$MIRROR_LOG" 2>/dev/null; then
+        READBACK_OK=1
+        RB_LINE=$(grep 'SOURCE_READBACK_RC=OK' "$MIRROR_LOG" 2>/dev/null | tail -n 1)
+        echo "SOURCE_READBACK_RC=OK proof='$RB_LINE'"
+    else
+        echo "SOURCE_READBACK_RC=PENDING_OR_FAILED"
+    fi
+    if grep -q 'SOURCE_PIXEL_VALID=YES' "$MIRROR_LOG" 2>/dev/null; then
+        PIXEL_VALID=1
+        PX_LINE=$(grep 'SOURCE_PIXEL_VALID=YES' "$MIRROR_LOG" 2>/dev/null | tail -n 1)
+        echo "SOURCE_PIXEL_VALID=YES proof='$PX_LINE'"
+    else
+        echo "SOURCE_PIXEL_VALID=NO_OR_PENDING"
+    fi
+    if grep -q 'GLES_PRESENT=YES' "$MIRROR_LOG" 2>/dev/null; then
+        GLES_PRESENT=1
+        GL_LINE=$(grep 'GLES_PRESENT=YES' "$MIRROR_LOG" 2>/dev/null | tail -n 1)
+        echo "GLES_PRESENT=YES proof='$GL_LINE'"
+    else
+        echo "GLES_PRESENT=NO"
+    fi
+    if grep -q 'SINK_TEST_GRID_PRESENT=YES' "$MIRROR_LOG" 2>/dev/null; then
+        GRID_PRESENT=1
+        GRID_LINE=$(grep 'SINK_TEST_GRID_PRESENT=YES' "$MIRROR_LOG" 2>/dev/null | tail -n 1)
+        echo "SINK_TEST_GRID_PRESENT=YES proof='$GRID_LINE'"
+    else
+        echo "SINK_TEST_GRID_PRESENT=NO"
+    fi
+else
+    echo "SOURCE_READBACK_RC=UNKNOWN log_missing=1"
+    echo "SOURCE_PIXEL_VALID=UNKNOWN log_missing=1"
+    echo "GLES_PRESENT=UNKNOWN log_missing=1"
+    echo "SINK_TEST_GRID_PRESENT=UNKNOWN log_missing=1"
 fi
 
 DEST=0
 if [ -f "$DEST_READY" ]; then
     DEST=1
-    echo "DEST_FRAME_READY=YES meaning=readback_plus_first_gles_present"
+    echo "DEST_FRAME_READY=YES meaning=first_successful_gles_present_marker"
     cat "$DEST_READY" 2>/dev/null || true
 else
     echo "DEST_FRAME_READY=NO"
@@ -131,9 +171,23 @@ if [ -f "$MIRROR_LOG" ]; then
     echo "READBACK_LOG_TAIL_END"
 fi
 
-if [ "$SOURCE_READY" = 1 ] && [ "$WINDOW58_ID_OK" = 1 ] && [ "$DEST" = 1 ] && [ "$MIRROR_RUNNING" = 1 ] && [ "$CTXACT" = 1 ]; then
-    echo "PHYSICAL_ROUTE_READY=SOFTWARE_CHAIN_COMPLETE human_vc_confirmation_required=YES"
+if [ "$GRID_PRESENT" = 1 ]; then
+    if [ "$DEST" = 1 ] && [ "$GLES_PRESENT" = 1 ] && [ "$MIRROR_RUNNING" = 1 ] && [ "$CTXACT" = 1 ]; then
+        echo "SINK_TEST_GRID_ROUTE_READY=SOFTWARE_CHAIN_COMPLETE human_vc_confirmation_required=YES"
+    else
+        echo "SINK_TEST_GRID_ROUTE_READY=NO destination=$DEST gles=$GLES_PRESENT sidecar=$MIRROR_RUNNING ctx80_actual=$CTXACT"
+    fi
+    echo "PHYSICAL_ROUTE_READY=DIAGNOSTIC_ONLY mode=sink-test-grid stream111_source_not_required=1"
+elif [ "$SOURCE_READY" = 1 ] &&
+     [ "$WINDOW58_ID_OK" = 1 ] &&
+     [ "$READBACK_OK" = 1 ] &&
+     [ "$PIXEL_VALID" = 1 ] &&
+     [ "$GLES_PRESENT" = 1 ] &&
+     [ "$DEST" = 1 ] &&
+     [ "$MIRROR_RUNNING" = 1 ] &&
+     [ "$CTXACT" = 1 ]; then
+    echo "PHYSICAL_ROUTE_READY=SOFTWARE_CHAIN_COMPLETE source_post=1 window58_id=1 readback=1 pixel_valid=1 gles=1 ctx80=1 human_vc_confirmation_required=YES"
 else
-    echo "PHYSICAL_ROUTE_READY=NO source=$SOURCE_READY window58_id=$WINDOW58_ID_OK destination=$DEST sidecar=$MIRROR_RUNNING ctx80_actual=$CTXACT"
+    echo "PHYSICAL_ROUTE_READY=NO source_post=$SOURCE_READY window58_id=$WINDOW58_ID_OK readback=$READBACK_OK pixel_valid=$PIXEL_VALID gles=$GLES_PRESENT destination=$DEST sidecar=$MIRROR_RUNNING ctx80_actual=$CTXACT"
 fi
 exit "$STATUS_RC"

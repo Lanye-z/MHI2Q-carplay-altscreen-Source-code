@@ -62,6 +62,13 @@ export ALT111_MIRROR_BASE_READY_FILE="$BASE_READY"
 export ALT111_MIRROR_GATE_TOKEN_FILE="$GATE_TOKEN"
 export ALT111_MIRROR_HOOK_LOG="$HOOK_LOG"
 
+SINK_TEST_GRID_MODE=0
+MIRROR_ARGS="--verbose"
+if [ "${ALT111_SINK_TEST_GRID:-0}" = "1" ]; then
+  SINK_TEST_GRID_MODE=1
+  MIRROR_ARGS="$MIRROR_ARGS --sink-test-grid"
+fi
+
 if [ ! -x "$BIN" ]; then
   echo "ERROR: mirror display binary not found/executable: $BIN" >&2
   exit 2
@@ -91,13 +98,15 @@ rm -f "$READY" "$BASE_READY"
   echo "SCREEN_CONTEXT_POLICY=JAVA80_ONLY native_context_writer=0"
   echo "READY_POLICY=destination_first_present_only base_ready=$BASE_READY"
   echo "WINDOW58_ID_POLICY=ID_STRING_PRIMARY numeric_id=diagnostic bridge=$ID_BRIDGE"
+  echo "SINK_TEST_GRID_MODE=$SINK_TEST_GRID_MODE opt_in_env=ALT111_SINK_TEST_GRID"
+  echo "PIXEL_TRUTH_POLICY=SOURCE_PIXEL_VALID_required_before_readback_ready"
   echo "SIDECAR_PRELOAD_POLICY=ISOLATED helper_only=1 inherited_preload_ignored=${LD_PRELOAD:-<unset>}"
 } >> "$LOGFILE"
 
 # Deliberately do not inherit the CarPlay/dio_manager preload into the helper.
 # The ID bridge exists only inside this sidecar process and interposes one Screen
 # property getter; the known-good CarPlay hook remains byte-for-byte untouched.
-LD_PRELOAD="$ID_BRIDGE" "$BIN" --verbose >>"$LOGFILE" 2>&1 &
+LD_PRELOAD="$ID_BRIDGE" "$BIN" $MIRROR_ARGS >>"$LOGFILE" 2>&1 &
 PID=$!
 echo "$PID" > "$PIDFILE"
 sleep 1
@@ -108,5 +117,9 @@ if ! kill -0 "$PID" 2>/dev/null; then
   exit 3
 fi
 
-echo "MIRROR_DISPLAY=STARTED pid=$PID log=$LOGFILE volatile_mode=$VOLATILE_MODE"
-echo "WAITING_FOR=PHONE_REQUEST_111_then_Window58_CREATE_POST"
+echo "MIRROR_DISPLAY=STARTED pid=$PID log=$LOGFILE volatile_mode=$VOLATILE_MODE sink_test_grid=$SINK_TEST_GRID_MODE"
+if [ "$SINK_TEST_GRID_MODE" = 1 ]; then
+  echo "WAITING_FOR=BASEVIDEO_ACTIVE_then_Java_CTX80 test_grid_already_presented=1"
+else
+  echo "WAITING_FOR=PHONE_REQUEST_111_then_Window58_CREATE_POST_READBACK_PIXEL_VALID"
+fi

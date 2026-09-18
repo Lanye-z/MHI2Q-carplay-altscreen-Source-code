@@ -57,15 +57,17 @@ jobs:
           print('POSTACCEPT_SOURCE_CONTRACT=PASS child_preload=isolated accept_to_netsocket_pf_free=1 teardown_pf_after_delete=1')
           PY
 
-          # Freeze the display path that this fix must not touch.
+          # Keep the risky ownership path frozen while allowing source-only
+          # readback diagnostics. In particular, p1404_cockpit_native.c and the
+          # checked-in QNX Mirror ELF remain untouched by diag2.
           test "$(git rev-parse HEAD:Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c)" = f4818d9ebcea56df7c4b8a6190a7e93429e6d900
           test "$(git rev-parse HEAD:Toolbox/carplay_alt_screen/src/p1404_cockpit_native.h)" = 95da202e9d3b2399de822b4b7daa38d27a00245b
-          test "$(git rev-parse HEAD:Toolbox/carplay_alt_screen/mirror_display/src/carplay_window_source.cpp)" = c840cda2f64b48b68d53d139ae577d49ffc4cd54
-          test "$(git rev-parse HEAD:Toolbox/carplay_alt_screen/mirror_display/src/main.cpp)" = 6e079fbc79c7e6cf84e776eb12c4c4a7d9f29bb7
+          test "$(git rev-parse HEAD:Toolbox/carplay_alt_screen/mirror_display/src/carplay_window_source.cpp)" = c96484fe3cc2f7378270f3c3ebb16a2a76d90319
+          test "$(git rev-parse HEAD:Toolbox/carplay_alt_screen/mirror_display/src/main.cpp)" = 67db033b956b94fc68a7e3bc45abd9d293b0e17d
           test "$(git rev-parse HEAD:Toolbox/carplay_alt_screen/mirror_display/src/screen_id_bridge.c)" = e40228a9b9c8b3c7b80dde992b332e605d722b69
           test "$(git rev-parse HEAD:Toolbox/carplay_alt_screen/mirror_display/release/carplay-alt111-mirror-display)" = 9dbbe283de1f70685781ca98cdd49a7f428247a9
           test "$(git rev-parse HEAD:Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar)" = ea068b41c89d4a6896803f712808eba07587b065
-          echo "DISPLAY_PATH_FREEZE=PASS main59_untouched=1 window58_readback_untouched=1 java80_jar_untouched=1"
+          echo "DISPLAY_PATH_SCOPE=PASS main59_untouched=1 screen_manage_window_default_unchanged=1 window58_pixel_diagnostics=diag2 mirror_binary_rebuild_pending=1 java80_jar_untouched=1"
 
       - name: Build universal QNX hook
         run: |

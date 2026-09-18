@@ -55,6 +55,12 @@ CarPlayWindowSource::CarPlayWindowSource(int window_id, bool verbose)
       target_posted_(false),
       event_count_(0),
       read_failures_(0),
+      pixel_valid_(false),
+      pixel_changed_(false),
+      pixel_nonblack_permille_(0),
+      pixel_hash_(0),
+      previous_pixel_hash_(0),
+      pixel_probe_count_(0),
       create_context_(0),
       destroy_context_(0),
       create_event_(0),
@@ -290,6 +296,13 @@ bool CarPlayWindowSource::create_capture_buffer() {
      * interprets the CPU-visible bytes as BGRA8888. Preserve that byte order
      * contract so the existing GLES renderer performs the same R/B swap.
      */
+    pixel_valid_ = false;
+    pixel_changed_ = false;
+    pixel_nonblack_permille_ = 0;
+    pixel_hash_ = 0;
+    previous_pixel_hash_ = 0;
+    pixel_probe_count_ = 0;
+
     fprintf(stderr,
             "source: capture buffer ready id=%d size=%dx%d stride=%d "
             "screen_format=8 cpu_format=BGRA8888 event_driven=1\n",
@@ -506,7 +519,7 @@ bool CarPlayWindowSource::pump_event(unsigned long long timeout_ns) {
         if (!target_posted_) {
             fprintf(stderr,
                     "source: target FIRST_POST id=%d event_seq=%u "
-                    "content_valid=1\n",
+                    "post_observed=1 pixel_valid=UNPROVEN\n",
                     target_id_,
                     event_count_);
         }
@@ -518,6 +531,99 @@ bool CarPlayWindowSource::pump_event(unsigned long long timeout_ns) {
     }
 
     return true;
+}
+
+
+void CarPlayWindowSource::probe_pixels() {
+    bool old_valid = pixel_valid_;
+    unsigned long hash = 2166136261UL;
+    unsigned samples = 0;
+    unsigned nonblack = 0;
+    unsigned min_rgb = 255;
+    unsigned max_rgb = 0;
+    int step_x;
+    int step_y;
+
+    if (!pixels_ || width_ <= 0 || height_ <= 0 || stride_ < width_ * 4) {
+        pixel_valid_ = false;
+        pixel_changed_ = false;
+        pixel_nonblack_permille_ = 0;
+        return;
+    }
+
+    /*
+     * Sample sparsely rather than scanning the full 1440x542 frame every
+     * readback. This probe is diagnostic only and must not become a new
+     * 30-fps CPU bottleneck on the MHI2Q.
+     */
+    step_x = width_ >= 128 ? 16 : 1;
+    step_y = height_ >= 128 ? 16 : 1;
+
+    for (int y = 0; y < height_; y += step_y) {
+        const unsigned char *row =
+            pixels_ + (unsigned long)y * (unsigned long)stride_;
+        for (int x = 0; x < width_; x += step_x) {
+            const unsigned char *p = row + (unsigned long)x * 4UL;
+            const unsigned b = p[0];
+            const unsigned g = p[1];
+            const unsigned r = p[2];
+            unsigned local_max = b;
+            if (g > local_max) local_max = g;
+            if (r > local_max) local_max = r;
+            if (b < min_rgb) min_rgb = b;
+            if (g < min_rgb) min_rgb = g;
+            if (r < min_rgb) min_rgb = r;
+            if (local_max > max_rgb) max_rgb = local_max;
+            if (b > 4u || g > 4u || r > 4u) ++nonblack;
+
+            hash ^= (unsigned long)b; hash *= 16777619UL;
+            hash ^= (unsigned long)g; hash *= 16777619UL;
+            hash ^= (unsigned long)r; hash *= 16777619UL;
+            ++samples;
+        }
+    }
+
+    pixel_changed_ =
+        pixel_probe_count_ > 0u && hash != previous_pixel_hash_;
+    previous_pixel_hash_ = hash;
+    pixel_hash_ = hash;
+    pixel_nonblack_permille_ =
+        samples ? (unsigned)(((unsigned long)nonblack * 1000UL) /
+                             (unsigned long)samples) : 0u;
+    pixel_valid_ =
+        samples >= 16u && max_rgb > 4u && pixel_nonblack_permille_ >= 5u;
+    ++pixel_probe_count_;
+
+    if (pixel_probe_count_ == 1u ||
+        old_valid != pixel_valid_ ||
+        (verbose_ && (pixel_probe_count_ <= 8u ||
+                      (pixel_probe_count_ % 30u) == 0u))) {
+        fprintf(stderr,
+                "source: SOURCE_PIXEL_PROBE frame=%lu hash=0x%08lx "
+                "min_rgb=%u max_rgb=%u nonblack_permille=%u "
+                "changed=%s valid=%s samples=%u step=%dx%d\n",
+                pixel_probe_count_,
+                pixel_hash_,
+                min_rgb,
+                max_rgb,
+                pixel_nonblack_permille_,
+                pixel_changed_ ? "YES" : "NO",
+                pixel_valid_ ? "YES" : "NO",
+                samples,
+                step_x,
+                step_y);
+    }
+
+    if (pixel_probe_count_ == 1u || old_valid != pixel_valid_) {
+        fprintf(stderr,
+                "source: SOURCE_PIXEL_VALID=%s frame=%lu hash=0x%08lx "
+                "nonblack_permille=%u changed=%s threshold_permille=5\n",
+                pixel_valid_ ? "YES" : "NO",
+                pixel_probe_count_,
+                pixel_hash_,
+                pixel_nonblack_permille_,
+                pixel_changed_ ? "YES" : "NO");
+    }
 }
 
 bool CarPlayWindowSource::read_frame(VideoFrame *frame) {
@@ -557,6 +663,16 @@ bool CarPlayWindowSource::read_frame(VideoFrame *frame) {
         return false;
     }
 
+    const unsigned recovered_failures = read_failures_;
+    if (pixel_probe_count_ == 0u || recovered_failures) {
+        fprintf(stderr,
+                "source: SOURCE_READBACK_RC=OK id=%d handle=%p "
+                "recovered_failures=%u\n",
+                target_id_,
+                window_,
+                recovered_failures);
+    }
+
     if (read_failures_) {
         fprintf(stderr,
                 "source: screen_read_window recovered id=%d "
@@ -565,6 +681,8 @@ bool CarPlayWindowSource::read_frame(VideoFrame *frame) {
                 read_failures_);
         read_failures_ = 0;
     }
+
+    probe_pixels();
 
     frame->data = pixels_;
     frame->width = width_;
@@ -616,4 +734,10 @@ void CarPlayWindowSource::shutdown() {
     target_posted_ = false;
     event_count_ = 0;
     read_failures_ = 0;
+    pixel_valid_ = false;
+    pixel_changed_ = false;
+    pixel_nonblack_permille_ = 0;
+    pixel_hash_ = 0;
+    previous_pixel_hash_ = 0;
+    pixel_probe_count_ = 0;
 }

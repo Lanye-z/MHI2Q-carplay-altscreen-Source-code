@@ -10,6 +10,7 @@ on:
       - 'Toolbox/carplay_alt_screen/hmi/stubs/**'
       - 'Toolbox/carplay_alt_screen/mirror_display/src/carplay_window_source.cpp'
       - 'Toolbox/carplay_alt_screen/mirror_display/src/carplay_window_source.h'
+      - 'Toolbox/carplay_alt_screen/mirror_display/src/main.cpp'
       - 'Toolbox/carplay_alt_screen/mirror_display/src/screen_id_bridge.c'
       - 'Toolbox/carplay_alt_screen/mirror_display/build_screen_id_bridge.sh'
   workflow_dispatch:
@@ -145,7 +146,7 @@ jobs:
           jar_cksum=$CKSUM
           jar_sha256=$SHA
           universal_runtime_sha256=$HOOK_SHA
-          universal_runtime_policy=POSTACCEPT_CHILD_PRELOAD_ISOLATED
+          universal_runtime_policy=PRIVATE111_POSTACCEPT_NONBLOCKING_PF_CHILD_PRELOAD_ISOLATED
           EOF
 
           python3 <<'PY'
@@ -180,18 +181,20 @@ jobs:
           readme.write_text(text)
 
           relsum=root/'Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS'
-          lines=relsum.read_text().splitlines()
-          helper='libscreen_id_bridge.so'
-          h=hashlib.sha256((relsum.parent/helper).read_bytes()).hexdigest()
-          found=False; out=[]
-          for line in lines:
+          table={}
+          for line in relsum.read_text().splitlines():
               parts=line.split(None,1)
-              if len(parts)==2 and parts[1].strip()==helper:
-                  out.append(h+'  '+helper); found=True
-              else:
-                  out.append(line)
-          if not found: out.append(h+'  '+helper)
-          relsum.write_text('\n'.join(out)+'\n')
+              if len(parts)==2:
+                  table[parts[1].strip()]=parts[0].lower()
+          for name in list(table):
+              p=relsum.parent/name
+              if p.is_file():
+                  table[name]=hashlib.sha256(p.read_bytes()).hexdigest()
+          for name in ['libscreen_id_bridge.so','start_vehicle.sh','stop_vehicle.sh','BUILD_INFO.txt','carplay-alt111-mirror-display']:
+              p=relsum.parent/name
+              if p.is_file():
+                  table[name]=hashlib.sha256(p.read_bytes()).hexdigest()
+          relsum.write_text(''.join('%s  %s\n' % (table[k],k) for k in sorted(table)))
 
           package=root/'PACKAGE_SOURCE_MAP.json'
           data=json.loads(package.read_text())
@@ -247,6 +250,13 @@ jobs:
         run: |
           set -euo pipefail
           sh VERIFY-CONTEXT80-READBACK-V1.sh
+          if strings Toolbox/carplay_alt_screen/mirror_display/release/carplay-alt111-mirror-display | grep -Fq 'SOURCE_PIXEL_VALID=%s' &&
+             strings Toolbox/carplay_alt_screen/mirror_display/release/carplay-alt111-mirror-display | grep -Fq 'SINK_TEST_GRID_PRESENT=YES' &&
+             strings Toolbox/carplay_alt_screen/mirror_display/release/carplay-alt111-mirror-display | grep -Fq 'GLES_PRESENT=YES'; then
+            echo 'MIRROR_QNX_DIAG2_BINARY=CURRENT'
+          else
+            echo 'MIRROR_QNX_DIAG2_BINARY=STALE rebuild_required=YES'
+          fi
 
       - name: Promote finalized artifacts to experiment branch
         if: github.ref == 'refs/heads/test/carplay-basevideo3-context80-readback-v1'

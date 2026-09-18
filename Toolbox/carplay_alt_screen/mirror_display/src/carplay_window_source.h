@@ -16,12 +16,18 @@ public:
     int width() const { return width_; }
     int height() const { return height_; }
     int stride() const { return stride_; }
+    bool pixel_valid() const { return pixel_valid_; }
+    bool pixel_changed() const { return pixel_changed_; }
+    unsigned pixel_nonblack_permille() const { return pixel_nonblack_permille_; }
+    unsigned long pixel_hash() const { return pixel_hash_; }
+    unsigned long pixel_probe_count() const { return pixel_probe_count_; }
 
 private:
     bool open_api();
     bool pump_event(unsigned long long timeout_ns);
     bool create_capture_buffer();
     void release_capture_buffer();
+    void probe_pixels();
     void release_target_window(const char *reason);
     void release_event_window(void *window, const char *reason);
     unsigned long long now_us() const;
@@ -41,6 +47,12 @@ private:
     bool target_posted_;
     unsigned event_count_;
     unsigned read_failures_;
+    bool pixel_valid_;
+    bool pixel_changed_;
+    unsigned pixel_nonblack_permille_;
+    unsigned long pixel_hash_;
+    unsigned long previous_pixel_hash_;
+    unsigned long pixel_probe_count_;
 
     typedef int (*create_context_fn)(void **, int);
     typedef int (*destroy_context_fn)(void *);

@@ -85,3 +85,50 @@ START_CALL -> START_RETURN -> PROCESSFRAMES_BEGIN`.
 The accepted 65500 socket should be actively consumed rather than accumulating a
 fixed Recv-Q. Only after that sequence is proven should Window58/readback/Context80
 be evaluated.
+
+
+## 2026-09-18 display-truth diagnostics
+
+The next source revision deliberately leaves the Private111 transport, Main110 /
+Window59, stock OMX, Java Context80 policy and the default
+`screen_manage_window` behavior unchanged. It adds observability before the
+DisplayManager ownership experiment:
+
+```text
+NATIVE_111_FIRST_REAL_FRAME result=POSTED
+  -> SOURCE_READBACK_RC=OK
+  -> SOURCE_PIXEL_PROBE hash/min/max/nonblack/changed
+  -> SOURCE_PIXEL_VALID=YES
+  -> GLES_PRESENT=YES
+  -> CTX80_OBSERVED actual=80
+```
+
+`SOURCE_PIXEL_VALID` samples the BGRA frame sparsely (16-pixel steps on the
+normal 1440x542 source), ignores alpha for black detection, and requires at
+least 0.5% sampled RGB pixels above the black threshold. Invalid frames are not
+allowed to create the BaseVideo ready marker; after activation, an invalid
+readback freezes the last valid frame instead of replacing it with black.
+
+An explicit opt-in sink test is also available:
+
+```sh
+ALT111_SINK_TEST_GRID=1 ./start_vehicle.sh
+```
+
+This mode does not create the Window58 Screen observer and does not consume
+Stream111 pixels. It creates displayable3, presents the existing diagnostic
+grid, publishes BaseVideo ready, and lets the unchanged Java controller enter
+Context80 only when the normal CarPlay base-active marker is present. Therefore
+a visible grid proves the displayable3 -> GLES -> Context80 -> VC half
+independently from Window58/readback.
+
+The checked-in QNX ARMv7 Mirror ELF must contain
+`SOURCE_PIXEL_VALID`, `SINK_TEST_GRID_PRESENT` and `GLES_PRESENT` before
+this source revision is treated as a vehicle release. Until that ELF is rebuilt
+with `BUILD-MIRROR-QNX.sh` and promoted with synchronized hashes, the branch is
+source-complete but intentionally **not** ZIP-ready for the new diagnostics.
+
+The DisplayManager A/B experiment (producer-only Window58 with
+`screen_manage_window` skipped) remains deferred until the pixel-truth result
+is known. This prevents another display-ownership change from being mixed with
+the current transport fix.

@@ -7,6 +7,8 @@ BRIDGE="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/libscreen_id_bri
 MIRROR_START="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/start_vehicle.sh"
 SOURCE="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/carplay_window_source.cpp"
 SOURCE_H="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/carplay_window_source.h"
+MAIN="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/main.cpp"
+MIRROR_BUILD="$ROOT/Toolbox/carplay_alt_screen/mirror_display/build_qnx.sh"
 JAR="$ROOT/Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar"
 START="$ROOT/Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh"
 STATUS="$ROOT/Toolbox/scripts/status_mmi_cockpit_carplay_test.sh"
@@ -95,6 +97,22 @@ grep -Fq 'match_basis' "$SOURCE" ||
 if grep -Fq 'NUMERIC_FALLBACK' "$SOURCE"; then
   fail "vendored Window58 source still permits numeric-ID target fallback"
 fi
+grep -Fq 'SOURCE_READBACK_RC=OK' "$SOURCE" ||
+  fail "source lacks explicit readback-success marker"
+grep -Fq 'SOURCE_PIXEL_VALID=%s' "$SOURCE" ||
+  fail "source lacks sampled pixel-validity proof"
+grep -Fq 'pixel_nonblack_permille_' "$SOURCE_H" ||
+  fail "source header lacks pixel-truth state"
+grep -Fq 'SOURCE_PIXEL_GATE=WAITING' "$MAIN" ||
+  fail "main does not hold ctx80 readiness until pixels are nonblack"
+grep -Fq 'SINK_TEST_GRID_PRESENT=YES' "$MAIN" ||
+  fail "main lacks independent displayable3 test-grid mode"
+grep -Fq 'GLES_PRESENT=YES' "$MAIN" ||
+  fail "main lacks explicit GLES present proof"
+grep -Fq 'SOURCE_PIXEL_VALID=%s' "$MIRROR_BUILD" ||
+  fail "QNX build gate does not require pixel diagnostics"
+grep -Fq 'ALT111_SINK_TEST_GRID' "$MIRROR_START" ||
+  fail "launcher lacks opt-in sink-test-grid mode"
 
 [ -s "$JAR" ] || fail "Java80 HMI JAR missing"
 if command -v unzip >/dev/null 2>&1; then
@@ -126,6 +144,14 @@ grep -Fq 'JAVA_CTX80_ACTUAL=80 source=IDisplayManager.getCurrentContextID' "$STA
   fail "STATUS does not require actual ctx80 readback"
 grep -Fq 'WINDOW58_IDENTITY=ID_STRING_MATCH' "$STATUS" ||
   fail "STATUS does not expose Window58 string identity"
+grep -Fq 'SOURCE_READBACK_RC=OK' "$STATUS" ||
+  fail "STATUS does not split readback success"
+grep -Fq 'SOURCE_PIXEL_VALID=YES' "$STATUS" ||
+  fail "STATUS does not require pixel validity"
+grep -Fq 'GLES_PRESENT=YES' "$STATUS" ||
+  fail "STATUS does not split GLES present"
+grep -Fq 'SINK_TEST_GRID_ROUTE_READY=SOFTWARE_CHAIN_COMPLETE' "$STATUS" ||
+  fail "STATUS lacks independent sink-test-grid route gate"
 grep -q 'PHYSICAL_ROUTE_READY=SOFTWARE_CHAIN_COMPLETE' "$STATUS" ||
   fail "split route completion gate missing"
 grep -q 'rm -f "$STATE_DIR/FULL_CHAIN_MODE" "$STATE_DIR/NATIVE_DISPLAY_MODE"' "$CTRL" ||
@@ -133,11 +159,26 @@ grep -q 'rm -f "$STATE_DIR/FULL_CHAIN_MODE" "$STATE_DIR/NATIVE_DISPLAY_MODE"' "$
 grep -q 'libscreen_id_bridge.so' "$ROUTER" ||
   fail "router does not stage the ID bridge"
 
-echo "CONTEXT80_READBACK_VERIFY=PASS"
+MIRROR_RUNTIME_DIAG=0
+if binary_strings "$MIRROR" | grep -Fq 'SOURCE_PIXEL_VALID=%s' &&
+   binary_strings "$MIRROR" | grep -Fq 'SINK_TEST_GRID_PRESENT=YES' &&
+   binary_strings "$MIRROR" | grep -Fq 'GLES_PRESENT=YES'; then
+  MIRROR_RUNTIME_DIAG=1
+  echo "MIRROR_RUNTIME_DIAGNOSTICS=CURRENT"
+else
+  echo "MIRROR_RUNTIME_DIAGNOSTICS=STALE rebuild_required=YES qnx_build=BUILD-MIRROR-QNX.sh"
+fi
+
+echo "CONTEXT80_READBACK_VERIFY=PASS_SOURCE_CONTRACT"
 echo "carplay_runtime_hook=PRIVATE111_POSTACCEPT_NONBLOCKING_PF_CHILD_PRELOAD_ISOLATED sha256=$(sha256_file "$HOOK")"
-echo "source=Window58 identity=SCREEN_PROPERTY_ID_STRING_20_PRIMARY"
+echo "source=Window58 identity=SCREEN_PROPERTY_ID_STRING_20_PRIMARY pixel_truth=REQUIRED"
 echo "capture=screen_read_window"
-echo "sink=displayable3_gles"
+echo "sink=displayable3_gles independent_test_grid=OPT_IN"
 echo "context_owner=JAVA80 actual_readback=REQUIRED"
 echo "native_context_runtime_gate=MARKERS_DISABLED"
 echo "native_context_source_gate=HARD_DISABLED_SOURCE_ONLY"
+if [ "$MIRROR_RUNTIME_DIAG" = 1 ]; then
+  echo "vehicle_release_ready=STATIC_GATES_PASS runtime_diagnostics=CURRENT"
+else
+  echo "vehicle_release_ready=NO reason=mirror_qnx_binary_rebuild_required"
+fi

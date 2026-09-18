@@ -31,12 +31,16 @@ check_marker() {
 }
 
 for marker in \
-  'window58-wm-event-v4' \
+  'context80-readback-v1-diag2' \
   'GATE PASS trigger=PHONE_REQUEST_111' \
   'WINDOW_MANAGER_CONTEXT event observer ready' \
   'target CREATE' \
   'target FIRST_POST' \
-  'screen_read_window'
+  'screen_read_window' \
+  'SOURCE_READBACK_RC=OK' \
+  'SOURCE_PIXEL_VALID=%s' \
+  'SINK_TEST_GRID_PRESENT=YES' \
+  'GLES_PRESENT=YES'
 do
   check_marker "$marker" || {
     echo "ERROR: built sidecar is missing V4 marker: $marker" >&2
@@ -44,5 +48,5 @@ do
   }
 done
 
-echo "MIRROR_BUILD_ID=window58-wm-event-v4"
+echo "MIRROR_BUILD_ID=context80-readback-v1-diag2"
 echo "MIRROR_BUILD=PASS output=$ROOT/$BIN"
