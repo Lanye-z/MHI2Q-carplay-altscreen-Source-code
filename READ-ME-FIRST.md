@@ -51,3 +51,13 @@ Screen character identity `"58"`. The ID compatibility helper is loaded only
 inside the readback sidecar; it is never added to the CarPlay/dio_manager preload.
 
 The last line still requires visual confirmation on the VC.
+
+## Finalized HMI artifact
+
+The vehicle JAR is rebuilt only at ClusterStateController.class; all other entries stay inherited from the pinned BaseVideo3 JAR.
+
+size    = 143072
+cksum   = 3906005649
+SHA256  = 14829f1c82cdc45a5e4764cf061de2d2fe56e9e26a49dabe75b85b90c9afbeb8
+ctx80   = {98,101,102,3}
+proof   = CTX80_OBSERVED actual=80

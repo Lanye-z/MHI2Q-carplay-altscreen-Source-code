@@ -1,0 +1,12 @@
+mode=CONTEXT80_READBACK_V1
+controller=ClusterStateController
+class_target=Java_1.2_major_46
+context_owner=JAVA_ONLY
+ctx80=98,101,102,3
+context_readback=IDisplayManager.getCurrentContextID(1)
+ctx80_success_marker=CTX80_OBSERVED_actual_80
+jar_size=143072
+jar_cksum=3906005649
+jar_sha256=14829f1c82cdc45a5e4764cf061de2d2fe56e9e26a49dabe75b85b90c9afbeb8
+universal_runtime_sha256=07a96cad6121cfc9fae259d47e6c95142b5e09b7ef3e8cd7a180de009579cb39
+universal_runtime_policy=PINNED_KNOWN_GOOD_NOT_REBUILT

@@ -1,0 +1,82 @@
+old_api:
+Compiled from "ClusterStateController.java"
+public final class com.luka.carplay.cluster.ClusterStateController {
+  public static final int TERMINAL_CLUSTER;
+    descriptor: I
+  public static final int CTX_STOCK;
+    descriptor: I
+  public static final int CTX_BOUNCE;
+    descriptor: I
+  public static final int CTX_COMPOSITE;
+    descriptor: I
+  public static final int VIEWAREA_FULLSCREEN;
+    descriptor: I
+  public static final int VIEWAREA_SMALLSCREEN;
+    descriptor: I
+  public static void start(de.audi.atip.base.IFrameworkAccess);
+    descriptor: (Lde/audi/atip/base/IFrameworkAccess;)V
+
+  public static void setCarPlaySessionActive(boolean);
+    descriptor: (Z)V
+
+  public static void setRgiPresentationActive(boolean);
+    descriptor: (Z)V
+
+  public static boolean isRgiPresentationActive();
+    descriptor: ()Z
+
+  public static boolean isClusterOwned();
+    descriptor: ()Z
+
+  public static boolean isContextWriterThread();
+    descriptor: ()Z
+
+  public static boolean isSmallScreenViewArea();
+    descriptor: ()Z
+
+  public static void setViewAreaMode(int);
+    descriptor: (I)V
+}
+
+new_api:
+Compiled from "ClusterStateController.java"
+public final class com.luka.carplay.cluster.ClusterStateController {
+  public static final int TERMINAL_CLUSTER;
+    descriptor: I
+  public static final int CTX_STOCK;
+    descriptor: I
+  public static final int CTX_BOUNCE;
+    descriptor: I
+  public static final int CTX_COMPOSITE;
+    descriptor: I
+  public static final int VIEWAREA_FULLSCREEN;
+    descriptor: I
+  public static final int VIEWAREA_SMALLSCREEN;
+    descriptor: I
+  public static void start(de.audi.atip.base.IFrameworkAccess);
+    descriptor: (Lde/audi/atip/base/IFrameworkAccess;)V
+
+  public static void setCarPlaySessionActive(boolean);
+    descriptor: (Z)V
+
+  public static void setRgiPresentationActive(boolean);
+    descriptor: (Z)V
+
+  public static boolean isRgiPresentationActive();
+    descriptor: ()Z
+
+  public static boolean isClusterOwned();
+    descriptor: ()Z
+
+  public static boolean isContextWriterThread();
+    descriptor: ()Z
+
+  public static boolean isCompositeModeRequested();
+    descriptor: ()Z
+
+  public static boolean isSmallScreenViewArea();
+    descriptor: ()Z
+
+  public static void setViewAreaMode(int);
+    descriptor: (I)V
+}
