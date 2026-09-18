@@ -90,3 +90,15 @@ Compiling does **not** automatically overwrite the checked-in vehicle runtime un
 ## Source update policy
 
 There is no `.gitmodules` dependency anymore. When the authoritative development source changes, copy the reviewed Mirror build files into this directory and update `VENDORED_SOURCE.txt` plus this provenance document to the new upstream commit. This keeps GitHub ZIP downloads reproducible and avoids an invisible submodule pointer.
+
+
+## private111 direct-display V1
+
+- Branch: `carplay-private111-direct-display-v1`
+- Baseline: `test/carplay-basevideo3-context80-readback-v1` @ `979b9cd573d9ebe4201979ebb286ed54c468d547`
+- Compressed source: private `ScreenStreamProcessData` -> `/carplay111_h264`
+- V1 decoded fallback: private stock OMX buffer tap -> `/carplay111_decoded`
+- Display sink reused from MMI Mirror: `ClusterVideoDisplay` + `gl_renderer` + `mhi2q_backend`
+- Destination: displayable3 under Java-owned Context80 `{98,101,102,3}`
+- Window58 sidecar readback: disabled
+- Sidecar QNX binary: rebuild/promotion required before vehicle ZIP
