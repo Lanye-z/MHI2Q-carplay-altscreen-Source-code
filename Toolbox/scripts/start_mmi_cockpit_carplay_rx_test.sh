@@ -1,7 +1,8 @@
 #!/bin/sh
-# Native-direct experimental START wrapper.
-# The private111 stream stays inside stock ScreenStream/OMX/CScreenRender.
-# Mirror readback/GLES/displayable3 is deliberately disabled on this branch.
+# BaseVideo3 native visible-probe START wrapper.
+# private111 stays inside stock ScreenStream/OMX/CScreenRender and posts directly
+# to a managed ID_STRING="3" window. Java/HMI remains the sole ctx80 writer.
+# Mirror readback/GLES and native dmdt routing are deliberately disabled.
 
 BASE="$0"
 RESOLVED=$(command -v -- "$BASE" 2>/dev/null)
@@ -85,11 +86,16 @@ if [ -n "$STARTUP" ] && grep -q '^# BEGIN ALT111 MIRROR AUTOSTART$' "$STARTUP" 2
     mount_system_ro >/dev/null 2>&1 || true
 fi
 
+rm -f "$DEVICE_ROOT/tmp/mmi-mirror-basevideo.ready" 2>/dev/null || true
+
 ALTSCREEN_INTEGRATED_START=1 /bin/sh "$CONTROLLER" start
 RC=$?
 [ "$RC" -eq 0 ] || exit "$RC"
 
-echo "MIRROR_POLICY=DISABLED native_direct=1 readback=0 gles=0 displayable3=0"
-echo "DISPLAY_PATH=NATIVE_DIRECT source=private111_stock_omx_cscreenrender displayable=58 context=76 restore=74"
-echo "START=PASS integrated=AltScreen+NativeDirect reboot_required=YES"
+echo "MIRROR_POLICY=DISABLED readback=0 bgra=0 gles=0"
+echo "DISPLAY_PATH=BASEVIDEO3_NATIVE source=private111_stock_omx_cscreenrender displayable=3"
+echo "WINDOW_POLICY=STOCK_CSCREENRENDER manager=screen_manage_window force_visible=1"
+echo "CONTEXT_POLICY=JAVA_ONLY context=80 native_dmdt=0"
+echo "READY_MARKER=/tmp/mmi-mirror-basevideo.ready first_successful_stock_post_only=1"
+echo "START=PASS integrated=AltScreen+BaseVideo3VisibleProbe reboot_required=YES"
 exit 0
