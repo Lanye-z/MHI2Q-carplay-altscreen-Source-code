@@ -503,7 +503,7 @@ cmd_install(){
 cmd_start(){
     lock_acquire
     if [ "$TESTING" != 1 ] && [ "${ALTSCREEN_INTEGRATED_START:-0}" != 1 ]; then
-        say "FAIL: direct controller START is disabled; use start_mmi_cockpit_carplay_rx_test.sh so type111 and the instrument Mirror start as one transaction"
+        say "FAIL: direct controller START is disabled; use start_mmi_cockpit_carplay_rx_test.sh so type111 and standalone BaseVideo3/Java80 start as one transaction"
         lock_release
         return 1
     fi
@@ -530,7 +530,7 @@ cmd_start(){
     echo "$run_id" > "$PROBE_MARKER" || { finish_mounts; lock_release; return 1; }
     finish_mounts || { lock_release; return 1; }
     say "AUTH_PRIVATE111_CORE=UNCHANGED resolver=dynamic"
-    say "DISPLAY_PATH=NATIVE_DIRECT source=private111_stock_omx_cscreenrender displayable=58 context=76 restore=74 mirror_sidecar=DISABLED"
+    say "DISPLAY_PATH=BASEVIDEO3_NATIVE source=private111_stock_omx_cscreenrender displayable=3 context_owner=JAVA80 mirror_sidecar=DISABLED"
     lock_release || return 1
     say "START=PASS profile=UNIVERSAL run_id=$run_id reboot_required=YES"
 }
@@ -581,7 +581,11 @@ cmd_collect(){
         "$(p /tmp/CinemoDioManager.log)" \
         "$(p /tmp/MMI-Cockpit-Carplay/boot_entry.log)" \
         "$(p /tmp/MMI-Cockpit-Carplay.boot_entry.log)" \
-        "$(p /tmp/MMI-Cockpit-Carplay/mirror/autostart.log)"; do
+        "$(p /tmp/MMI-Cockpit-Carplay/mirror/autostart.log)" \
+        "$(p /tmp/mmi-mirror-controller.log)" \
+        "$(p /tmp/mmi-mirror-controller.started)" \
+        "$(p /tmp/mmi-mirror-active)" \
+        "$(p /tmp/mmi-mirror-basevideo.ready)"; do
         if [ -f "$candidate" ]; then
             echo "LOG_BEGIN $candidate"; tail -c 1048576 "$candidate" 2>/dev/null || true; echo "LOG_END $candidate"
         fi
