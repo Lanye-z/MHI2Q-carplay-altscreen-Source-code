@@ -1,0 +1,157 @@
+name: Context80 Post-Accept Runtime Build
+
+on:
+  push:
+    branches:
+      - test/carplay-basevideo3-context80-readback-v1
+    paths:
+      - '.github/workflows/context80-postaccept-runtime-build.yml'
+      - 'Toolbox/carplay_alt_screen/src/**'
+      - 'Toolbox/carplay_alt_screen/tests/validate_qnx_load_layout.py'
+      - 'Toolbox/carplay_alt_screen/build_source_snapshot.sh'
+      - 'VERIFY-CONTEXT80-READBACK-V1.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-postaccept-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install ARM build inspection tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang lld binutils-arm-linux-gnueabihf python3-pyelftools
+
+      - name: Prove narrow patch scope before build
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+          hook = Path('Toolbox/carplay_alt_screen/src/altscreen_hook.c').read_text()
+          backend = Path('Toolbox/carplay_alt_screen/src/p1404_private111_backend.c').read_text()
+
+          assert 'altscreen_strip_self_from_child_preload();' in hook
+          assert 'identity_override=DISABLED' in hook
+          assert 'if (!process_allowed || !p1404_probe_stack())' in hook
+          assert '(!process_allowed && !force_start)' not in hook
+
+          # Keep the measured stock-equivalent post-accept firewall ordering.
+          a = backend.index('PHASE=STREAM_111_ACCEPT_RETURN')
+          f = backend.index('(void)pair_close_firewall(p, "listener_closed");', a)
+          n = backend.index('be.net_socket_create_native(&net_socket, native_fd)', f)
+          assert a < f < n
+          print('POSTACCEPT_SOURCE_CONTRACT=PASS child_preload=isolated firewall_order=unchanged')
+          PY
+
+          # Freeze the display path that this fix must not touch.
+          test "$(git rev-parse HEAD:Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c)" = f4818d9ebcea56df7c4b8a6190a7e93429e6d900
+          test "$(git rev-parse HEAD:Toolbox/carplay_alt_screen/src/p1404_cockpit_native.h)" = 95da202e9d3b2399de822b4b7daa38d27a00245b
+          test "$(git rev-parse HEAD:Toolbox/carplay_alt_screen/mirror_display/src/carplay_window_source.cpp)" = c840cda2f64b48b68d53d139ae577d49ffc4cd54
+          test "$(git rev-parse HEAD:Toolbox/carplay_alt_screen/mirror_display/src/main.cpp)" = 6e079fbc79c7e6cf84e776eb12c4c4a7d9f29bb7
+          test "$(git rev-parse HEAD:Toolbox/carplay_alt_screen/mirror_display/src/screen_id_bridge.c)" = e40228a9b9c8b3c7b80dde992b332e605d722b69
+          test "$(git rev-parse HEAD:Toolbox/carplay_alt_screen/mirror_display/release/carplay-alt111-mirror-display)" = 9dbbe283de1f70685781ca98cdd49a7f428247a9
+          test "$(git rev-parse HEAD:Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar)" = ea068b41c89d4a6896803f712808eba07587b065
+          echo "DISPLAY_PATH_FREEZE=PASS main59_untouched=1 window58_readback_untouched=1 java80_jar_untouched=1"
+
+      - name: Build universal QNX hook
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/context80-postaccept-runtime"
+          sh Toolbox/carplay_alt_screen/build_source_snapshot.sh universal "$out"
+          test -s "$out/libcarplay_altscreen.so"
+          strings "$out/libcarplay_altscreen.so" | grep -Fq 'identity_override=DISABLED'
+          strings "$out/libcarplay_altscreen.so" | grep -Fq '/mnt/app/root/carplay-altscreen/lib/libcarplay_altscreen.so'
+          strings "$out/libcarplay_altscreen.so" | grep -Fq 'PHASE=STREAM_111_ACCEPT_RETURN'
+          strings "$out/libcarplay_altscreen.so" | grep -Fq 'PHASE=STREAM_111_NETSOCKET_CREATE_RETURN'
+          strings "$out/libcarplay_altscreen.so" | grep -Fq 'displayable=58'
+          arm-linux-gnueabihf-readelf -d "$out/libcarplay_altscreen.so" | grep -q 'libc.so.3'
+          arm-linux-gnueabihf-readelf -d "$out/libcarplay_altscreen.so" | grep -q 'libm.so.2'
+          echo "POSTACCEPT_RUNTIME_BUILD=PASS"
+
+      - name: Promote runtime and refresh package identity
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/context80-postaccept-runtime"
+          dst="Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so"
+          cp "$out/libcarplay_altscreen.so" "$dst"
+          HOOK_SHA="$(sha256sum "$dst" | awk '{print tolower($1)}')"
+          export HOOK_SHA
+
+          python3 <<'PY'
+          import hashlib, json, os, pathlib, re
+          root = pathlib.Path('.')
+          hook_rel = 'Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so'
+          hook_sha = os.environ['HOOK_SHA']
+
+          info = root/'Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt'
+          text = info.read_text()
+          text = re.sub(r'^universal_runtime_sha256=.*$', 'universal_runtime_sha256='+hook_sha, text, flags=re.M)
+          text = re.sub(r'^universal_runtime_policy=.*$', 'universal_runtime_policy=POSTACCEPT_CHILD_PRELOAD_ISOLATED', text, flags=re.M)
+          info.write_text(text)
+
+          p = root/'PACKAGE_SOURCE_MAP.json'
+          data = json.loads(p.read_text())
+          for rel in list(data):
+              path = root/rel
+              if path.is_file():
+                  data[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+          for rel in [hook_rel, 'Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt',
+                      'VERIFY-CONTEXT80-READBACK-V1.sh', 'CONTEXT80-READBACK-V1.md']:
+              path = root/rel
+              if path.is_file():
+                  data[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+          p.write_text(json.dumps(data, indent=2, ensure_ascii=False)+'\n')
+
+          sums = root/'SHA256SUMS.txt'
+          table = {}
+          for line in sums.read_text().splitlines():
+              parts = line.split(None, 1)
+              if len(parts) == 2:
+                  table[parts[1].strip()] = parts[0].lower()
+          for rel in list(table):
+              path = root/rel
+              if path.is_file():
+                  table[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+          for rel in [hook_rel, 'Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt',
+                      'VERIFY-CONTEXT80-READBACK-V1.sh', 'CONTEXT80-READBACK-V1.md']:
+              path = root/rel
+              if path.is_file():
+                  table[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+          sums.write_text(''.join('%s %s\n' % (table[k], k) for k in sorted(table)))
+          PY
+
+          sh VERIFY-CONTEXT80-READBACK-V1.sh
+          echo "PROMOTED_HOOK_SHA256=$HOOK_SHA"
+
+      - name: Commit promoted runtime
+        if: github.ref == 'refs/heads/test/carplay-basevideo3-context80-readback-v1'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add             Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so             Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt             PACKAGE_SOURCE_MAP.json SHA256SUMS.txt
+          if ! git diff --cached --quiet; then
+            git commit -m "build(postaccept): promote child-preload-isolated runtime [skip ci]"
+            git fetch origin test/carplay-basevideo3-context80-readback-v1
+            git rebase origin/test/carplay-basevideo3-context80-readback-v1
+            git push origin HEAD:test/carplay-basevideo3-context80-readback-v1
+          fi
+
+      - name: Upload vehicle candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: carplay-context80-postaccept-fix
+          path: |
+            Toolbox/
+            READ-ME-FIRST.md
+            CONTEXT80-READBACK-V1.md
+            VERIFY-CONTEXT80-READBACK-V1.sh
+            SHA256SUMS.txt
+            PACKAGE_SOURCE_MAP.json
+          if-no-files-found: error

@@ -14,7 +14,7 @@ CTRL="$ROOT/Toolbox/scripts/altscreen_chain_test_universal.sh"
 ROUTER="$ROOT/Toolbox/scripts/altscreen_chain_test.sh"
 NATIVE="$ROOT/Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c"
 HEADER="$ROOT/Toolbox/carplay_alt_screen/src/p1404_cockpit_native.h"
-PINNED_HOOK_SHA=07a96cad6121cfc9fae259d47e6c95142b5e09b7ef3e8cd7a180de009579cb39
+HOOK_SOURCE="$ROOT/Toolbox/carplay_alt_screen/src/altscreen_hook.c"
 
 fail(){ echo "CONTEXT80_READBACK_VERIFY=FAIL: $*" >&2; exit 1; }
 binary_strings(){ strings "$1" 2>/dev/null || grep -a -o '[[:print:]][[:print:]]*' "$1"; }
@@ -27,11 +27,20 @@ for s in "$START" "$STATUS" "$CTRL" "$ROUTER"   "$ROOT/Toolbox/scripts/install_m
   sh -n "$s" || fail "shell syntax: $s"
 done
 
-[ -s "$HOOK" ] || fail "known-good universal hook missing"
-[ "$(sha256_file "$HOOK")" = "$PINNED_HOOK_SHA" ] ||
-  fail "CarPlay-facing runtime hook drifted from known-good 07a96 baseline"
+[ -s "$HOOK" ] || fail "universal hook missing"
+binary_strings "$HOOK" | grep -Fq 'identity_override=DISABLED' ||
+  fail "runtime hook lacks strict child-process identity containment"
+binary_strings "$HOOK" | grep -Fq '/mnt/app/root/carplay-altscreen/lib/libcarplay_altscreen.so' ||
+  fail "runtime hook lacks self-preload token"
+grep -Fq 'altscreen_strip_self_from_child_preload();' "$HOOK_SOURCE" ||
+  fail "source does not strip AltScreen from child LD_PRELOAD"
+grep -Fq 'if (!process_allowed || !p1404_probe_stack())' "$HOOK_SOURCE" ||
+  fail "source does not enforce measured process identity"
+if grep -Fq '(!process_allowed && !force_start)' "$HOOK_SOURCE"; then
+  fail "FORCE_START can still bypass process identity"
+fi
 binary_strings "$HOOK" | grep -Fq 'displayable=58' ||
-  fail "known-good hook is not the Window58 producer"
+  fail "runtime hook is not the Window58 producer"
 
 [ -s "$MIRROR" ] || fail "readback sidecar missing"
 binary_strings "$MIRROR" | grep -Fq 'screen_read_window' || fail "sidecar lacks readback"
@@ -105,7 +114,7 @@ grep -q 'libscreen_id_bridge.so' "$ROUTER" ||
   fail "router does not stage the ID bridge"
 
 echo "CONTEXT80_READBACK_VERIFY=PASS"
-echo "carplay_runtime_hook=PINNED_KNOWN_GOOD sha256=$PINNED_HOOK_SHA"
+echo "carplay_runtime_hook=POSTACCEPT_CHILD_PRELOAD_ISOLATED sha256=$(sha256_file "$HOOK")"
 echo "source=Window58 identity=SCREEN_PROPERTY_ID_STRING_20_PRIMARY"
 echo "capture=screen_read_window"
 echo "sink=displayable3_gles"
