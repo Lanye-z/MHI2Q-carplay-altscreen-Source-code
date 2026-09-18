@@ -32,7 +32,7 @@ jobs:
       - name: Install ARM inspection tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends clang lld binutils-arm-linux-gnueabihf python3-pyelftools
+          sudo apt-get install -y --no-install-recommends clang lld g++ binutils-arm-linux-gnueabihf python3-pyelftools libgles2-mesa-dev
 
       - name: Build universal private111 hook
         run: |
@@ -54,6 +54,18 @@ jobs:
           arm-linux-gnueabihf-readelf -d "$out/libcarplay_altscreen.so" | grep -q 'libm.so.2'
 
           echo "DIRECT111_HOOK_BUILD=PASS"
+
+      - name: Syntax-check direct SHM source and NV12 renderer
+        run: |
+          set -euo pipefail
+          g++ -std=c++98 -Wall -Wextra -Werror -fsyntax-only \
+            -IToolbox/carplay_alt_screen/mirror_display/src \
+            -IToolbox/carplay_alt_screen/src \
+            Toolbox/carplay_alt_screen/mirror_display/src/private111_direct_source.cpp
+          g++ -std=c++98 -Wall -Wextra -Werror -fsyntax-only \
+            -IToolbox/carplay_alt_screen/mirror_display/src \
+            Toolbox/carplay_alt_screen/mirror_display/src/gl_renderer.cpp
+          echo "DIRECT111_CPP_SYNTAX=PASS"
 
       - name: Prove private-only fail-open tap placement
         run: |
