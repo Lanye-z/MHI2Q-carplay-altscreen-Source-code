@@ -8,9 +8,11 @@ This repository is now intentionally **ZIP self-contained for the Mirror sidecar
 - Source commit: `f79908afda4a6658f41a46e3a96c81246c6a2fc4`
 - Original path: `Toolbox/carplay_alt_screen/mirror_display`
 - Vendored path here: `Toolbox/carplay_alt_screen/mirror_display`
-- Embedded sidecar build ID: `window58-wm-context-v3`
+- Local sidecar source build ID: `window58-wm-event-v4`
 
-The vendored source contains the 2026-09-17 Window58 correction: `CarPlayWindowSource` creates `SCREEN_WINDOW_MANAGER_CONTEXT` first, falls back to `SCREEN_DISPLAY_MANAGER_CONTEXT` only when necessary, emits the first Window census unconditionally, and reports the first `screen_read_window` failure even without verbose logging.
+The V4 source is a local follow-up to the 2026-09-18 vehicle result. It deliberately keeps the validated Stream111 hook unchanged. The sidecar may start at boot, but it does not create any Screen context until the current hook session logs `PHASE=PHONE_REQUEST_111`. After that gate it creates a `SCREEN_WINDOW_MANAGER_CONTEXT` and tracks Window58 through `SCREEN_EVENT_CREATE`, `SCREEN_EVENT_POST`, `SCREEN_EVENT_PROPERTY`, and `SCREEN_EVENT_CLOSE`. The old `SCREEN_PROPERTY_WINDOW_COUNT/WINDOWS` context census has been removed from the acquisition path.
+
+This V4 branch is **source-only until a real QNX 6.5 ARMv7 rebuild is completed**. The checked-in `mirror_display/release/carplay-alt111-mirror-display` remains the previously promoted V3 ELF until that rebuild/promotion step. Do not use this branch ZIP for vehicle testing before the release binary and manifests are updated.
 
 ## Download ZIP and build
 
@@ -41,7 +43,7 @@ The output is:
 Toolbox/carplay_alt_screen/mirror_display/build/carplay-alt111-mirror-display
 ```
 
-A successful build verifies that the ELF contains `window58-wm-context-v3`. If your SDK is installed elsewhere, provide `QNX_HOST` and `QNX_TARGET` before running the script.
+A successful V4 build verifies that the ELF contains `window58-wm-event-v4` and the PHONE_REQUEST/event-observer markers. If your SDK is installed elsewhere, provide `QNX_HOST` and `QNX_TARGET` before running the script.
 
 ## Vendored universal-hook source
 
