@@ -1,4 +1,4 @@
-mode=CONTEXT80_READBACK_V1
+mode=PRIVATE111_DIRECT_DISPLAY_V1
 controller=ClusterStateController
 class_target=Java_1.2_major_46
 context_owner=JAVA_ONLY
@@ -10,3 +10,4 @@ jar_cksum=1515795662
 jar_sha256=6dc947960f1b1dbfd6589cc927f25bcd93a0168604d5df4d5402b790f7ce3f31
 universal_runtime_sha256=52d85859dac741386506fc0cad622d9f6f64501300beac92ccfcd68674d55f9c
 universal_runtime_policy=PRIVATE111_POSTACCEPT_NONBLOCKING_PF_CHILD_PRELOAD_ISOLATED
+direct_display_source=/carplay111_decoded\nh264_tap=/carplay111_h264\nwindow58_readback=disabled\n
