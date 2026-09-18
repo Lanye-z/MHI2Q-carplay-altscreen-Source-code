@@ -1,6 +1,13 @@
 #!/bin/sh
 set -eu
 
+# VERIFY-MIRROR-RELEASE.sh
+# Validates the Mirror display sidecar release binary, manifests, and
+# the frozen universal CarPlay AltScreen hook. Replaces VERIFY-V3-RELEASE.sh.
+#
+# Usage:
+#   sh VERIFY-MIRROR-RELEASE.sh [--require-v4]
+
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 RELEASE="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release"
 BIN="$RELEASE/carplay-alt111-mirror-display"
@@ -10,9 +17,24 @@ TOP_SUMS="$ROOT/SHA256SUMS.txt"
 SOURCE_MAP="$ROOT/PACKAGE_SOURCE_MAP.json"
 HOOK_BASELINE=0dea2efef91b842cdaae6973a9b8ec3fd95c06cb48e9f3118fc545a78ee288de
 
+REQUIRE_V4=0
+for arg in "$@"; do
+    case "$arg" in
+        --require-v4) REQUIRE_V4=1 ;;
+    esac
+done
+
 fail() {
-    echo "V3_RELEASE_VERIFY=FAIL: $*" >&2
+    echo "MIRROR_RELEASE_VERIFY=FAIL: $*" >&2
     exit 1
+}
+
+pass() {
+    echo "MIRROR_RELEASE_VERIFY=PASS"
+    echo "mirror_sha256=$1"
+    echo "hook_sha256=$2"
+    echo "build_id=$3"
+    echo "HOOK_UNCHANGED=YES"
 }
 
 sha256_file() {
@@ -38,13 +60,11 @@ require_executable() {
     if [ -x "$path" ]; then
         return
     fi
-
     rel=${path#"$ROOT/"}
     if command -v git >/dev/null 2>&1 &&
        [ "$(git -C "$ROOT" ls-files -s -- "$rel" 2>/dev/null | awk '{print $1}')" = 100755 ]; then
         return
     fi
-
     case $(uname -s 2>/dev/null || echo unknown) in
         MINGW*|MSYS*|CYGWIN*)
             echo "NOTE: executable bit is not exposed by this Windows filesystem"
@@ -54,22 +74,42 @@ require_executable() {
     fail "release binary is not executable"
 }
 
-[ -f "$BIN" ] || fail "release binary missing"
+[ -f "$BIN" ] || fail "release binary missing: $BIN"
 require_executable "$BIN"
-[ -f "$HOOK" ] || fail "validated hook missing"
+[ -f "$HOOK" ] || fail "validated hook missing: $HOOK"
+[ -f "$RELEASE_SUMS" ] || fail "release SHA256SUMS missing"
+[ -f "$TOP_SUMS" ] || fail "top-level SHA256SUMS.txt missing"
+[ -f "$SOURCE_MAP" ] || fail "PACKAGE_SOURCE_MAP.json missing"
 
-for marker in window58-wm-context-v3 WINDOW_MANAGER_CONTEXT \
-    "window census" "bound CarPlay window" "capture buffer ready" \
-    screen_read_window
+hook_sha=$(sha256_file "$HOOK")
+[ "$hook_sha" = "$HOOK_BASELINE" ] ||
+    fail "validated hook changed: $hook_sha (expected $HOOK_BASELINE)"
+
+for marker in \
+    'window58-wm-event-v4' \
+    'GATE PASS trigger=PHONE_REQUEST_111' \
+    'WINDOW_MANAGER_CONTEXT event observer ready' \
+    'target CREATE' \
+    'target FIRST_POST' \
+    'screen_read_window'
 do
     binary_strings "$BIN" | grep -Fq "$marker" ||
         fail "release binary marker missing: $marker"
 done
 
+for marker in 'window census' 'SCREEN_PROPERTY_WINDOW_COUNT' 'SCREEN_PROPERTY_WINDOWS'; do
+    binary_strings "$BIN" | grep -Fq "$marker" &&
+        fail "release binary contains removed V3 census marker: $marker" || true
+done
+
+build_id=$(binary_strings "$BIN" | grep -m1 'window58-wm-event-v[0-9]' || echo "unknown")
+
+if [ "$REQUIRE_V4" = 1 ]; then
+    echo "$build_id" | grep -q 'window58-wm-event-v4' ||
+        fail "build id is not V4: $build_id"
+fi
+
 mirror_sha=$(sha256_file "$BIN")
-hook_sha=$(sha256_file "$HOOK")
-[ "$hook_sha" = "$HOOK_BASELINE" ] ||
-    fail "validated hook changed: $hook_sha"
 
 release_mirror_sha=$(awk '$2 == "carplay-alt111-mirror-display" {print $1}' "$RELEASE_SUMS")
 release_hook_sha=$(awk '$2 == "libcarplay_altscreen.so" {print $1}' "$RELEASE_SUMS")
@@ -80,13 +120,11 @@ map_hook_sha=$(sed -n 's/.*"Toolbox\/carplay_alt_screen\/universal\/libcarplay_a
 
 for recorded in "$release_mirror_sha" "$top_mirror_sha" "$map_mirror_sha"; do
     [ "$recorded" = "$mirror_sha" ] ||
-        fail "mirror SHA256 manifest mismatch"
+        fail "mirror SHA256 manifest mismatch: recorded=$recorded actual=$mirror_sha"
 done
 for recorded in "$release_hook_sha" "$top_hook_sha" "$map_hook_sha"; do
     [ "$recorded" = "$hook_sha" ] ||
-        fail "hook SHA256 manifest mismatch"
+        fail "hook SHA256 manifest mismatch: recorded=$recorded actual=$hook_sha"
 done
 
-echo "V3_RELEASE_VERIFY=PASS"
-echo "mirror_sha256=$mirror_sha"
-echo "hook_sha256=$hook_sha"
+pass "$mirror_sha" "$hook_sha" "$build_id"

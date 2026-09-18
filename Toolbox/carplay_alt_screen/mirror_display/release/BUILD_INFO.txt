@@ -1,11 +1,13 @@
-mode=CARPLAY111_MIRROR_SOURCE_V3_WM_FIRST
-build_id=window58-wm-context-v3
+mode=CARPLAY111_MIRROR_SOURCE_V4_WM_EVENT
+build_id=window58-wm-event-v4
 
 source=private111_stock_omx_window58
 target_window_id=58
 
-source_context=window_manager_first
-fallback_context=display_manager
+startup_gate=PHONE_REQUEST_111
+screen_context_before_gate=none
+source_context=window_manager_event
+capture_acquisition=screen_event_create_post
 capture=screen_read_window
 cpu_format=BGRA8888
 
@@ -14,5 +16,4 @@ mirror_output=1440x455
 
 context=76_transition72_restore74
 main110=untouched
-toolbox_profiles=K1004,P1404
-toolbox_autostart=after_START_and_reboot
+stream111_hook=unchanged
