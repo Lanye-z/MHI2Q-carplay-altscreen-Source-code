@@ -687,7 +687,17 @@ static void *private111_worker(void *arg) {
     }
     pairs_unlock();
     if (be.close_fn) be.close_fn(listener); /* stock closes listener after accept */
-    (void)pair_close_firewall(p, "listener_closed");
+
+    /*
+     * Do not run pfctl/popen/system on the accepted Stream111 worker path.
+     * Vehicle evidence showed that synchronous exact-port PF removal can stall
+     * this worker after ACCEPT_RETURN and before NetSocket_CreateWithNative,
+     * leaving the phone-side socket readable but completely unconsumed.  Keep
+     * the exact-port rule alive until teardown; the listener itself is already
+     * closed, so no second accept can occur on this session.
+     */
+    altscreen_log("PHASE=STREAM_111_FIREWALL_DEFERRED receiver=%p session=%p reason=post_accept_keep_until_teardown next=NETSOCKET_CREATE",
+                  receiver, session);
 
     if (terminal_phase == ALT111_W_DONE) {
         if (native_fd >= 0) {
@@ -989,8 +999,13 @@ static int teardown_private(void *receiver,
     pairs_unlock();
 
     if (listener >= 0 && be.close_fn) be.close_fn(listener);
-    if (!pair_close_firewall(p, "teardown"))
-        return 0;
+
+    /*
+     * Session lifetime is more important than PF housekeeping.  Never make
+     * private ScreenSession Stop/Delete conditional on a shell/pfctl cleanup
+     * result: a PF failure must not strand Stream111 or hold the outer CarPlay
+     * teardown path.
+     */
     if (!session_stopped && !alt_screen_stream)
         alt_screen_stream = session_stream(alt_screen_session);
     if (!session_stopped && be.stop) {
@@ -1011,6 +1026,16 @@ static int teardown_private(void *receiver,
     }
     if (be.del) be.del(alt_screen_session);
 
+    /*
+     * Only after the private ScreenSession is quiescent/deleted may the
+     * temporary exact-port PF rule be removed.  Cleanup is best-effort: failure
+     * is logged and the core teardown still completes.
+     */
+    if (!pair_close_firewall(p, "teardown_post_session")) {
+        altscreen_log("WARN PHASE=STREAM_111_FIREWALL_REMOVE session=%p reason=teardown_post_session result=FAILED core_teardown_preserved=1",
+                      alt_screen_session);
+    }
+
     pairs_lock();
     p = pair_find_locked(alt_screen_session);
     if (p) memset(p, 0, sizeof(*p));
@@ -1018,7 +1043,7 @@ static int teardown_private(void *receiver,
 
     alt_airplay_release_object(receiver);
 
-    altscreen_log("PHASE=STREAM_111_BACKEND_TEARDOWN_DONE receiver=%p session=%p join_rc=%d stop_rc=%d",
+    altscreen_log("PHASE=STREAM_111_BACKEND_TEARDOWN_DONE receiver=%p session=%p join_rc=%d stop_rc=%d firewall_cleanup_nonfatal=1",
                   receiver, alt_screen_session, join_rc, stop_rc);
     return join_rc == 0 && stop_rc == 0;
 }
