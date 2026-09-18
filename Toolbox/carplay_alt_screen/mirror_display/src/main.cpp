@@ -10,7 +10,7 @@
 
 static volatile sig_atomic_t g_stop = 0;
 static const unsigned kTargetFps = 30;
-static const char kBuildId[] = "window58-wm-context-v3";
+static const char kBuildId[] = "window58-wm-event-v4";
 
 static const char *volatile_path(const char *key, const char *fallback) {
     const char *v = getenv(key);
@@ -27,6 +27,16 @@ static const char *base_ready_path() {
                          "/tmp/MMI-Cockpit-Carplay/mirror/basevideo.ready");
 }
 
+static const char *gate_token_path() {
+    return volatile_path("ALT111_MIRROR_GATE_TOKEN_FILE",
+                         "/tmp/MMI-Cockpit-Carplay/mirror/phone111.gate");
+}
+
+static const char *hook_log_path() {
+    return volatile_path("ALT111_MIRROR_HOOK_LOG",
+                         "/tmp/MMI-Cockpit-Carplay/altscreen_hook.log");
+}
+
 static unsigned long long now_us() {
     struct timeval tv;
     if (gettimeofday(&tv, 0) != 0) return 0;
@@ -36,6 +46,163 @@ static unsigned long long now_us() {
 
 static void on_signal(int) {
     g_stop = 1;
+}
+
+static void strip_eol(char *s) {
+    size_t n;
+    if (!s) return;
+    n = strlen(s);
+    while (n &&
+           (s[n - 1] == '\n' || s[n - 1] == '\r' ||
+            s[n - 1] == ' ' || s[n - 1] == '\t')) {
+        s[--n] = 0;
+    }
+}
+
+static void copy_line(char *dst, size_t cap, const char *src) {
+    if (!dst || !cap) return;
+    if (!src) {
+        dst[0] = 0;
+        return;
+    }
+    strncpy(dst, src, cap - 1u);
+    dst[cap - 1u] = 0;
+    strip_eol(dst);
+}
+
+static void load_consumed_gate(char *out, size_t cap) {
+    FILE *f;
+    if (!out || !cap) return;
+    out[0] = 0;
+    f = fopen(gate_token_path(), "r");
+    if (!f) return;
+    if (fgets(out, (int)cap, f)) strip_eol(out);
+    fclose(f);
+}
+
+static bool persist_gate(const char *line) {
+    FILE *f;
+    if (!line || !*line) return false;
+    f = fopen(gate_token_path(), "w");
+    if (!f) return false;
+    fprintf(f, "%s\n", line);
+    if (fclose(f) != 0) return false;
+    return true;
+}
+
+/*
+ * Do not create a privileged Screen window-manager context at boot.
+ *
+ * The validated CarPlay/Stream111 hook already emits PHONE_REQUEST_111 once
+ * the phone has established the main AirPlay session and explicitly requested
+ * the private alternate screen. Follow that log first; only after this gate is
+ * observed do we create the Screen WM observer.
+ *
+ * A complete initial scan is required before accepting a candidate marker:
+ * an older PHONE_REQUEST line may exist earlier in the same log, followed by a
+ * newer HOOK_INIT for the current dio_manager process.
+ */
+static bool wait_for_phone111_gate() {
+    static const char kFlatHookLog[] = "/tmp/altscreen_hook.log";
+    char consumed[1024];
+    char candidate[1024];
+    char line[1024];
+    bool have_hook_init = false;
+    bool reported_waiting = false;
+    bool reported_consumed = false;
+    FILE *f = 0;
+    const char *opened_path = 0;
+
+    load_consumed_gate(consumed, sizeof(consumed));
+    candidate[0] = 0;
+
+    while (!g_stop) {
+        if (!f) {
+            const char *primary = hook_log_path();
+            f = fopen(primary, "r");
+            if (f) {
+                opened_path = primary;
+            } else if (strcmp(primary, kFlatHookLog) != 0) {
+                f = fopen(kFlatHookLog, "r");
+                if (f) opened_path = kFlatHookLog;
+            }
+
+            if (!f) {
+                if (!reported_waiting) {
+                    fprintf(stderr,
+                            "carplay-mirror: GATE waiting "
+                            "for=PHONE_REQUEST_111 screen_context=NOT_CREATED "
+                            "hook_log=%s\n",
+                            primary);
+                    reported_waiting = true;
+                }
+                usleep(100000);
+                continue;
+            }
+
+            fprintf(stderr,
+                    "carplay-mirror: GATE hook log attached path=%s "
+                    "screen_context=NOT_CREATED\n",
+                    opened_path ? opened_path : "-");
+        }
+
+        bool read_any = false;
+        while (fgets(line, sizeof(line), f)) {
+            read_any = true;
+            strip_eol(line);
+
+            if (strstr(line, "PHASE=HOOK_INIT")) {
+                have_hook_init = true;
+                candidate[0] = 0;
+                reported_consumed = false;
+                continue;
+            }
+
+            if (have_hook_init &&
+                strstr(line, "PHASE=PHONE_REQUEST_111") &&
+                strstr(line, "PHONE_REQUESTED_ALTSCREEN=YES")) {
+                copy_line(candidate, sizeof(candidate), line);
+            }
+        }
+
+        if (candidate[0]) {
+            if (consumed[0] && strcmp(candidate, consumed) == 0) {
+                if (!reported_consumed) {
+                    fprintf(stderr,
+                            "carplay-mirror: GATE marker already consumed; "
+                            "waiting for next PHONE_REQUEST_111 session\n");
+                    reported_consumed = true;
+                }
+            } else {
+                /*
+                 * Persist before opening Screen. If this sidecar crashes after
+                 * acquiring WM privileges, the boot supervisor must not spin
+                 * up another WM observer for the same CarPlay request.
+                 */
+                if (!persist_gate(candidate)) {
+                    fprintf(stderr,
+                            "carplay-mirror: GATE token write failed path=%s; "
+                            "Screen context remains unopened\n",
+                            gate_token_path());
+                    usleep(100000);
+                    continue;
+                }
+
+                copy_line(consumed, sizeof(consumed), candidate);
+                fprintf(stderr,
+                        "carplay-mirror: GATE PASS "
+                        "trigger=PHONE_REQUEST_111 "
+                        "screen_context=CREATE_NOW\n");
+                return true;
+            }
+        }
+
+        clearerr(f);
+        usleep(read_any ? 20000 : 50000);
+    }
+
+    if (f) fclose(f);
+    return false;
 }
 
 /* Marker writes are deliberately best-effort. The launcher may run with /tmp
@@ -74,9 +241,12 @@ static int cmd(const char *s) {
     return rc;
 }
 
-/* Keep the existing vehicle compatibility route outside the copied Mirror
- * pixel plane. The display implementation itself remains pinned byte-for-byte
- * to the Lanye MMI-Mirror baseline. */
+/*
+ * Keep the existing diagnostic compatibility route unchanged for this V4.
+ * K1004 reverse engineering still points to the stock Window58/context76 path
+ * as the preferred eventual production route; displayable3 remains only the
+ * copied Mirror pixel-plane test used after Window58 capture succeeds.
+ */
 static bool activate() {
     if (cmd("/eso/bin/apps/dmdt dc 76 3") != 0) return false;
     if (cmd("/eso/bin/apps/dmdt sc 1 72") != 0) return false;
@@ -103,18 +273,33 @@ int main(int argc, char **argv) {
     marker(false);
 
     fprintf(stderr,
-            "carplay-mirror: BUILD id=%s source_context=window_manager_first "
-            "diagnostics=first_scan_unconditional\n",
+            "carplay-mirror: BUILD id=%s "
+            "gate=PHONE_REQUEST_111 "
+            "source_context=none_before_gate_then_window_manager_event "
+            "diagnostics=event_driven\n",
             kBuildId);
+
+    if (!wait_for_phone111_gate()) {
+        fprintf(stderr,
+                "carplay-mirror: stopped before PHONE_REQUEST_111; "
+                "Screen context was never created\n");
+        return 0;
+    }
 
     CarPlayWindowSource source(58, verbose);
     if (!source.init()) return 2;
 
     VideoFrame frame;
     fprintf(stderr,
-            "carplay-mirror: waiting for private111 window58 first frame\n");
+            "carplay-mirror: waiting for Window58 CREATE/POST event "
+            "after PHONE_REQUEST_111\n");
     while (!g_stop && !source.read_frame(&frame)) {
-        usleep(100000);
+        /*
+         * read_frame waits on Screen events for up to 100 ms internally.
+         * A short extra delay keeps persistent readback failures bounded while
+         * leaving CREATE/POST acquisition responsive.
+         */
+        usleep(20000);
     }
     if (g_stop) {
         source.shutdown();
