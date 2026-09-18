@@ -1,20 +1,19 @@
 /*
- * p1404_cockpit_native.c - native-size, no-copy private AltScreen output.
+ * p1404_cockpit_native.c - private111 stock-decoder compatibility staging.
  *
- * libairplay's stock OmxVideoImpl creates one CScreenRender per ScreenStream.
- * Its stock config assigns every renderer window to displayable 59.  That is
- * correct for MainScreen 110 but unsafe for a second stream.  We bind the exact
- * renderer owned by our private ScreenStream, rewrite only its 44-byte
- * st_screen_config to displayable 58 using display 1's runtime-reported pixel
- * geometry, and register that renderer's native window with DisplayManager
- * before stock creates its NV12 buffers. Compressed Main110 data, physical-screen
- * pixels, RFB and bootstrap images are never accepted here.
+ * Direct-display V1 no longer consumes Window58 and no sidecar calls
+ * screen_read_window().  The existing private stock OmxVideoImpl/CScreenRender
+ * binding is temporarily retained only as a vehicle-proven decoder backend:
+ * decoded NV12 is tapped before the stock render call and exported through
+ * /carplay111_decoded.  The real instrument sink is the separate MMI-derived
+ * displayable3 sidecar under Java-owned Context80.
  *
- * Route activation depends on the private renderer's successful dynamic config,
- * an accepted Alt-UUID showUI command, and the first successful post of an
- * unmodified CarPlay type-111 frame. FULL mode switches display 1 to context 76
- * asynchronously. Teardown never lets an old generation restore over a newer one.
- * Teardown, marker removal, or partial activation restores stock context 74.
+ * The historical displayable58/manage-window code below remains active only so
+ * stock OMX can complete its normal buffer lifecycle while this fallback is
+ * used.  It is decoder staging, not the direct-display source or success gate.
+ * /carplay111_h264 is captured independently at ScreenStreamProcessData and is
+ * the handoff boundary for the future standalone Qualcomm/QNX decoder backend.
+ * Main110 remains exact stock passthrough.
  */
 #include "p1404_cockpit_native.h"
 #include "p1404_abi.h"
@@ -229,8 +228,9 @@ static int bind_screen_native_api(void) {
 
 
 static int native_route_requested(void) {
-    /* Context80 is owned by the Java/HMI controller in the readback build.
-     * Native code is pixels-only: private111 -> stock OMX -> Window58. */
+    /* Java/HMI owns Context80. Native route activation is disabled.
+     * Stock displayable58 exists only as V1 decoder compatibility staging;
+     * direct display consumes /carplay111_decoded, never Window58 readback. */
     return 0;
 }
 
@@ -1202,7 +1202,7 @@ int p1404_hook_cscreen_config(void *self, const struct p1404_screen_config *conf
         managed_ok = g_managed_config.managed;
         memset(&g_managed_config, 0, sizeof(g_managed_config));
         native_unlock();
-        altscreen_log("PHASE=NATIVE_111_MANAGED_WINDOW receiver=%p stream=%p renderer=%p group_skipped=%d manage_rc=%d buffers_rc=%d managed=%d manager=displaymanager stock_buffer_owner=1",
+        altscreen_log("PHASE=NATIVE_111_MANAGED_WINDOW receiver=%p stream=%p renderer=%p group_skipped=%d manage_rc=%d buffers_rc=%d managed=%d manager=displaymanager stock_buffer_owner=1 compat_decoder_staging=1 direct_sink_window58=0",
                       receiver, stream, self, group_skipped, manage_rc,
                       buffers_rc, managed_ok);
         if (rc == 0 && !managed_ok) rc = NATIVE_CONFIG_REFUSED_STATUS;
