@@ -189,6 +189,10 @@ static bool wait_for_phone111_gate() {
                 }
 
                 copy_line(consumed, sizeof(consumed), candidate);
+                if (f) {
+                    fclose(f);
+                    f = 0;
+                }
                 fprintf(stderr,
                         "carplay-mirror: GATE PASS "
                         "trigger=PHONE_REQUEST_111 "
