@@ -54,12 +54,13 @@ inside the readback sidecar; it is never added to the CarPlay/dio_manager preloa
 The last line still requires visual confirmation on the VC.
 
 
+
 ## Finalized HMI artifact
 
 The vehicle JAR is rebuilt only at ClusterStateController.class; all other entries stay inherited from the pinned BaseVideo3 JAR.
 
 size    = 143072
-cksum   = 486999738
-SHA256  = 23784668341ea235e9521fc26ece8dfb265a0391cb1d0b62e8f6aca5bf53de55
+cksum   = 1956287696
+SHA256  = a5f8e8aff04061897c9aa3be772bb0dabdea61d0e342409e44c7dcf114d0f1be
 ctx80   = {98,101,102,3}
 proof   = CTX80_OBSERVED actual=80
