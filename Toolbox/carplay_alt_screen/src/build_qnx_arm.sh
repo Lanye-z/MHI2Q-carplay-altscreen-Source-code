@@ -110,7 +110,7 @@ SRCS=""
 # legacy PlatformControl symbol; never compile p1404_airplay.c separately here.
 # p1404_private111_backend.c p1404_firewall.c remains the same authenticated/private111 core used
 # by the known profiles.  Universalization changes only discovery/interposition.
-for c in altscreen_core.c altscreen_paths.c altscreen_profile.c altscreen_state.c altscreen_state_private.c p1404_private111.c p1404_private111_backend.c p1404_firewall.c p1404_cockpit_native.c p1404_setup_merge.c p1404_resolve.c p1404_iap2.c p1404_observe.c p1404_airplay_fullchain.c aug22_dynamic_reloc.c aug22_dynamic_diag.c altscreen_hook.c; do
+for c in altscreen_core.c altscreen_paths.c altscreen_profile.c altscreen_state.c altscreen_state_private.c private111_direct_tap.c p1404_private111.c p1404_private111_backend.c p1404_firewall.c p1404_cockpit_native.c p1404_setup_merge.c p1404_resolve.c p1404_iap2.c p1404_observe.c p1404_airplay_fullchain.c aug22_dynamic_reloc.c aug22_dynamic_diag.c altscreen_hook.c; do
   [ -f "$SRC/$c" ] || { echo "missing $SRC/$c"; exit 1; }
   input="$SRC/$c"
   [ "$c" != altscreen_hook.c ] || input="$HOOK_SRC"
