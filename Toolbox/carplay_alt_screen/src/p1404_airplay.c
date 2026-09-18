@@ -4,6 +4,7 @@
 #include "altscreen_paths.h"
 #include "p1404_observe.h"
 #include "p1404_cockpit_native.h"
+#include "private111_direct_tap.h"
 #include <stddef.h>
 #include <string.h>
 #include <stdlib.h>
@@ -1256,7 +1257,8 @@ void *alt_observe_proc(void *a0, void *a1, void *a2, void *a3, void *caller) {
         p1404_identity_ok && p1404_armed) {
         obs_stream_see(a0, caller, 0);
         if (a1 && len) {
-            alt_state_feed_private_video(a0, a1, len);
+            const int private_video = alt_state_feed_private_video(a0, a1, len);
+            if (private_video) p111_h264_tap_write(a0, a1, len);
             obs_stream_data(a0, a1, len);
         }
     }
