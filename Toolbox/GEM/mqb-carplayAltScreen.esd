@@ -1,11 +1,11 @@
 ###########################################################################################
-# MMI-Cockpit-Carplay - CarPlay AltScreen + automatic Mirror cockpit display
+# MMI-Cockpit-Carplay - Standalone CarPlay Second Screen / BaseVideo3
 ###########################################################################################
 screen "MMI-Cockpit-Carplay" Customization
 
 keyValue
     value   String sys 0x00000000 0
-    label   "Integrated flow: INSTALL (AltScreen + Mirror) -> reboot -> START -> reboot; then CarPlay 111 displays automatically"
+    label   "Standalone flow: INSTALL (type111 + Java80) -> reboot -> START -> reboot; no MMI Mirror sidecar required"
     poll    0
 
 script
