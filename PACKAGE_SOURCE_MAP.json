@@ -32,7 +32,7 @@
   "Toolbox/carplay_alt_screen/profiles/P1404/OVERLAY_INFO.txt": "4e04c0bda18d7363cf9b1c3c8ff5cf12fccdd64a4f403feddceb7141ad2dc187",
   "Toolbox/carplay_alt_screen/profiles/P1404/PROFILE_CONTRACT.json": "51f2bedb80981f2c7250fb3f834312455593c3a003595fe7541e1e0ba41edaa5",
   "Toolbox/carplay_alt_screen/profiles/P1404/QNX_LOAD_LAYOUT.json": "62894ca7e59489f6cec1de24bf5c88b55d466149ba4f64838d6e322c32e01b01",
-  "Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so": "07a96cad6121cfc9fae259d47e6c95142b5e09b7ef3e8cd7a180de009579cb39",
+  "Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so": "0dea2efef91b842cdaae6973a9b8ec3fd95c06cb48e9f3118fc545a78ee288de",
   "Toolbox/carplay_alt_screen/mirror_display/release/carplay-alt111-mirror-display": "36bf2d46c37cbdf2c5d79337e1dd5ae7989f4a1c287f883db59d038ed6f561fd",
   "Toolbox/carplay_alt_screen/mirror_display/release/start_vehicle.sh": "6eb6c3e1bc2aee3c291eb7307f0cc2648c0d160cd6d6f666b541e98fa9a04345",
   "Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh": "0dedaef187e13965cefa254c14f19386efd91b9385ee2907463810b5d6379fc8",

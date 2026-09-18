@@ -43,6 +43,25 @@ Toolbox/carplay_alt_screen/mirror_display/build/carplay-alt111-mirror-display
 
 A successful build verifies that the ELF contains `window58-wm-context-v3`. If your SDK is installed elsewhere, provide `QNX_HOST` and `QNX_TARGET` before running the script.
 
+## Universal hook runtime: 2026-09-18 helper isolation fix
+
+The checked-in universal runtime `Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so` was rebuilt from the reviewed AltScreen development source after the in-car Stream 111 regression where firewall helper processes inherited the preload and re-entered hook initialization.
+
+- Development repository: `yuedizhibo/mib2q-MMI-Cockpit-Carplay`
+- Source/build trigger commit: `06e61fc90f256adefbcb685e9d14823848f1f3d2`
+- Published build-branch commit: `42763e5126b6bee93bf294b5a411c3cf5330d572`
+- Built binary Git blob: `646943d2fe8fd2f3be2968d9bd1368d66fe1e7e1`
+- Runtime SHA-256: `0dea2efef91b842cdaae6973a9b8ec3fd95c06cb48e9f3118fc545a78ee288de`
+- Runtime size: `227836` bytes
+
+The repair has three runtime safety changes:
+
+1. The constructor removes only this AltScreen library from the current process' inherited `LD_PRELOAD` value after the library is already mapped. This prevents later `sh` / `pfctl` firewall helpers from loading the hook again while preserving unrelated preload entries.
+2. Process identity is now the first hook safety gate. Non-CarPlay helper processes return before stock AirPlay binding, Native111 binding, CF setup, internal GOT redirects, or the asynchronous runtime worker.
+3. `FORCE_START` can no longer override process identity. It remains limited to the existing transaction-authorization bypass inside an already validated CarPlay host.
+
+GitHub Actions' `universal-qnx-build` job completed successfully for this source and verified the QNX ELF surface. The binary remains `ELF32 ARM EABI5`, depends only on `libc.so.3` and `libm.so.2`, and contains the `identity_override=DISABLED` runtime marker. The unrelated full host certification job still reports the pre-existing `cfl_proof_invocation_drift` scope failure; that failure occurs before these helper-isolation checks and is not the QNX build result.
+
 ## Runtime boundary
 
 Compiling does **not** automatically overwrite the checked-in vehicle runtime under `mirror_display/release/`. This remains deliberate: the release ELF and its hashes should only be replaced after a reviewed QNX build. The current checked-in release binary may therefore remain older than the vendored source until promotion is performed.
