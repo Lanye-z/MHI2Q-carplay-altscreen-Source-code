@@ -8,4 +8,8 @@ SCRIPTDIR=$(cd -P -- "$(dirname -- "$RESOLVED")" 2>/dev/null && pwd -P)
 [ -n "$SCRIPTDIR" ] || { echo "FAIL: cannot resolve installed launcher directory"; exit 126; }
 TARGET="$SCRIPTDIR/start_mmi_cockpit_carplay_rx_test.sh"
 [ -f "$TARGET" ] || { echo "FAIL: integrated START launcher is missing: $TARGET"; exit 127; }
-exec /bin/sh "$TARGET" "$@"
+if [ "$#" -gt 0 ]; then
+    exec /bin/sh "$TARGET" "$@"
+else
+    exec /bin/sh "$TARGET"
+fi
