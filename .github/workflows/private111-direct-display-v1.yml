@@ -1,0 +1,103 @@
+name: CarPlay private111 Direct Display V1
+
+on:
+  push:
+    branches:
+      - carplay-private111-direct-display-v1
+    paths:
+      - '.github/workflows/private111-direct-display-v1.yml'
+      - 'Toolbox/carplay_alt_screen/src/**'
+      - 'Toolbox/carplay_alt_screen/mirror_display/**'
+      - 'Toolbox/carplay_alt_screen/hmi/**'
+      - 'Toolbox/scripts/**'
+      - 'CARPLAY-PRIVATE111-DIRECT-DISPLAY-V1.md'
+  workflow_dispatch:
+
+concurrency:
+  group: private111-direct-display-v1
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate-direct111-source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: carplay-private111-direct-display-v1
+          fetch-depth: 0
+
+      - name: Install ARM inspection tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang lld binutils-arm-linux-gnueabihf python3-pyelftools
+
+      - name: Build universal private111 hook
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/private111-direct-hook"
+          sh Toolbox/carplay_alt_screen/build_source_snapshot.sh universal "$out"
+          test -s "$out/libcarplay_altscreen.so"
+
+          strings "$out/libcarplay_altscreen.so" | grep -Fq 'PHASE=H264_TAP_SHM_READY'
+          strings "$out/libcarplay_altscreen.so" | grep -Fq 'PHASE=H264_TAP_FIRST_DATA'
+          strings "$out/libcarplay_altscreen.so" | grep -Fq 'PHASE=H264_TAP_FIRST_SPS'
+          strings "$out/libcarplay_altscreen.so" | grep -Fq 'PHASE=H264_TAP_FIRST_PPS'
+          strings "$out/libcarplay_altscreen.so" | grep -Fq 'PHASE=H264_TAP_FIRST_IDR'
+          strings "$out/libcarplay_altscreen.so" | grep -Fq 'PHASE=DECODER_FIRST_FRAME backend=stock-omx-tap'
+          strings "$out/libcarplay_altscreen.so" | grep -Fq '/carplay111_h264'
+          strings "$out/libcarplay_altscreen.so" | grep -Fq '/carplay111_decoded'
+
+          arm-linux-gnueabihf-readelf -d "$out/libcarplay_altscreen.so" | grep -q 'libc.so.3'
+          arm-linux-gnueabihf-readelf -d "$out/libcarplay_altscreen.so" | grep -q 'libm.so.2'
+
+          echo "DIRECT111_HOOK_BUILD=PASS"
+
+      - name: Prove private-only fail-open tap placement
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          air = Path('Toolbox/carplay_alt_screen/src/p1404_airplay.c').read_text()
+          native = Path('Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c').read_text()
+          side = Path('Toolbox/carplay_alt_screen/mirror_display/src/main.cpp').read_text()
+          make = Path('Toolbox/carplay_alt_screen/mirror_display/Makefile').read_text()
+
+          assert 'const int private_video = alt_state_feed_private_video' in air
+          assert 'if (private_video) p111_h264_tap_write' in air
+          assert air.index('alt_state_feed_private_video') < air.index('p111_h264_tap_write')
+
+          tap = native.index('p111_frame_tap_write(stream, buffer')
+          stock = native.index('rc = g_real_render(self, buffer);', tap)
+          assert tap < stock
+          assert 'Keep the stock call fail-open during V1' in native
+
+          assert '#include "private111_direct_source.h"' in side
+          assert 'carplay_window_source.h' not in side
+          assert 'PHASE=DIRECT111_ACTIVE' in side
+          assert 'window58_readback=0' in side
+          assert 'screen_read_window' not in side
+
+          assert 'private111_direct_source.cpp' in make
+          assert 'carplay_window_source.cpp' not in make
+          print('DIRECT111_SOURCE_CONTRACT=PASS private_only_tap=1 stock_forward=1 window58_readback=0')
+          PY
+
+      - name: Shell syntax
+        run: |
+          set -euo pipefail
+          for f in             Toolbox/carplay_alt_screen/mirror_display/release/start_vehicle.sh             Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh             Toolbox/scripts/altscreen_chain_test.sh             Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh             Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh             Toolbox/scripts/status_mmi_cockpit_carplay_test.sh
+          do
+            sh -n "$f"
+          done
+          echo "DIRECT111_SHELL_SYNTAX=PASS"
+
+      - name: Enforce release honesty
+        run: |
+          set -euo pipefail
+          grep -Fq 'release_binary_status=STALE_REBUILD_REQUIRED' Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt
+          grep -Fq 'vehicle_zip_status=NOT_READY_UNTIL_QNX_REBUILD_AND_PROMOTION' Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt
+          echo "DIRECT111_RELEASE_STATUS=SOURCE_READY_BINARY_PENDING"
