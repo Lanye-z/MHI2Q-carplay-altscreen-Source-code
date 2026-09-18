@@ -2,11 +2,10 @@
 #define PRIVATE111_DIRECT_SOURCE_H
 
 #include "video_frame.h"
+#include "private111_direct_shm.h"
 #include <stddef.h>
 #include <stdint.h>
 
-struct p111_frame_shm;
-struct p111_h264_shm;
 
 class Private111DirectSource {
 public:
@@ -37,8 +36,8 @@ private:
 
     int h264_fd_;
     int frame_fd_;
-    p111_h264_shm *h264_;
-    p111_frame_shm *frames_;
+    p111_h264_shm_t *h264_;
+    p111_frame_shm_t *frames_;
 
     unsigned char *local_frame_;
     size_t local_capacity_;
