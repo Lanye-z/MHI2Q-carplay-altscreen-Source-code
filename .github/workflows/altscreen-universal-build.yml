@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'Toolbox/carplay_alt_screen/src/**'
+      - 'Toolbox/carplay_alt_screen/tests/validate_qnx_load_layout.py'
       - 'Toolbox/carplay_alt_screen/build_source_snapshot.sh'
       - 'BUILD-UNIVERSAL-QNX.sh'
       - '.github/workflows/altscreen-universal-build.yml'
