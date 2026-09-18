@@ -12,6 +12,10 @@ on:
       - 'VERIFY-CONTEXT80-READBACK-V1.sh'
   workflow_dispatch:
 
+concurrency:
+  group: context80-readback-branch-writer
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -21,6 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: test/carplay-basevideo3-context80-readback-v1
           fetch-depth: 0
 
       - name: Install ARM build inspection tools
