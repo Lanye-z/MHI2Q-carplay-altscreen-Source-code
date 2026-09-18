@@ -15,6 +15,10 @@ on:
       - 'Toolbox/carplay_alt_screen/mirror_display/build_screen_id_bridge.sh'
   workflow_dispatch:
 
+concurrency:
+  group: context80-readback-branch-writer
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -24,6 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: test/carplay-basevideo3-context80-readback-v1
           fetch-depth: 0
 
       - uses: actions/setup-java@v4
