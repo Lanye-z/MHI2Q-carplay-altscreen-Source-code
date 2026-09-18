@@ -31,8 +31,6 @@ else
   BIN="$ROOT/release/carplay-alt111-mirror-display"
 fi
 
-ID_BRIDGE="$ROOT/libscreen_id_bridge.so"
-
 TMP_ROOT="${ALT111_MIRROR_TMP_ROOT:-/tmp}"
 PROJECT_TMP="$TMP_ROOT/MMI-Cockpit-Carplay"
 VOLATILE="$PROJECT_TMP/mirror"
@@ -73,11 +71,6 @@ if [ ! -x "$BIN" ]; then
   echo "ERROR: mirror display binary not found/executable: $BIN" >&2
   exit 2
 fi
-if [ ! -s "$ID_BRIDGE" ]; then
-  echo "ERROR: Window58 ID-string bridge missing: $ID_BRIDGE" >&2
-  exit 2
-fi
-
 if [ -f "$PIDFILE" ]; then
   OLD="$(cat "$PIDFILE" 2>/dev/null || true)"
   if [ -n "$OLD" ] && kill -0 "$OLD" 2>/dev/null; then
@@ -97,16 +90,16 @@ rm -f "$READY" "$BASE_READY"
   echo "GATE_TOKEN=$GATE_TOKEN"
   echo "SCREEN_CONTEXT_POLICY=JAVA80_ONLY native_context_writer=0"
   echo "READY_POLICY=destination_first_present_only base_ready=$BASE_READY"
-  echo "WINDOW58_ID_POLICY=ID_STRING_PRIMARY numeric_id=diagnostic bridge=$ID_BRIDGE"
+  echo "DIRECT111_SOURCE=ScreenStreamProcessData+H264_SHM decoded_shm=/carplay111_decoded"
+  echo "WINDOW58_POLICY=NOT_CONSUMED screen_read_window=0 window_manager_context=0"
   echo "SINK_TEST_GRID_MODE=$SINK_TEST_GRID_MODE opt_in_env=ALT111_SINK_TEST_GRID"
-  echo "PIXEL_TRUTH_POLICY=SOURCE_PIXEL_VALID_required_before_readback_ready"
-  echo "SIDECAR_PRELOAD_POLICY=ISOLATED helper_only=1 inherited_preload_ignored=${LD_PRELOAD:-<unset>}"
+  echo "DECODER_POLICY=v1_stock_omx_buffer_tap_fallback h264_shm=/carplay111_h264"
+  echo "SIDECAR_PRELOAD_POLICY=ISOLATED inherited_preload_ignored=${LD_PRELOAD:-<unset>}"
 } >> "$LOGFILE"
 
-# Deliberately do not inherit the CarPlay/dio_manager preload into the helper.
-# The ID bridge exists only inside this sidecar process and interposes one Screen
-# property getter; the known-good CarPlay hook remains byte-for-byte untouched.
-LD_PRELOAD="$ID_BRIDGE" "$BIN" $MIRROR_ARGS >>"$LOGFILE" 2>&1 &
+# Deliberately do not inherit the CarPlay/dio_manager preload into the sidecar.
+# Direct-display consumes SHM only and does not need any Window58 ID bridge.
+LD_PRELOAD= "$BIN" $MIRROR_ARGS >>"$LOGFILE" 2>&1 &
 PID=$!
 echo "$PID" > "$PIDFILE"
 sleep 1
@@ -121,5 +114,5 @@ echo "MIRROR_DISPLAY=STARTED pid=$PID log=$LOGFILE volatile_mode=$VOLATILE_MODE 
 if [ "$SINK_TEST_GRID_MODE" = 1 ]; then
   echo "WAITING_FOR=BASEVIDEO_ACTIVE_then_Java_CTX80 test_grid_already_presented=1"
 else
-  echo "WAITING_FOR=PHONE_REQUEST_111_then_Window58_CREATE_POST_READBACK_PIXEL_VALID"
+  echo "WAITING_FOR=PHONE_REQUEST_111_then_H264_TAP_then_DECODER_FIRST_FRAME_then_DISPLAYABLE3"
 fi
