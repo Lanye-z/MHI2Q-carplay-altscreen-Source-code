@@ -112,7 +112,7 @@ APP_RW=0
 mount_system_rw || fail "cannot mount /mnt/system writable"
 SYSTEM_RW=1
 cp "$STARTUP" "$ORIGINAL" || fail "cannot snapshot startup.sh"
-strip_blocks > "$CLEAN" || fail "invalid existing BaseVideo3/Mirror autostart block"
+strip_blocks "$STARTUP" > "$CLEAN" || fail "invalid existing BaseVideo3/Mirror autostart block"
 cat > "$BLOCK" <<'BASEVIDEO3_BOOT'
 # BEGIN ALT111 BASEVIDEO3 AUTOSTART
 if [ -f /mnt/app/root/carplay-altscreen/state/basevideo3.enabled ]; then
