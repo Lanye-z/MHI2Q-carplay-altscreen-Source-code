@@ -126,10 +126,12 @@ jobs:
         run: |
           set -euo pipefail
           JAR=Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar
+          HOOK=Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so
           SIZE="$(wc -c < "$JAR" | tr -d ' ')"
           CKSUM="$(cksum < "$JAR" | awk '{print $1}')"
           SHA="$(sha256sum "$JAR" | awk '{print tolower($1)}')"
-          export SIZE CKSUM SHA
+          HOOK_SHA="$(sha256sum "$HOOK" | awk '{print tolower($1)}')"
+          export SIZE CKSUM SHA HOOK_SHA
 
           cat > Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt <<EOF
           mode=CONTEXT80_READBACK_V1
@@ -142,8 +144,8 @@ jobs:
           jar_size=$SIZE
           jar_cksum=$CKSUM
           jar_sha256=$SHA
-          universal_runtime_sha256=07a96cad6121cfc9fae259d47e6c95142b5e09b7ef3e8cd7a180de009579cb39
-          universal_runtime_policy=PINNED_KNOWN_GOOD_NOT_REBUILT
+          universal_runtime_sha256=$HOOK_SHA
+          universal_runtime_policy=POSTACCEPT_CHILD_PRELOAD_ISOLATED
           EOF
 
           python3 <<'PY'
