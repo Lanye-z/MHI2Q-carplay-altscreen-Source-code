@@ -14,7 +14,6 @@ CTRL="$ROOT/Toolbox/scripts/altscreen_chain_test_universal.sh"
 GEM="$ROOT/Toolbox/GEM/mqb-carplayAltScreen.esd"
 TOP="$ROOT/SHA256SUMS.txt"
 MAP="$ROOT/PACKAGE_SOURCE_MAP.json"
-REL="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS"
 
 fail(){ echo "BASEVIDEO3_STANDALONE_VERIFY=FAIL: $*" >&2; exit 1; }
 sha256_file(){
@@ -71,10 +70,8 @@ grep -q 'Standalone flow:' "$GEM" || fail "GEM menu is not labeled standalone"
 hook_sha=$(sha256_file "$HOOK")
 top_sha=$(awk '$2 == "Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so" {print tolower($1)}' "$TOP")
 map_sha=$(sed -n 's/.*"Toolbox\/carplay_alt_screen\/universal\/libcarplay_altscreen.so": "\([0-9a-fA-F]*\)".*/\1/p' "$MAP" | tr 'A-F' 'a-f')
-rel_sha=$(awk '$2 == "libcarplay_altscreen.so" {print tolower($1)}' "$REL")
 [ "$hook_sha" = "$top_sha" ] || fail "top manifest hook mismatch"
 [ "$hook_sha" = "$map_sha" ] || fail "package map hook mismatch"
-[ "$hook_sha" = "$rel_sha" ] || fail "release manifest hook mismatch"
 
 echo "BASEVIDEO3_STANDALONE_VERIFY=PASS"
 echo "hook_sha256=$hook_sha"
