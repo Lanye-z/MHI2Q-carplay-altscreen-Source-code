@@ -31,22 +31,29 @@ check_marker() {
 }
 
 for marker in \
-  'context80-readback-v1-diag2' \
-  'GATE PASS trigger=PHONE_REQUEST_111' \
-  'WINDOW_MANAGER_CONTEXT event observer ready' \
-  'target CREATE' \
-  'target FIRST_POST' \
-  'screen_read_window' \
-  'SOURCE_READBACK_RC=OK' \
-  'SOURCE_PIXEL_VALID=%s' \
-  'SINK_TEST_GRID_PRESENT=YES' \
-  'GLES_PRESENT=YES'
+  'carplay-private111-direct-display-v1' \
+  'PHASE=H264_SHM_ATTACHED' \
+  'PHASE=H264_STREAM_VALID' \
+  'PHASE=DECODER_FIRST_FRAME' \
+  'PHASE=NV12_CSC_READY' \
+  'PHASE=DISPLAYABLE3_FIRST_PRESENT' \
+  'PHASE=DIRECT111_ACTIVE' \
+  'window58_readback=0'
 do
   check_marker "$marker" || {
-    echo "ERROR: built sidecar is missing V4 marker: $marker" >&2
+    echo "ERROR: built sidecar is missing direct111 marker: $marker" >&2
     exit 1
   }
 done
 
-echo "MIRROR_BUILD_ID=context80-readback-v1-diag2"
+if strings "$BIN" | grep -Fq 'screen_read_window'; then
+  echo "ERROR: Window58 readback leaked into direct-display binary" >&2
+  exit 1
+fi
+if strings "$BIN" | grep -Fq 'WINDOW_MANAGER_CONTEXT event observer ready'; then
+  echo "ERROR: Window58 event observer leaked into direct-display binary" >&2
+  exit 1
+fi
+
+echo "MIRROR_BUILD_ID=carplay-private111-direct-display-v1"
 echo "MIRROR_BUILD=PASS output=$ROOT/$BIN"
