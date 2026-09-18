@@ -1,7 +1,8 @@
 #!/bin/sh
-# CarPlay Second Screen / Context80 Readback V1 INSTALL.
-# Installs type111 Window58 producer + integrated readback/GLES displayable3
-# sidecar + Java80 HMI control plane. RGI98 native renderer is not installed.
+# CarPlay private111 Direct Display V1 INSTALL.
+# Installs the type111 control/data plane, H264/decoded SHM bridge,
+# displayable3 GLES sidecar, and Java80 HMI control plane.
+# Window58 readback and RGI98 native renderer are not used by the sidecar.
 set -u
 
 BASE="$0"
@@ -129,12 +130,14 @@ jar_valid "$JAR_SOURCE" || {
     exit 1
 }
 
-echo "PACKAGE_MODE=CARPLAY_SECOND_SCREEN_CONTEXT80_READBACK_V1"
-echo "NATIVE_SOURCE=private111_stock_omx_cscreenrender source_window=58"
-echo "PIXEL_BRIDGE=screen_read_window+BGRA+GLES"
+echo "PACKAGE_MODE=CARPLAY_PRIVATE111_DIRECT_DISPLAY_V1"
+echo "NATIVE_SOURCE=private111_ScreenStreamProcessData h264_shm=/carplay111_h264"
+echo "DECODER_BACKEND=stock_omx_buffer_tap_v1 decoded_shm=/carplay111_decoded"
+echo "PIXEL_BRIDGE=NV12_to_existing_MMI_GLES"
 echo "PIXEL_TARGET=displayable3"
 echo "HMI_CONTEXT=ctx80"
-echo "READBACK_SIDECAR=INCLUDED"
+echo "WINDOW58_READBACK=DISABLED"
+echo "DIRECT_DISPLAY_SIDECAR=INCLUDED"
 echo "RGI98_NATIVE_RENDERER=NOT_INCLUDED"
 
 backup_original_jar || exit 1
@@ -142,8 +145,8 @@ backup_original_jar || exit 1
 CHAIN_RC=$?
 [ "$CHAIN_RC" -eq 0 ] || exit "$CHAIN_RC"
 MIRROR_RUNTIME="$DEVICE_ROOT/mnt/app/root/carplay-altscreen/bin/mirror"
-[ -x "$MIRROR_RUNTIME/carplay-alt111-mirror-display" ] || { echo "FAIL: integrated readback binary was not staged"; exit 1; }
-[ -x "$MIRROR_RUNTIME/start_vehicle.sh" ] || { echo "FAIL: integrated readback launcher was not staged"; exit 1; }
+[ -x "$MIRROR_RUNTIME/carplay-alt111-mirror-display" ] || { echo "FAIL: integrated direct-display binary was not staged"; exit 1; }
+[ -x "$MIRROR_RUNTIME/start_vehicle.sh" ] || { echo "FAIL: integrated direct-display launcher was not staged"; exit 1; }
 
 APP_RW=0
 rollback(){
@@ -177,5 +180,5 @@ APP_RW=0
 
 echo "HMI_CONTROL_PLANE=INSTALLED target=/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar size=$EXPECTED_SIZE cksum=$EXPECTED_CKSUM"
 echo "HMI_CONTRACT=JAVA80 ctx80=98,101,102,3 basevideo=3"
-echo "INSTALL=PASS integrated=AltScreen+Window58Readback+Displayable3+Java80 reboot_required=YES"
+echo "INSTALL=PASS integrated=AltScreen+H264Tap+DecoderTap+Displayable3+Java80 reboot_required=YES"
 exit 0
