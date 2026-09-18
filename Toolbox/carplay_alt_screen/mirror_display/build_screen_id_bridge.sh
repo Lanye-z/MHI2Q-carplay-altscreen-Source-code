@@ -21,7 +21,7 @@ $CC --target=$TARGET -fuse-ld=lld -nostdlib -shared   -Wl,--build-id=none,-sonam
 cat > "$OUT/exports.map" <<'MAP'
 {
   global:
-    screen_get_window_property_iv;
+    dlsym;
   local:
     *;
 };
@@ -41,8 +41,16 @@ if command -v "$RE" >/dev/null 2>&1; then
     echo "ERROR: unexpected DT_NEEDED: $needed" >&2
     exit 1
   }
+  exports=$("$RE" --dyn-syms -W "$OUT/libscreen_id_bridge.so" |
+    awk '$4=="FUNC" && $5=="GLOBAL" && $7!="UND" {print $8}' | sort -u)
+  [ "$exports" = "dlsym" ] || {
+    echo "ERROR: bridge export surface drift: $exports" >&2
+    exit 1
+  }
 fi
 
+strings "$OUT/libscreen_id_bridge.so" | grep -Fq 'SCREEN_ID_DLSYM_BRIDGE=READY'
 strings "$OUT/libscreen_id_bridge.so" | grep -Fq 'WINDOW58_ID_BRIDGE'
 strings "$OUT/libscreen_id_bridge.so" | grep -Fq 'screen_get_window_property_cv'
-echo "SCREEN_ID_BRIDGE_BUILD=PASS output=$OUT/libscreen_id_bridge.so"
+strings "$OUT/libscreen_id_bridge.so" | grep -Fq 'ID_STRING(20)'
+echo "SCREEN_ID_BRIDGE_BUILD=PASS mode=dlsym-sidecar-only output=$OUT/libscreen_id_bridge.so"

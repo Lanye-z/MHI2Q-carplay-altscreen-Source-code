@@ -92,12 +92,12 @@ else
 fi
 
 WINDOW58_ID_OK=0
-if [ -f "$MIRROR_LOG" ] && grep -q "WINDOW58_ID_BRIDGE .*id_string='58'.*target=YES" "$MIRROR_LOG" 2>/dev/null; then
+if [ -f "$MIRROR_LOG" ] && grep -q "WINDOW58_ID_BRIDGE .*id_string='58'.*target=YES.*match=ID_STRING" "$MIRROR_LOG" 2>/dev/null; then
     WINDOW58_ID_OK=1
-    ID_LINE=$(grep "WINDOW58_ID_BRIDGE .*id_string='58'.*target=YES" "$MIRROR_LOG" 2>/dev/null | tail -n 1)
-    echo "WINDOW58_IDENTITY=STRING_MATCH $ID_LINE"
+    ID_LINE=$(grep "WINDOW58_ID_BRIDGE .*id_string='58'.*target=YES.*match=ID_STRING" "$MIRROR_LOG" 2>/dev/null | tail -n 1)
+    echo "WINDOW58_IDENTITY=ID_STRING_MATCH $ID_LINE"
 else
-    echo "WINDOW58_IDENTITY=PENDING expected_id_string=58 numeric_id=diagnostic_only"
+    echo "WINDOW58_IDENTITY=PENDING expected_id_string=58 property=SCREEN_PROPERTY_ID_STRING numeric_id=diagnostic_only"
 fi
 
 [ -f "$STARTED" ] && echo "JAVA_CONTROLLER=STARTED" || echo "JAVA_CONTROLLER=NOT_STARTED"

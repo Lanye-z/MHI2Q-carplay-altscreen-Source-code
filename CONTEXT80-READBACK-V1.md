@@ -34,7 +34,7 @@ completion is reported:
 ```text
 Window58 event
   -> numeric QNX ID (diagnostic only)
-  -> SCREEN_PROPERTY_ID string == "58" (authoritative)
+  -> SCREEN_PROPERTY_ID_STRING == "58" (authoritative owner identity)
   -> screen_read_window
   -> GLES first present
   -> Java ctx80 request
@@ -43,7 +43,7 @@ Window58 event
 ```
 
 The promoted V4 sidecar ELF remains unchanged. A small sidecar-only
-`libscreen_id_bridge.so` adapts its legacy integer-ID query to the verified
-string identity without loading into dio_manager. The CarPlay-facing universal
+`libscreen_id_bridge.so` adapts its legacy integer-ID query to the owner-defined
+SCREEN_PROPERTY_ID_STRING identity without loading into dio_manager. The CarPlay-facing universal
 hook remains pinned to the known-good SHA-256
 `07a96cad6121cfc9fae259d47e6c95142b5e09b7ef3e8cd7a180de009579cb39`.

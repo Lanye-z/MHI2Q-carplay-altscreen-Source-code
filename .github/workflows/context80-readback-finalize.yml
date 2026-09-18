@@ -42,8 +42,10 @@ jobs:
           sh Toolbox/carplay_alt_screen/mirror_display/build_screen_id_bridge.sh "$out"
           test -s "$out/libscreen_id_bridge.so"
           cp "$out/libscreen_id_bridge.so" Toolbox/carplay_alt_screen/mirror_display/release/libscreen_id_bridge.so
+          strings Toolbox/carplay_alt_screen/mirror_display/release/libscreen_id_bridge.so | grep -Fq 'SCREEN_ID_DLSYM_BRIDGE=READY'
           strings Toolbox/carplay_alt_screen/mirror_display/release/libscreen_id_bridge.so | grep -Fq 'WINDOW58_ID_BRIDGE'
-          strings Toolbox/carplay_alt_screen/mirror_display/release/libscreen_id_bridge.so | grep -Fq 'screen_get_window_property_cv'
+          strings Toolbox/carplay_alt_screen/mirror_display/release/libscreen_id_bridge.so | grep -Fq 'ID_STRING(20)'
+          arm-linux-gnueabihf-readelf --dyn-syms -W Toolbox/carplay_alt_screen/mirror_display/release/libscreen_id_bridge.so | grep -w 'dlsym'
 
       - name: Rebuild only ClusterStateController against ABI stub
         run: |

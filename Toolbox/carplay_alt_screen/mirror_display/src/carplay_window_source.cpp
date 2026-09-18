@@ -24,6 +24,7 @@
 #define SCREEN_EVENT_POST 9
 
 #define SCREEN_PROPERTY_BUFFER_SIZE 5
+#define SCREEN_PROPERTY_ID_STRING 20
 #define SCREEN_PROPERTY_FORMAT 14
 #define SCREEN_PROPERTY_POINTER 34
 #define SCREEN_PROPERTY_RENDER_BUFFERS 37
@@ -383,7 +384,7 @@ bool CarPlayWindowSource::pump_event(unsigned long long timeout_ns) {
     if (get_window_cv_) {
         errno = 0;
         id_string_rc = get_window_cv_(
-            event_window, SCREEN_PROPERTY_ID,
+            event_window, SCREEN_PROPERTY_ID_STRING,
             (int)sizeof(id_string) - 1, id_string);
         id_string_errno = errno;
     }
@@ -408,7 +409,7 @@ bool CarPlayWindowSource::pump_event(unsigned long long timeout_ns) {
                 "numeric_id_rc=%d numeric_id=%d numeric_id_errno=%d "
                 "id_string_rc=%d id_string='%s' id_string_errno=%d "
                 "size_rc=%d size=%dx%d size_errno=%d "
-                "target=%s match=%s%s\n",
+                "target=%s match=%s id_string_property=20%s\n",
                 event_count_,
                 type,
                 event_window,

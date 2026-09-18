@@ -40,10 +40,14 @@ if binary_strings "$MIRROR" | grep -Fq '/eso/bin/apps/dmdt sc 1 76'; then
 fi
 
 [ -s "$BRIDGE" ] || fail "Window58 ID-string bridge release artifact missing"
+binary_strings "$BRIDGE" | grep -Fq 'SCREEN_ID_DLSYM_BRIDGE=READY' ||
+  fail "ID bridge does not intercept the V4 dlsym lookup"
 binary_strings "$BRIDGE" | grep -Fq 'WINDOW58_ID_BRIDGE' ||
-  fail "ID bridge marker missing"
+  fail "ID bridge target marker missing"
 binary_strings "$BRIDGE" | grep -Fq 'screen_get_window_property_cv' ||
-  fail "ID bridge does not read Screen string identity"
+  fail "ID bridge does not read Screen owner identity"
+binary_strings "$BRIDGE" | grep -Fq 'ID_STRING(20)' ||
+  fail "ID bridge is not using SCREEN_PROPERTY_ID_STRING=20"
 grep -Fq 'LD_PRELOAD="$ID_BRIDGE" "$BIN"' "$MIRROR_START" ||
   fail "sidecar launcher does not isolate/load ID bridge"
 grep -Fq 'SIDECAR_PRELOAD_POLICY=ISOLATED' "$MIRROR_START" ||
@@ -51,6 +55,8 @@ grep -Fq 'SIDECAR_PRELOAD_POLICY=ISOLATED' "$MIRROR_START" ||
 
 grep -Fq 'get_window_cv_' "$SOURCE_H" ||
   fail "vendored Window58 source lacks character-property accessor"
+grep -Fq 'SCREEN_PROPERTY_ID_STRING 20' "$SOURCE" ||
+  fail "vendored Window58 source does not use owner-defined ID_STRING"
 grep -Fq 'id_string' "$SOURCE" ||
   fail "vendored Window58 source lacks string identity diagnostics"
 grep -Fq 'match_basis' "$SOURCE" ||
@@ -84,7 +90,7 @@ grep -q 'meaning=destination_first_successful_gles_present' "$START" ||
   fail "destination-ready semantics missing"
 grep -Fq 'JAVA_CTX80_ACTUAL=80 source=IDisplayManager.getCurrentContextID' "$STATUS" ||
   fail "STATUS does not require actual ctx80 readback"
-grep -Fq 'WINDOW58_IDENTITY=STRING_MATCH' "$STATUS" ||
+grep -Fq 'WINDOW58_IDENTITY=ID_STRING_MATCH' "$STATUS" ||
   fail "STATUS does not expose Window58 string identity"
 grep -q 'PHYSICAL_ROUTE_READY=SOFTWARE_CHAIN_COMPLETE' "$STATUS" ||
   fail "split route completion gate missing"
@@ -95,7 +101,7 @@ grep -q 'libscreen_id_bridge.so' "$ROUTER" ||
 
 echo "CONTEXT80_READBACK_VERIFY=PASS"
 echo "carplay_runtime_hook=PINNED_KNOWN_GOOD sha256=$PINNED_HOOK_SHA"
-echo "source=Window58 identity=ID_STRING_PRIMARY"
+echo "source=Window58 identity=SCREEN_PROPERTY_ID_STRING_20_PRIMARY"
 echo "capture=screen_read_window"
 echo "sink=displayable3_gles"
 echo "context_owner=JAVA80 actual_readback=REQUIRED"

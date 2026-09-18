@@ -38,7 +38,7 @@ NATIVE_DISPLAY_MODE markers.
 Expected STATUS progression:
 ```text
 NATIVE_FRAME_READY=YES
-WINDOW58_IDENTITY=STRING_MATCH ... id_string='58' ...
+WINDOW58_IDENTITY=ID_STRING_MATCH ... id_string='58' ...
 DEST_FRAME_READY=YES
 READBACK_SIDECAR=RUNNING
 JAVA_CTX80_REQUEST=YES
@@ -46,8 +46,8 @@ JAVA_CTX80_ACTUAL=80 source=IDisplayManager.getCurrentContextID
 PHYSICAL_ROUTE_READY=SOFTWARE_CHAIN_COMPLETE
 ```
 
-The QNX numeric window ID is diagnostic only. Window58 matching is based on the
-Screen character identity `"58"`. The ID compatibility helper is loaded only
+The QNX-generated numeric `SCREEN_PROPERTY_ID` is diagnostic only. Window58
+matching is based on the owner-defined `SCREEN_PROPERTY_ID_STRING="58"`. The ID compatibility helper is loaded only
 inside the readback sidecar; it is never added to the CarPlay/dio_manager preload.
 
 The last line still requires visual confirmation on the VC.
