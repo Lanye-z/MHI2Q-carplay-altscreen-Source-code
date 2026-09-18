@@ -15,6 +15,7 @@ ROUTER="$ROOT/Toolbox/scripts/altscreen_chain_test.sh"
 NATIVE="$ROOT/Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c"
 HEADER="$ROOT/Toolbox/carplay_alt_screen/src/p1404_cockpit_native.h"
 HOOK_SOURCE="$ROOT/Toolbox/carplay_alt_screen/src/altscreen_hook.c"
+PRIVATE111_SOURCE="$ROOT/Toolbox/carplay_alt_screen/src/p1404_private111_backend.c"
 
 fail(){ echo "CONTEXT80_READBACK_VERIFY=FAIL: $*" >&2; exit 1; }
 binary_strings(){ strings "$1" 2>/dev/null || grep -a -o '[[:print:]][[:print:]]*' "$1"; }
@@ -39,6 +40,25 @@ grep -Fq 'if (!process_allowed || !p1404_probe_stack())' "$HOOK_SOURCE" ||
 if grep -Fq '(!process_allowed && !force_start)' "$HOOK_SOURCE"; then
   fail "FORCE_START can still bypass process identity"
 fi
+
+python3 - "$PRIVATE111_SOURCE" <<'PY'
+from pathlib import Path
+import sys
+text = Path(sys.argv[1]).read_text()
+accept = text.index('PHASE=STREAM_111_ACCEPT_RETURN')
+net = text.index('be.net_socket_create_native(&net_socket, native_fd)', accept)
+start = text.index('PHASE=STREAM_111_START_CALL', net)
+if 'pair_close_firewall(p, "listener_closed")' in text[accept:net]:
+    raise SystemExit('post-accept path still performs synchronous PF cleanup')
+if not (accept < net < start):
+    raise SystemExit('Private111 checkpoint ordering drift')
+teardown = text.index('static int teardown_private')
+delete = text.index('if (be.del) be.del(alt_screen_session);', teardown)
+fw = text.index('pair_close_firewall(p, "teardown_post_session")', delete)
+if not delete < fw:
+    raise SystemExit('PF cleanup must remain after private ScreenSession delete')
+print('PRIVATE111_POSTACCEPT_GATE=PASS accept_to_netsocket_pf_free=1 teardown_pf_after_delete=1')
+PY
 binary_strings "$HOOK" | grep -Fq 'displayable=58' ||
   fail "runtime hook is not the Window58 producer"
 
@@ -114,7 +134,7 @@ grep -q 'libscreen_id_bridge.so' "$ROUTER" ||
   fail "router does not stage the ID bridge"
 
 echo "CONTEXT80_READBACK_VERIFY=PASS"
-echo "carplay_runtime_hook=POSTACCEPT_CHILD_PRELOAD_ISOLATED sha256=$(sha256_file "$HOOK")"
+echo "carplay_runtime_hook=PRIVATE111_POSTACCEPT_NONBLOCKING_PF_CHILD_PRELOAD_ISOLATED sha256=$(sha256_file "$HOOK")"
 echo "source=Window58 identity=SCREEN_PROPERTY_ID_STRING_20_PRIMARY"
 echo "capture=screen_read_window"
 echo "sink=displayable3_gles"
