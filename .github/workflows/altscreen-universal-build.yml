@@ -1,8 +1,8 @@
-name: AltScreen Native Direct QNX Build
+name: AltScreen BaseVideo3 Visible Probe QNX Build
 
 on:
   push:
-    branches: ['test/native-direct-route-v1']
+    branches: ['test/carplay-basevideo3-native-v1-visible-probe']
     paths:
       - 'Toolbox/carplay_alt_screen/src/**'
       - 'Toolbox/carplay_alt_screen/tests/validate_qnx_load_layout.py'
@@ -11,7 +11,7 @@ on:
       - 'Toolbox/scripts/altscreen_chain_test_universal.sh'
       - 'Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh'
       - 'Toolbox/scripts/status_mmi_cockpit_carplay_test.sh'
-      - 'VERIFY-NATIVE-DIRECT-RELEASE.sh'
+      - 'VERIFY-BASEVIDEO3-VISIBLE-PROBE.sh'
       - '.github/workflows/altscreen-universal-build.yml'
   workflow_dispatch:
 
@@ -19,7 +19,7 @@ permissions:
   contents: write
 
 jobs:
-  qnx-native-direct:
+  qnx-basevideo3-visible:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,35 +29,36 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends binutils-arm-linux-gnueabihf python3-pyelftools
 
-      - name: Build native-direct universal hook
+      - name: Build BaseVideo3 visible-probe universal hook
         run: |
           set -euo pipefail
-          out="$RUNNER_TEMP/altscreen-native-direct"
+          out="$RUNNER_TEMP/altscreen-basevideo3-visible"
           sh Toolbox/carplay_alt_screen/build_source_snapshot.sh universal "$out"
           test -s "$out/libcarplay_altscreen.so"
-          strings "$out/libcarplay_altscreen.so" | grep -q 'PHASE=NATIVE_111_MANAGED_WINDOW'
-          strings "$out/libcarplay_altscreen.so" | grep -q 'PHASE=NATIVE_111_ROUTE_ACTIVATE_RESULT'
-          strings "$out/libcarplay_altscreen.so" | grep -q 'PHASE=NATIVE_111_COCKPIT_ACTIVE'
+          strings "$out/libcarplay_altscreen.so" | grep -q 'PHASE=BASEVIDEO3_NATIVE_POLICY'
+          strings "$out/libcarplay_altscreen.so" | grep -q 'PHASE=BASEVIDEO3_FORCE_VISIBLE'
+          strings "$out/libcarplay_altscreen.so" | grep -q 'PHASE=BASEVIDEO3_READY'
           strings "$out/libcarplay_altscreen.so" | grep -q 'screen_manage_window'
+          strings "$out/libcarplay_altscreen.so" | grep -q '/tmp/mmi-mirror-basevideo.ready'
           if strings "$out/libcarplay_altscreen.so" | grep -q 'identity_override=DISABLED'; then
-            echo 'helper-isolation runtime leaked into native-direct branch' >&2
+            echo 'helper-isolation runtime leaked into BaseVideo3 visible-probe branch' >&2
             exit 1
           fi
           arm-linux-gnueabihf-readelf -d "$out/libcarplay_altscreen.so" | grep -q 'libc.so.3'
           arm-linux-gnueabihf-readelf -d "$out/libcarplay_altscreen.so" | grep -q 'libm.so.2'
 
-      - name: Upload native-direct artifact
+      - name: Upload BaseVideo3 visible-probe artifact
         uses: actions/upload-artifact@v4
         with:
-          name: altscreen-native-direct-v1
+          name: altscreen-basevideo3-native-v1-visible-probe
           path: |
-            ${{ runner.temp }}/altscreen-native-direct/libcarplay_altscreen.so
-            ${{ runner.temp }}/altscreen-native-direct/BUILD_INFO.txt
-            ${{ runner.temp }}/altscreen-native-direct/MANIFEST.txt
+            ${{ runner.temp }}/altscreen-basevideo3-visible/libcarplay_altscreen.so
+            ${{ runner.temp }}/altscreen-basevideo3-visible/BUILD_INFO.txt
+            ${{ runner.temp }}/altscreen-basevideo3-visible/MANIFEST.txt
           if-no-files-found: error
 
-      - name: Promote native-direct runtime to experiment branch
-        if: github.ref == 'refs/heads/test/native-direct-route-v1'
+      - name: Promote BaseVideo3 visible-probe runtime to experiment branch
+        if: github.ref == 'refs/heads/test/carplay-basevideo3-native-v1-visible-probe'
         run: |
           set -euo pipefail
           out="$RUNNER_TEMP/altscreen-native-direct"
@@ -104,12 +105,12 @@ jobs:
           relsums.write_text("\n".join(lines) + "\n")
           PY
 
-          sh VERIFY-NATIVE-DIRECT-RELEASE.sh
+          sh VERIFY-BASEVIDEO3-VISIBLE-PROBE.sh
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "$dst" PACKAGE_SOURCE_MAP.json SHA256SUMS.txt                   Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS
           if ! git diff --cached --quiet; then
-            git commit -m "build(altscreen): promote native-direct V1 runtime [skip ci]"
-            git push origin HEAD:test/native-direct-route-v1
+            git commit -m "build(altscreen): promote BaseVideo3 visible-probe runtime [skip ci]"
+            git push origin HEAD:test/carplay-basevideo3-native-v1-visible-probe
           fi
