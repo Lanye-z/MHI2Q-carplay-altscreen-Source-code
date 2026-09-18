@@ -1,10 +1,11 @@
 /*
- * Strict private-111 cockpit output routing.
+ * private111 stock-decoder compatibility adapter.
  *
- * The P1404/K1004 stock OMX decoder already owns a CScreenRender instance for
- * every ScreenStream.  This adapter associates only the independently-created
- * type-111 ScreenStream with displayable 58 and leaves MainScreen type 110 on
- * the stock displayable 59 path.
+ * Direct-display V1 exports decoded private NV12 before stock CScreenRender and
+ * sends it to the separate displayable3/Context80 sidecar.  The legacy
+ * displayable58 binding remains only to keep stock OMX lifecycle intact during
+ * this fallback stage; Window58 is not read or used as the direct display
+ * source. MainScreen type110 remains on the untouched stock path.
  */
 #ifndef P1404_COCKPIT_NATIVE_H
 #define P1404_COCKPIT_NATIVE_H
