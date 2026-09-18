@@ -15,12 +15,34 @@ file "$BIN" 2>/dev/null || true
 ls -lh "$BIN"
 READELF="$QNX_HOST/usr/bin/ntoarmv7-readelf"
 if [ -x "$READELF" ]; then
-  if "$READELF" -d "$BIN" | grep -q 'libstdc++'; then echo "ERROR: unexpected dynamic libstdc++ dependency" >&2; exit 1; fi
+  if "$READELF" -d "$BIN" | grep -q 'libstdc++'; then
+    echo "ERROR: unexpected dynamic libstdc++ dependency" >&2
+    exit 1
+  fi
 fi
-if command -v strings >/dev/null 2>&1; then
-  strings "$BIN" | grep -Fq 'window58-wm-context-v3' || { echo 'ERROR: built sidecar is missing build id window58-wm-context-v3' >&2; exit 1; }
-else
-  grep -a -Fq 'window58-wm-context-v3' "$BIN" || { echo 'ERROR: built sidecar is missing build id window58-wm-context-v3' >&2; exit 1; }
-fi
-echo "MIRROR_BUILD_ID=window58-wm-context-v3"
+
+check_marker() {
+  marker=$1
+  if command -v strings >/dev/null 2>&1; then
+    strings "$BIN" | grep -Fq "$marker"
+  else
+    grep -a -Fq "$marker" "$BIN"
+  fi
+}
+
+for marker in \
+  'window58-wm-event-v4' \
+  'GATE PASS trigger=PHONE_REQUEST_111' \
+  'WINDOW_MANAGER_CONTEXT event observer ready' \
+  'target CREATE' \
+  'target FIRST_POST' \
+  'screen_read_window'
+do
+  check_marker "$marker" || {
+    echo "ERROR: built sidecar is missing V4 marker: $marker" >&2
+    exit 1
+  }
+done
+
+echo "MIRROR_BUILD_ID=window58-wm-event-v4"
 echo "MIRROR_BUILD=PASS output=$ROOT/$BIN"
