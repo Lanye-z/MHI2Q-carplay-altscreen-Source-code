@@ -301,8 +301,8 @@ int main(int argc, char **argv) {
 
     fprintf(stderr,
             "direct111: PHASE=BUILD id=%s "
-            "pipeline=private111-h264-tap-decoder-displayable3-context80 "
-            "decoder_backend=stock-omx-tap-v1 "
+            "target_pipeline=private111->H264_TAP->decoder->displayable3->Context80 "
+            "v1_decoder_backend=stock-omx-tap compatibility_parallel_to_h264_tap=1 "
             "window58_readback=0 screen_manage_window_sidecar=0\n",
             kBuildId);
 
@@ -399,8 +399,8 @@ int main(int argc, char **argv) {
 
     fprintf(stderr,
             "direct111: PHASE=DIRECT111_ACTIVE "
-            "pipeline=private111->H264_TAP->decoder->displayable3->Context80 "
-            "decoder_backend=stock-omx-tap-v1 "
+            "target_pipeline=private111->H264_TAP->decoder->displayable3->Context80 "
+            "v1_decoder_backend=stock-omx-tap h264_tap_independent=1 "
             "window58_readback=0 target_fps=%u\n",
             kTargetFps);
 
