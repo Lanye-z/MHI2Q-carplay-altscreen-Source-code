@@ -22,8 +22,19 @@ sha256_file(){
 }
 binary_strings(){ strings "$1" 2>/dev/null || grep -a -o '[[:print:]][[:print:]]*' "$1"; }
 
-for s in "$INSTALL" "$START" "$STATUS" "$RESTORE" "$CTRL"; do
+for s in "$INSTALL" "$START" "$STATUS" "$RESTORE" "$CTRL" \
+  "$ROOT/Toolbox/scripts/finish_mmi_cockpit_carplay_test.sh" \
+  "$ROOT/Toolbox/scripts/start_mmi_cockpit_carplay_test.sh" \
+  "$ROOT/Toolbox/scripts/force_start_mmi_cockpit_carplay_rx_test.sh"; do
     sh -n "$s" || fail "shell syntax: $s"
+done
+
+for s in "$START" "$STATUS" "$RESTORE" \
+  "$ROOT/Toolbox/scripts/finish_mmi_cockpit_carplay_test.sh" \
+  "$ROOT/Toolbox/scripts/start_mmi_cockpit_carplay_test.sh" \
+  "$ROOT/Toolbox/scripts/force_start_mmi_cockpit_carplay_rx_test.sh"; do
+    grep -Fq '[ "$#" -gt 0 ]' "$s" ||
+        fail "QNX empty-argv forwarding guard missing: $s"
 done
 
 [ -s "$HOOK" ] || fail "QNX hook missing"
