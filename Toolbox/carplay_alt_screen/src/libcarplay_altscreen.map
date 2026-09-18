@@ -1,0 +1,32 @@
+# libcarplay_altscreen.map - preload surface.
+#
+# LD_PRELOAD puts this object in front of everything, so the only names we make
+# global are only the AirPlay control/bearer wrappers, the pre-config
+# ScreenStreamStart handoff, and the two exact stock CScreenRender methods needed
+# to isolate private type 111 on displayable 58.
+# Every internal helper stays local, which removes any chance of shadowing an
+# unrelated symbol inside dio_manager.
+{
+    global:
+        AirPlayReceiverServerPlatformCopyProperty;
+        AirPlayReceiverSessionPlatformCopyProperty;
+        AirPlayReceiverSessionScreen_CopyDisplaysInfo;
+        AirPlayReceiverSessionPlatformControl;
+        AirPlayReceiverSessionSetup;
+        AirPlayReceiverSessionStart;
+        AirPlayReceiverSessionTearDown;
+        ScreenStreamProcessData;
+        ScreenCopyMain;
+        ScreenStreamCreate;
+        ScreenStreamStart;
+        screen_create_window_group;
+        screen_create_window_buffers;
+        _ZN3dio13CScreenRender6configERKNS_16st_screen_configE;
+        _ZN3dio13CScreenRender6renderEPh;
+        write;
+        send;
+        recv;
+        close;
+    local:
+        *;
+};

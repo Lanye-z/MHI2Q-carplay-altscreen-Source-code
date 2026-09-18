@@ -1,0 +1,28 @@
+{
+  global:
+    AirPlayReceiverServerCreate;
+    AirPlayReceiverServerPlatformCopyProperty;
+    AirPlayReceiverSessionPlatformControl;
+    AirPlayReceiverSessionSetup;
+    AirPlayReceiverSessionStart;
+    AirPlayReceiverSessionTearDown;
+    AirPlayReceiverSessionPlatformCopyProperty;
+    AirPlayReceiverSessionScreen_CopyDisplaysInfo;
+    ScreenCopyMain;
+    ScreenCreate;
+    ScreenStreamCreate;
+    ScreenStreamProcessData;
+    ScreenStreamStart;
+    screen_create_window_group;
+    screen_create_window_buffers;
+    _ZN3dio13CScreenRender6configERKNS_16st_screen_configE;
+    _ZN3dio13CScreenRender6renderEPh;
+    xpen64;
+    xead;
+    fxead;
+    fxrite;
+    fxlose;
+    xrite;
+    xlose;
+  local: *;
+};

@@ -1,0 +1,43 @@
+name: AltScreen Universal QNX Build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Toolbox/carplay_alt_screen/src/**'
+      - 'Toolbox/carplay_alt_screen/build_source_snapshot.sh'
+      - 'BUILD-UNIVERSAL-QNX.sh'
+      - '.github/workflows/altscreen-universal-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qnx-universal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ARM ELF inspection tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends binutils-arm-linux-gnueabihf python3-pyelftools
+      - name: Build vendored universal hook
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/altscreen-universal"
+          sh Toolbox/carplay_alt_screen/build_source_snapshot.sh universal "$out"
+          test -s "$out/libcarplay_altscreen.so"
+          strings "$out/libcarplay_altscreen.so" | grep -q 'identity_override=DISABLED'
+          strings "$out/libcarplay_altscreen.so" | grep -q '/mnt/app/root/carplay-altscreen/lib/libcarplay_altscreen.so'
+          arm-linux-gnueabihf-readelf -d "$out/libcarplay_altscreen.so" | grep -q 'libc.so.3'
+          arm-linux-gnueabihf-readelf -d "$out/libcarplay_altscreen.so" | grep -q 'libm.so.2'
+      - name: Upload universal hook artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: altscreen-universal-qnx-main
+          path: |
+            ${{ runner.temp }}/altscreen-universal/libcarplay_altscreen.so
+            ${{ runner.temp }}/altscreen-universal/BUILD_INFO.txt
+            ${{ runner.temp }}/altscreen-universal/MANIFEST.txt
+          if-no-files-found: error

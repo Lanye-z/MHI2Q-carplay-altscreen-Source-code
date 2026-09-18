@@ -43,6 +43,24 @@ Toolbox/carplay_alt_screen/mirror_display/build/carplay-alt111-mirror-display
 
 A successful build verifies that the ELF contains `window58-wm-context-v3`. If your SDK is installed elsewhere, provide `QNX_HOST` and `QNX_TARGET` before running the script.
 
+## Vendored universal-hook source
+
+The universal hook source is now also vendored directly in this repository at `Toolbox/carplay_alt_screen/src/`. It was copied from the authoritative development tree as a source snapshot, then the helper-process isolation fix was applied **here in `Lanye-z/altscreen-test`**. No Git submodule or write access to the development repository is required for future edits.
+
+Build locally with:
+
+```sh
+./BUILD-UNIVERSAL-QNX.sh
+```
+
+or:
+
+```sh
+Toolbox/carplay_alt_screen/build_source_snapshot.sh universal
+```
+
+The generated binary is written under `Toolbox/carplay_alt_screen/dev-build/universal/` unless another output directory is supplied. Checked-in vehicle runtime promotion remains a separate reviewed step.
+
 ## Universal hook runtime: 2026-09-18 helper isolation fix
 
 The checked-in universal runtime `Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so` was rebuilt from the reviewed AltScreen development source after the in-car Stream 111 regression where firewall helper processes inherited the preload and re-entered hook initialization.

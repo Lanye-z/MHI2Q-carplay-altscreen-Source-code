@@ -18,11 +18,20 @@ case "${1:-}" in
     echo "MIRROR_BUILD=PASS output=$OUT/carplay-alt111-mirror-display"
     ;;
   hook|universal)
-    fail "this ZIP self-contained source bundle currently covers the Mirror sidecar; the installed universal hook remains the checked-in reviewed runtime artifact"
+    SRC="$ROOT/src"
+    [ -f "$SRC/altscreen_hook.c" ] || fail "vendored universal-hook source is missing"
+    [ -x "$SRC/build_qnx_arm.sh" ] || fail "universal-hook build script is missing or not executable"
+    OUT="${2:-$OUTROOT/universal}"
+    mkdir -p "$OUT"
+    /bin/sh "$SRC/build_qnx_arm.sh" "$OUT"
+    BIN="$OUT/libcarplay_altscreen.so"
+    [ -s "$BIN" ] || fail "universal hook build completed without expected binary: $BIN"
+    echo "UNIVERSAL_BUILD=PASS output=$BIN"
     ;;
   *)
     echo "usage: $0 mirror [output-dir]" >&2
-    echo "or simply run: ./BUILD-MIRROR-QNX.sh from repository root" >&2
+    echo "       $0 universal [output-dir]" >&2
+    echo "or run ./BUILD-MIRROR-QNX.sh / ./BUILD-UNIVERSAL-QNX.sh from repository root" >&2
     exit 2
     ;;
 esac
