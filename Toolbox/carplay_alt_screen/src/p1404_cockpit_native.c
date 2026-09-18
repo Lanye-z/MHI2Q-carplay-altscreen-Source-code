@@ -22,6 +22,7 @@
 #include "altscreen_core.h"
 #include "altscreen_paths.h"
 #include "p1404_observe.h"
+#include "private111_direct_tap.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -987,6 +988,7 @@ void p1404_cockpit_native_detach(void *receiver, void *stream) {
         ++slot->generation;
     }
     native_unlock();
+    if (generation) p111_direct_tap_stream_end(stream);
     if (generation && send_stop)
         (void)alt_send_cluster_event(receiver, stream, generation,
                                      ALT111_EVENT_STOP_UI);
@@ -1290,8 +1292,20 @@ int p1404_hook_cscreen_render(void *self, unsigned char *buffer) {
     }
     native_unlock();
 
-    /* Never alter or replace the CarPlay frame. A successful stock renderer post
-     * is the visibility gate that replaced the deleted splash/logo path. */
+    /*
+     * Direct-display V1: copy the already-decoded private NV12 frame before the
+     * stock CScreenRender posts it.  This is a fallback decoder backend only;
+     * the H264 ingress is independently mirrored to /carplay111_h264.  Main110
+     * never enters this branch because ownership is bound to the private stream.
+     */
+    if (owned_private && config_ok && stream && buffer &&
+        config_width && config_height) {
+        p111_frame_tap_write(stream, buffer, config_width, config_height);
+    }
+
+    /* Keep the stock call fail-open during V1 so a tap/display failure cannot
+     * stall the private ProcessFrames loop or Main110.  The direct sidecar does
+     * not read Window58 and does not depend on the return path below. */
     rc = g_real_render(self, buffer);
     if (rc != 0 || !owned_private || !config_ok) return rc;
 
