@@ -101,23 +101,13 @@ jobs:
               out_lines.append(line)
           sums.write_text("\n".join(out_lines) + "\n")
 
-          relsums = root / "Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS"
-          lines = relsums.read_text().splitlines()
-          found = False
-          for i, line in enumerate(lines):
-              if line.split()[-1:] == ["libcarplay_altscreen.so"]:
-                  lines[i] = f"{hook_sha}  libcarplay_altscreen.so"
-                  found = True
-          if not found:
-              raise SystemExit("release SHA256SUMS has no hook entry")
-          relsums.write_text("\n".join(lines) + "\n")
           PY
 
           sh VERIFY-BASEVIDEO3-STANDALONE.sh
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "$dst" PACKAGE_SOURCE_MAP.json SHA256SUMS.txt                   Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS
+          git add "$dst" PACKAGE_SOURCE_MAP.json SHA256SUMS.txt
           if ! git diff --cached --quiet; then
             git commit -m "build(altscreen): promote BaseVideo3 standalone runtime [skip ci]"
             git fetch origin test/carplay-basevideo3-standalone-v1
@@ -137,6 +127,7 @@ jobs:
           rm -rf "$pkg"
           mkdir -p "$pkg"
           cp -a Toolbox "$pkg/Toolbox"
+          rm -rf "$pkg/Toolbox/carplay_alt_screen/mirror_display"
           cp READ-ME-FIRST.md "$pkg/READ-ME-FIRST.md"
           cp BASEVIDEO3-VISIBLE-PROBE.md "$pkg/BASEVIDEO3-VISIBLE-PROBE.md"
           cp VERIFY-BASEVIDEO3-STANDALONE.sh "$pkg/VERIFY-BASEVIDEO3-STANDALONE.sh"
