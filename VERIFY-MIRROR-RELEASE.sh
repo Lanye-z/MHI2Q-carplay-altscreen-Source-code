@@ -3,7 +3,7 @@ set -eu
 
 # VERIFY-MIRROR-RELEASE.sh
 # Validates the Mirror display sidecar release binary, manifests, and
-# the frozen universal CarPlay AltScreen hook. Replaces VERIFY-V3-RELEASE.sh.
+# the V4 Mirror sidecar plus the known-good pre-helper-isolation universal hook. Replaces VERIFY-V3-RELEASE.sh.
 #
 # Usage:
 #   sh VERIFY-MIRROR-RELEASE.sh [--require-v4]
@@ -15,7 +15,7 @@ HOOK="$ROOT/Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so"
 RELEASE_SUMS="$RELEASE/SHA256SUMS"
 TOP_SUMS="$ROOT/SHA256SUMS.txt"
 SOURCE_MAP="$ROOT/PACKAGE_SOURCE_MAP.json"
-HOOK_BASELINE=0dea2efef91b842cdaae6973a9b8ec3fd95c06cb48e9f3118fc545a78ee288de
+HOOK_BASELINE=07a96cad6121cfc9fae259d47e6c95142b5e09b7ef3e8cd7a180de009579cb39
 
 REQUIRE_V4=0
 for arg in "$@"; do
@@ -34,7 +34,7 @@ pass() {
     echo "mirror_sha256=$1"
     echo "hook_sha256=$2"
     echo "build_id=$3"
-    echo "HOOK_UNCHANGED=YES"
+    echo "HOOK_AB_BASELINE=07a96_KNOWN_GOOD"
 }
 
 sha256_file() {

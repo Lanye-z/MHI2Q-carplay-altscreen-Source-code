@@ -40,7 +40,7 @@
   "Toolbox/carplay_alt_screen/mirror_display/release/carplay-alt111-mirror-display": "a4cbb30cf91805107643010e8b5d02a0d3e335ff3e1239ce720092543b3f3312",
   "Toolbox/carplay_alt_screen/mirror_display/release/start_vehicle.sh": "b86eb0f7015c3e56ca16b21b6313a00709672d86e884fea806884e5b9dcef971",
   "Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh": "784cb683720ab44c4562ab5e3d8a2ab9edd0ac646cff0a7be290f9d9ee5fde71",
-  "Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so": "0dea2efef91b842cdaae6973a9b8ec3fd95c06cb48e9f3118fc545a78ee288de",
+  "Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so": "07a96cad6121cfc9fae259d47e6c95142b5e09b7ef3e8cd7a180de009579cb39",
   "Toolbox/carplay_alt_screen/mirror_display/VENDORED_SOURCE.txt": "562d2b4cfb07382b06865eae4f58cb278d6bfd0a90665f2b1ed2fd4844db7d1e",
   "Toolbox/carplay_alt_screen/SOURCE_PROVENANCE.md": "87bb941253eb165dcdfa284c72002dee66fc4f9d97a578b6462572f6c330612f"
 }
