@@ -309,22 +309,33 @@ void p111_h264_tap_write(void *stream, const void *data, size_t bytes) {
 
 void p111_frame_tap_write(void *stream, const unsigned char *buffer,
                           uint32_t width, uint32_t height) {
-    uint64_t bytes64;
-    uint32_t bytes, slot, seq;
+    uint32_t pixels, bytes, slot, seq;
     unsigned char *dst;
 
     if (!stream || !buffer || !width || !height) return;
     if (!env_truth("ALT111_DIRECT_FRAME_TAP", 1)) return;
 
-    bytes64 = (uint64_t)width * (uint64_t)height * 3u / 2u;
-    if (!bytes64 || bytes64 > P111_FRAME_SLOT_BYTES) {
+    /*
+     * Keep arithmetic inside 32-bit ARM operations.  The target build rejects
+     * compiler runtime helpers such as __aeabi_uldivmod, and private111 display
+     * geometry is far below these fail-closed sanity bounds.
+     */
+    if (width > 4096u || height > 4096u || width > 0xffffffffu / height) {
         tap_lock();
         begin_stream_locked(stream);
         if (g_frame) ++g_frame->drop_count;
         tap_unlock();
         return;
     }
-    bytes = (uint32_t)bytes64;
+    pixels = width * height;
+    bytes = pixels + (pixels >> 1);
+    if (!bytes || bytes > P111_FRAME_SLOT_BYTES) {
+        tap_lock();
+        begin_stream_locked(stream);
+        if (g_frame) ++g_frame->drop_count;
+        tap_unlock();
+        return;
+    }
 
     tap_lock();
     begin_stream_locked(stream);
