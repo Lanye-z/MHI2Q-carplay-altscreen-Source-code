@@ -5,7 +5,8 @@ enum PixelFormat {
     PIXEL_FORMAT_RGBA8888 = 0,
     PIXEL_FORMAT_BGRA8888 = 1,
     PIXEL_FORMAT_RGBX8888 = 2,
-    PIXEL_FORMAT_BGRX8888 = 3
+    PIXEL_FORMAT_BGRX8888 = 3,
+    PIXEL_FORMAT_NV12 = 4
 };
 
 struct VideoFrame {
