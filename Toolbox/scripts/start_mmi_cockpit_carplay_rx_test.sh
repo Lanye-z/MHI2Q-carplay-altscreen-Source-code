@@ -1,8 +1,8 @@
 #!/bin/sh
-# Context80 readback START.
-# Arms type111 + Window58 readback. Java/HMI remains the sole terminal1/ctx80
-# owner; /tmp/mmi-mirror-basevideo.ready is published only after the GLES
-# destination has successfully presented its first frame.
+# private111 direct-display START.
+# Arms type111 + H264/decoded SHM taps. Java/HMI remains the sole terminal1/ctx80
+# owner; /tmp/mmi-mirror-basevideo.ready is published only after displayable3
+# has successfully presented its first decoded frame.
 set -u
 
 BASE="$0"
@@ -67,8 +67,8 @@ jar_valid || {
     exit 1
 }
 
-[ -x "$MIRROR/carplay-alt111-mirror-display" ] || { echo "FAIL: readback sidecar binary missing"; exit 1; }
-[ -x "$MIRROR_START" ] || { echo "FAIL: readback sidecar launcher missing"; exit 1; }
+[ -x "$MIRROR/carplay-alt111-mirror-display" ] || { echo "FAIL: direct-display sidecar binary missing"; exit 1; }
+[ -x "$MIRROR_START" ] || { echo "FAIL: direct-display sidecar launcher missing"; exit 1; }
 
 STARTUP=""
 for candidate in "$DEVICE_ROOT/mnt/system/etc/boot/startup.sh" "$DEVICE_ROOT/etc/boot/startup.sh"; do
@@ -160,12 +160,12 @@ MIRROR_RC=$?
 [ "$MIRROR_RC" -eq 0 ] || { rollback; exit "$MIRROR_RC"; }
 
 cleanup
-echo "DISPLAY_PATH=WINDOW58_READBACK source=private111_stock_omx_cscreenrender source_window=58 capture=screen_read_window sink=displayable3_gles"
+echo "DISPLAY_PATH=PRIVATE111_DIRECT source=ScreenStreamProcessData h264_shm=/carplay111_h264 decoder_backend=stock_omx_tap_v1 decoded_shm=/carplay111_decoded sink=displayable3_gles window58_readback=0"
 echo "HMI_CONTROL_PLANE=JAVA80 context=80 composite=98,101,102,3"
 echo "CONTEXT_POLICY=JAVA_ONLY native_dmdt=0 sidecar_dmdt=0"
 echo "BASEVIDEO3_BOOT_DEMAND=ENABLED marker=/tmp/mmi-mirror-active"
 echo "READY_MARKER=/tmp/mmi-mirror-basevideo.ready meaning=destination_first_successful_gles_present"
 if [ -f "$STARTED" ]; then echo "JAVA_CONTROLLER=OBSERVED current_boot=YES"; else echo "JAVA_CONTROLLER=NOT_YET_OBSERVED current_boot=NO_or_reboot_pending"; fi
-echo "READBACK_SIDECAR=RUNNING_OR_WAITING_FOR_PHONE_REQUEST_111 pidfile=$MIRROR_PID log=$MIRROR_LOG"
-echo "START=PASS integrated=AltScreen+Window58Readback+Displayable3+Java80 reboot_required=YES"
+echo "DIRECT_DISPLAY_SIDECAR=RUNNING_OR_WAITING_FOR_PHONE_REQUEST_111 pidfile=$MIRROR_PID log=$MIRROR_LOG"
+echo "START=PASS integrated=AltScreen+H264Tap+DecoderTap+Displayable3+Java80 reboot_required=YES"
 exit 0
