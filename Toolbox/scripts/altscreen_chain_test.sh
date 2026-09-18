@@ -10,8 +10,9 @@
 #      was installed by an older profile-based package;
 #   4. anything outside the supported AUG22 train is refused before mutation.
 #
-# Mirror is intentionally outside this decision; the integrated wrappers keep the
-# existing AUG22 Mirror runtime/boot path unchanged.
+# Context80-readback integrates the existing Mirror pixel bridge as a sidecar.
+# It is staged transactionally with the AUG22 runtime; Java/HMI remains the sole
+# terminal/context owner.
 #
 # Companion scripts are staged only below /mnt/app/root/carplay-altscreen.  The
 # installer never writes /eso/hmi/engdefs/scripts/mqb, because that mount is not
