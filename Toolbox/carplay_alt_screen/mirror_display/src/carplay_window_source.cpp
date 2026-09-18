@@ -3,23 +3,37 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
 
-/* QNX Screen values used by the pinned MHI2Q MMI-Mirror capture path. */
-#define SCREEN_DISPLAY_MANAGER_CONTEXT 8
+/*
+ * QNX Screen values used on the MHI2Q/QNX 6.5 target.
+ *
+ * V3 incorrectly treated SCREEN_PROPERTY_WINDOW_COUNT/WINDOWS as a global
+ * census. QNX defines those properties as the windows associated with the
+ * calling context. V4 therefore uses the window-manager event queue instead:
+ * CREATE tracks Window58, POST proves it has content, PROPERTY refreshes
+ * geometry, and CLOSE releases the locally tracked handle.
+ */
 #define SCREEN_WINDOW_MANAGER_CONTEXT 1
+
+#define SCREEN_EVENT_NONE 0
+#define SCREEN_EVENT_CREATE 1
+#define SCREEN_EVENT_PROPERTY 2
+#define SCREEN_EVENT_CLOSE 3
+#define SCREEN_EVENT_POST 9
+
 #define SCREEN_PROPERTY_BUFFER_SIZE 5
 #define SCREEN_PROPERTY_FORMAT 14
 #define SCREEN_PROPERTY_POINTER 34
 #define SCREEN_PROPERTY_RENDER_BUFFERS 37
 #define SCREEN_PROPERTY_SIZE 40
 #define SCREEN_PROPERTY_STRIDE 44
+#define SCREEN_PROPERTY_TYPE 47
 #define SCREEN_PROPERTY_USAGE 48
+#define SCREEN_PROPERTY_WINDOW 52
 #define SCREEN_PROPERTY_ID 87
-#define SCREEN_PROPERTY_WINDOW_COUNT 108
-#define SCREEN_PROPERTY_WINDOWS 109
+
 #define SCREEN_FORMAT_RGBA8888 8
 #define SCREEN_USAGE_READ (1 << 1)
 #define SCREEN_USAGE_NATIVE (1 << 3)
@@ -29,6 +43,7 @@ CarPlayWindowSource::CarPlayWindowSource(int window_id, bool verbose)
       verbose_(verbose),
       lib_(0),
       ctx_(0),
+      event_(0),
       window_(0),
       pixmap_(0),
       buffer_(0),
@@ -36,13 +51,18 @@ CarPlayWindowSource::CarPlayWindowSource(int window_id, bool verbose)
       width_(0),
       height_(0),
       stride_(0),
-      scan_attempts_(0),
+      target_posted_(false),
+      event_count_(0),
       read_failures_(0),
       create_context_(0),
       destroy_context_(0),
-      get_context_iv_(0),
-      get_context_pv_(0),
+      create_event_(0),
+      destroy_event_(0),
+      get_event_(0),
+      get_event_iv_(0),
+      get_event_pv_(0),
       get_window_iv_(0),
+      destroy_window_(0),
       create_pixmap_(0),
       destroy_pixmap_(0),
       set_pixmap_iv_(0),
@@ -64,10 +84,6 @@ unsigned long long CarPlayWindowSource::now_us() const {
            (unsigned long long)(unsigned long)tv.tv_usec;
 }
 
-bool CarPlayWindowSource::should_log_scan() const {
-    return scan_attempts_ == 1u || (verbose_ && (scan_attempts_ % 50u) == 0u);
-}
-
 bool CarPlayWindowSource::open_api() {
     lib_ = dlopen("libscreen.so.1", RTLD_LAZY);
     if (!lib_) lib_ = dlopen("libscreen.so", RTLD_LAZY);
@@ -76,16 +92,28 @@ bool CarPlayWindowSource::open_api() {
         return false;
     }
 
-    create_context_ = (create_context_fn)dlsym(lib_, "screen_create_context");
-    destroy_context_ = (destroy_context_fn)dlsym(lib_, "screen_destroy_context");
-    get_context_iv_ =
-        (get_context_iv_fn)dlsym(lib_, "screen_get_context_property_iv");
-    get_context_pv_ =
-        (get_context_pv_fn)dlsym(lib_, "screen_get_context_property_pv");
+    create_context_ =
+        (create_context_fn)dlsym(lib_, "screen_create_context");
+    destroy_context_ =
+        (destroy_context_fn)dlsym(lib_, "screen_destroy_context");
+    create_event_ =
+        (create_event_fn)dlsym(lib_, "screen_create_event");
+    destroy_event_ =
+        (destroy_event_fn)dlsym(lib_, "screen_destroy_event");
+    get_event_ =
+        (get_event_fn)dlsym(lib_, "screen_get_event");
+    get_event_iv_ =
+        (get_event_iv_fn)dlsym(lib_, "screen_get_event_property_iv");
+    get_event_pv_ =
+        (get_event_pv_fn)dlsym(lib_, "screen_get_event_property_pv");
     get_window_iv_ =
         (get_window_iv_fn)dlsym(lib_, "screen_get_window_property_iv");
-    create_pixmap_ = (create_pixmap_fn)dlsym(lib_, "screen_create_pixmap");
-    destroy_pixmap_ = (destroy_pixmap_fn)dlsym(lib_, "screen_destroy_pixmap");
+    destroy_window_ =
+        (destroy_window_fn)dlsym(lib_, "screen_destroy_window");
+    create_pixmap_ =
+        (create_pixmap_fn)dlsym(lib_, "screen_create_pixmap");
+    destroy_pixmap_ =
+        (destroy_pixmap_fn)dlsym(lib_, "screen_destroy_pixmap");
     set_pixmap_iv_ =
         (set_pixmap_iv_fn)dlsym(lib_, "screen_set_pixmap_property_iv");
     create_pixmap_buffer_ =
@@ -96,22 +124,31 @@ bool CarPlayWindowSource::open_api() {
         (get_buffer_pv_fn)dlsym(lib_, "screen_get_buffer_property_pv");
     get_buffer_iv_ =
         (get_buffer_iv_fn)dlsym(lib_, "screen_get_buffer_property_iv");
-    read_window_ = (read_window_fn)dlsym(lib_, "screen_read_window");
+    read_window_ =
+        (read_window_fn)dlsym(lib_, "screen_read_window");
 
-    if (!create_context_ || !destroy_context_ || !get_context_iv_ ||
-        !get_context_pv_ || !get_window_iv_ || !create_pixmap_ ||
-        !destroy_pixmap_ || !set_pixmap_iv_ || !create_pixmap_buffer_ ||
-        !get_pixmap_pv_ || !get_buffer_pv_ || !get_buffer_iv_ ||
-        !read_window_) {
+    if (!create_context_ || !destroy_context_ ||
+        !create_event_ || !destroy_event_ || !get_event_ ||
+        !get_event_iv_ || !get_event_pv_ ||
+        !get_window_iv_ || !destroy_window_ ||
+        !create_pixmap_ || !destroy_pixmap_ || !set_pixmap_iv_ ||
+        !create_pixmap_buffer_ || !get_pixmap_pv_ ||
+        !get_buffer_pv_ || !get_buffer_iv_ || !read_window_) {
         fprintf(stderr,
-                "source: required Screen API missing create=%p destroy=%p "
-                "ctx_iv=%p ctx_pv=%p win_iv=%p pixmap=%p pixbuf=%p "
+                "source: required Screen API missing "
+                "ctx_create=%p ctx_destroy=%p event_create=%p "
+                "event_destroy=%p get_event=%p event_iv=%p event_pv=%p "
+                "win_iv=%p win_destroy=%p pixmap=%p pixbuf=%p "
                 "read_window=%p\n",
                 (void *)create_context_,
                 (void *)destroy_context_,
-                (void *)get_context_iv_,
-                (void *)get_context_pv_,
+                (void *)create_event_,
+                (void *)destroy_event_,
+                (void *)get_event_,
+                (void *)get_event_iv_,
+                (void *)get_event_pv_,
                 (void *)get_window_iv_,
+                (void *)destroy_window_,
                 (void *)create_pixmap_,
                 (void *)create_pixmap_buffer_,
                 (void *)read_window_);
@@ -124,34 +161,35 @@ bool CarPlayWindowSource::init() {
     shutdown();
     if (!open_api()) return false;
 
-    /* Window58 belongs to dio_manager/CScreenRender, not this process. A
-     * WINDOW_MANAGER context is the authoritative context for enumerating the
-     * global Screen window list. DISPLAY_MANAGER remains a compatibility
-     * fallback only for firmware that refuses the WM context. */
+    /*
+     * This privileged context is intentionally created only after the main
+     * process has observed PHONE_REQUEST_111. There is no DISPLAY_MANAGER
+     * fallback here: the V4 acquisition contract is specifically the
+     * window-manager event queue, not a context inventory.
+     */
     errno = 0;
     if (create_context_(&ctx_, SCREEN_WINDOW_MANAGER_CONTEXT) != 0 || !ctx_) {
-        const int wm_errno = errno;
-        ctx_ = 0;
-        errno = 0;
-        if (create_context_(&ctx_, SCREEN_DISPLAY_MANAGER_CONTEXT) != 0 ||
-            !ctx_) {
-            fprintf(stderr,
-                    "source: manager-capable Screen context failed "
-                    "window_manager_errno=%d display_manager_errno=%d\n",
-                    wm_errno,
-                    errno);
-            shutdown();
-            return false;
-        }
         fprintf(stderr,
-                "source: WINDOW_MANAGER_CONTEXT rejected errno=%d; "
-                "using DISPLAY_MANAGER_CONTEXT fallback\n",
-                wm_errno);
-    } else {
-        fprintf(stderr, "source: WINDOW_MANAGER_CONTEXT ready\n");
+                "source: WINDOW_MANAGER_CONTEXT create failed errno=%d\n",
+                errno);
+        shutdown();
+        return false;
     }
-    scan_attempts_ = 0;
+
+    errno = 0;
+    if (create_event_(&event_) != 0 || !event_) {
+        fprintf(stderr, "source: screen_create_event failed errno=%d\n", errno);
+        shutdown();
+        return false;
+    }
+
+    event_count_ = 0;
     read_failures_ = 0;
+    target_posted_ = false;
+    fprintf(stderr,
+            "source: WINDOW_MANAGER_CONTEXT event observer ready "
+            "target_id=%d\n",
+            target_id_);
     return true;
 }
 
@@ -159,141 +197,53 @@ void CarPlayWindowSource::release_capture_buffer() {
     pixels_ = 0;
     buffer_ = 0;
     stride_ = 0;
-    if (pixmap_ && destroy_pixmap_) destroy_pixmap_(pixmap_);
+    if (pixmap_ && destroy_pixmap_) {
+        (void)destroy_pixmap_(pixmap_);
+    }
     pixmap_ = 0;
 }
 
-bool CarPlayWindowSource::find_window() {
-    if (!ctx_) return false;
-
-    ++scan_attempts_;
-    const bool log_scan = should_log_scan();
-    int count = 0;
+void CarPlayWindowSource::release_event_window(void *window,
+                                                const char *reason) {
+    if (!window || !destroy_window_) return;
     errno = 0;
-    const int count_rc =
-        get_context_iv_(ctx_, SCREEN_PROPERTY_WINDOW_COUNT, &count);
-    const int count_errno = errno;
-    if (count_rc != 0 || count <= 0) {
-        if (log_scan) {
-            fprintf(stderr,
-                    "source: window census attempt=%u rc=%d count=%d "
-                    "errno=%d target_id=%d\n",
-                    scan_attempts_,
-                    count_rc,
-                    count,
-                    count_errno,
-                    target_id_);
-        }
-        return false;
-    }
-
-    if (count > 128) count = 128;
-    void *wins[128];
-    memset(wins, 0, sizeof(wins));
-    errno = 0;
-    const int list_rc =
-        get_context_pv_(ctx_, SCREEN_PROPERTY_WINDOWS, wins);
-    const int list_errno = errno;
-    if (list_rc != 0) {
-        if (log_scan) {
-            fprintf(stderr,
-                    "source: window list read attempt=%u rc=%d count=%d "
-                    "errno=%d target_id=%d\n",
-                    scan_attempts_,
-                    list_rc,
-                    count,
-                    list_errno,
-                    target_id_);
-        }
-        return false;
-    }
-
-    if (log_scan) {
+    if (destroy_window_(window) != 0 && verbose_) {
         fprintf(stderr,
-                "source: window census attempt=%u rc=0 count=%d target_id=%d\n",
-                scan_attempts_,
-                count,
-                target_id_);
+                "source: screen_destroy_window handle=%p reason=%s "
+                "failed errno=%d\n",
+                window,
+                reason ? reason : "-",
+                errno);
     }
+}
 
-    for (int i = 0; i < count; ++i) {
-        int id = -1;
-        int size[2] = {0, 0};
-        if (!wins[i]) continue;
+void CarPlayWindowSource::release_target_window(const char *reason) {
+    void *tracked = window_;
 
-        errno = 0;
-        const int id_rc =
-            get_window_iv_(wins[i], SCREEN_PROPERTY_ID, &id);
-        const int id_errno = errno;
-        errno = 0;
-        const int size_rc =
-            get_window_iv_(wins[i], SCREEN_PROPERTY_SIZE, size);
-        const int size_errno = errno;
-
-        if (log_scan || id == target_id_) {
-            fprintf(stderr,
-                    "source: window[%d] attempt=%u handle=%p id_rc=%d id=%d "
-                    "id_errno=%d size_rc=%d size=%dx%d size_errno=%d%s\n",
-                    i,
-                    scan_attempts_,
-                    wins[i],
-                    id_rc,
-                    id,
-                    id_errno,
-                    size_rc,
-                    size[0],
-                    size[1],
-                    size_errno,
-                    (id_rc == 0 && id == target_id_) ? " [target]" : "");
-        }
-
-        if (id_rc != 0 || id != target_id_ || size_rc != 0 ||
-            size[0] <= 0 || size[1] <= 0) {
-            continue;
-        }
-
-        if (window_ != wins[i] || width_ != size[0] || height_ != size[1]) {
-            release_capture_buffer();
-            window_ = wins[i];
-            width_ = size[0];
-            height_ = size[1];
-            fprintf(stderr,
-                    "source: bound CarPlay window id=%d handle=%p size=%dx%d "
-                    "attempt=%u\n",
-                    target_id_,
-                    window_,
-                    width_,
-                    height_,
-                    scan_attempts_);
-            if (!create_capture_buffer()) {
-                window_ = 0;
-                width_ = height_ = 0;
-                return false;
-            }
-        }
-        return true;
-    }
-
-    if (log_scan) {
-        fprintf(stderr,
-                "source: target window id=%d not found attempt=%u count=%d\n",
-                target_id_,
-                scan_attempts_,
-                count);
-    }
-    if (window_) {
-        fprintf(stderr,
-                "source: target window id=%d disappeared; rebinding\n",
-                target_id_);
-    }
-    window_ = 0;
     release_capture_buffer();
-    return false;
+    window_ = 0;
+    width_ = 0;
+    height_ = 0;
+    target_posted_ = false;
+
+    if (tracked) {
+        fprintf(stderr,
+                "source: release CarPlay window id=%d handle=%p reason=%s\n",
+                target_id_,
+                tracked,
+                reason ? reason : "-");
+        release_event_window(tracked, reason);
+    }
 }
 
 bool CarPlayWindowSource::create_capture_buffer() {
-    if (!window_ || width_ <= 0 || height_ <= 0) return false;
+    if (!window_ || !target_posted_ || width_ <= 0 || height_ <= 0) {
+        return false;
+    }
 
+    release_capture_buffer();
+
+    errno = 0;
     if (create_pixmap_(&pixmap_, ctx_) != 0 || !pixmap_) {
         fprintf(stderr, "source: screen_create_pixmap failed errno=%d\n", errno);
         return false;
@@ -309,7 +259,8 @@ bool CarPlayWindowSource::create_capture_buffer() {
         create_pixmap_buffer_(pixmap_) != 0 ||
         get_pixmap_pv_(pixmap_, SCREEN_PROPERTY_RENDER_BUFFERS, &buffer_) != 0 ||
         !buffer_ ||
-        get_buffer_pv_(buffer_, SCREEN_PROPERTY_POINTER, (void **)&pixels_) != 0 ||
+        get_buffer_pv_(buffer_, SCREEN_PROPERTY_POINTER,
+                       (void **)&pixels_) != 0 ||
         !pixels_ ||
         get_buffer_iv_(buffer_, SCREEN_PROPERTY_STRIDE, &stride_) != 0 ||
         stride_ < width_ * 4) {
@@ -324,12 +275,14 @@ bool CarPlayWindowSource::create_capture_buffer() {
         return false;
     }
 
-    /* The vehicle-tested Mirror baseline requests Screen format value 8 but
-     * interprets the CPU-visible bytes as BGRA8888. Preserve that exact byte
-     * order contract so the copied GLES renderer performs the same R/B swap. */
+    /*
+     * The vehicle-tested Mirror baseline requests Screen format value 8 but
+     * interprets the CPU-visible bytes as BGRA8888. Preserve that byte order
+     * contract so the existing GLES renderer performs the same R/B swap.
+     */
     fprintf(stderr,
             "source: capture buffer ready id=%d size=%dx%d stride=%d "
-            "screen_format=8 cpu_format=BGRA8888\n",
+            "screen_format=8 cpu_format=BGRA8888 event_driven=1\n",
             target_id_,
             width_,
             height_,
@@ -337,10 +290,215 @@ bool CarPlayWindowSource::create_capture_buffer() {
     return true;
 }
 
+bool CarPlayWindowSource::pump_event(unsigned long long timeout_ns) {
+    if (!ctx_ || !event_) return false;
+
+    errno = 0;
+    const int event_rc = get_event_(ctx_, event_, timeout_ns);
+    const int event_errno = errno;
+    if (event_rc != 0) {
+        if (verbose_) {
+            fprintf(stderr,
+                    "source: screen_get_event failed rc=%d errno=%d "
+                    "timeout_ns=%llu\n",
+                    event_rc,
+                    event_errno,
+                    timeout_ns);
+        }
+        return false;
+    }
+
+    int type = SCREEN_EVENT_NONE;
+    errno = 0;
+    const int type_rc =
+        get_event_iv_(event_, SCREEN_PROPERTY_TYPE, &type);
+    const int type_errno = errno;
+    if (type_rc != 0) {
+        fprintf(stderr,
+                "source: event type read failed rc=%d errno=%d\n",
+                type_rc,
+                type_errno);
+        return false;
+    }
+    if (type == SCREEN_EVENT_NONE) return false;
+
+    ++event_count_;
+
+    if (type != SCREEN_EVENT_CREATE &&
+        type != SCREEN_EVENT_PROPERTY &&
+        type != SCREEN_EVENT_CLOSE &&
+        type != SCREEN_EVENT_POST) {
+        if (verbose_ && event_count_ <= 16u) {
+            fprintf(stderr,
+                    "source: event ignored seq=%u type=%d\n",
+                    event_count_,
+                    type);
+        }
+        return true;
+    }
+
+    void *event_window = 0;
+    errno = 0;
+    const int window_rc =
+        get_event_pv_(event_, SCREEN_PROPERTY_WINDOW, &event_window);
+    const int window_errno = errno;
+    if (window_rc != 0 || !event_window) {
+        if (verbose_ || type == SCREEN_EVENT_CREATE) {
+            fprintf(stderr,
+                    "source: event window read seq=%u type=%d rc=%d "
+                    "handle=%p errno=%d\n",
+                    event_count_,
+                    type,
+                    window_rc,
+                    event_window,
+                    window_errno);
+        }
+        return true;
+    }
+
+    int id = -1;
+    int size[2] = {0, 0};
+
+    errno = 0;
+    const int id_rc =
+        get_window_iv_(event_window, SCREEN_PROPERTY_ID, &id);
+    const int id_errno = errno;
+
+    errno = 0;
+    const int size_rc =
+        get_window_iv_(event_window, SCREEN_PROPERTY_SIZE, size);
+    const int size_errno = errno;
+
+    const bool target = id_rc == 0 && id == target_id_;
+    if (target || (verbose_ && event_count_ <= 24u)) {
+        fprintf(stderr,
+                "source: event seq=%u type=%d handle=%p "
+                "id_rc=%d id=%d id_errno=%d "
+                "size_rc=%d size=%dx%d size_errno=%d%s\n",
+                event_count_,
+                type,
+                event_window,
+                id_rc,
+                id,
+                id_errno,
+                size_rc,
+                size[0],
+                size[1],
+                size_errno,
+                target ? " [target]" : "");
+    }
+
+    if (!target) {
+        /*
+         * SCREEN_PROPERTY_WINDOW allocates local tracking resources for this
+         * event handle. We are an observer, so release every non-target handle
+         * immediately instead of accumulating manager-side references.
+         */
+        release_event_window(event_window, "non-target-event");
+        return true;
+    }
+
+    if (type == SCREEN_EVENT_CLOSE) {
+        fprintf(stderr,
+                "source: target CLOSE id=%d event_seq=%u handle=%p\n",
+                target_id_,
+                event_count_,
+                event_window);
+
+        if (event_window == window_) {
+            release_capture_buffer();
+            window_ = 0;
+            width_ = 0;
+            height_ = 0;
+            target_posted_ = false;
+            release_event_window(event_window, "target-close");
+        } else {
+            release_event_window(event_window, "target-close-event");
+            release_target_window("target-close");
+        }
+        return true;
+    }
+
+    if (!window_ || (type == SCREEN_EVENT_CREATE && event_window != window_)) {
+        if (window_ && event_window != window_) {
+            release_target_window("replacement-create");
+        }
+        window_ = event_window;
+        event_window = 0;
+        target_posted_ = false;
+        fprintf(stderr,
+                "source: bound CarPlay window id=%d handle=%p "
+                "source_event=%d event_seq=%u\n",
+                target_id_,
+                window_,
+                type,
+                event_count_);
+    } else if (event_window != window_) {
+        release_event_window(event_window, "duplicate-target-event");
+        event_window = 0;
+    }
+
+    if (size_rc == 0 && size[0] > 0 && size[1] > 0 &&
+        (width_ != size[0] || height_ != size[1])) {
+        if (pixmap_) release_capture_buffer();
+        width_ = size[0];
+        height_ = size[1];
+        fprintf(stderr,
+                "source: target geometry id=%d size=%dx%d "
+                "event=%d event_seq=%u\n",
+                target_id_,
+                width_,
+                height_,
+                type,
+                event_count_);
+    }
+
+    if (type == SCREEN_EVENT_CREATE) {
+        fprintf(stderr,
+                "source: target CREATE id=%d waiting_for_first_post=1 "
+                "event_seq=%u\n",
+                target_id_,
+                event_count_);
+        return true;
+    }
+
+    if (type == SCREEN_EVENT_POST) {
+        if (!target_posted_) {
+            fprintf(stderr,
+                    "source: target FIRST_POST id=%d event_seq=%u "
+                    "content_valid=1\n",
+                    target_id_,
+                    event_count_);
+        }
+        target_posted_ = true;
+    }
+
+    if (target_posted_ && !pixmap_ && width_ > 0 && height_ > 0) {
+        (void)create_capture_buffer();
+    }
+
+    return true;
+}
+
 bool CarPlayWindowSource::read_frame(VideoFrame *frame) {
-    if (!frame || !ctx_) return false;
-    if (!window_ || !pixmap_) {
-        if (!find_window()) return false;
+    if (!frame || !ctx_ || !event_) return false;
+
+    /*
+     * Before the first valid POST, wait on the event queue rather than polling
+     * context properties. Once active, drain a bounded number of queued events
+     * non-blocking each frame so CLOSE/PROPERTY cannot starve behind POSTs.
+     */
+    if (!window_ || !target_posted_ || !pixmap_) {
+        (void)pump_event(100000000ULL);
+        for (unsigned i = 0; i < 31u; ++i) {
+            if (!pump_event(0)) break;
+        }
+        if (!window_ || !target_posted_ || !pixmap_) return false;
+    } else {
+        for (unsigned i = 0; i < 8u; ++i) {
+            if (!pump_event(0)) break;
+            if (!window_ || !target_posted_ || !pixmap_) return false;
+        }
     }
 
     errno = 0;
@@ -350,24 +508,24 @@ bool CarPlayWindowSource::read_frame(VideoFrame *frame) {
             (verbose_ && (read_failures_ % 30u) == 0u)) {
             fprintf(stderr,
                     "source: screen_read_window id=%d handle=%p failed "
-                    "errno=%d failures=%u; rebinding\n",
+                    "errno=%d failures=%u; keeping event binding\n",
                     target_id_,
                     window_,
                     errno,
                     read_failures_);
         }
-        window_ = 0;
-        release_capture_buffer();
         return false;
     }
 
     if (read_failures_) {
         fprintf(stderr,
-                "source: screen_read_window recovered id=%d after_failures=%u\n",
+                "source: screen_read_window recovered id=%d "
+                "after_failures=%u\n",
                 target_id_,
                 read_failures_);
         read_failures_ = 0;
     }
+
     frame->data = pixels_;
     frame->width = width_;
     frame->height = height_;
@@ -378,18 +536,30 @@ bool CarPlayWindowSource::read_frame(VideoFrame *frame) {
 }
 
 void CarPlayWindowSource::shutdown() {
-    window_ = 0;
-    release_capture_buffer();
-    if (ctx_ && destroy_context_) destroy_context_(ctx_);
+    release_target_window("shutdown");
+
+    if (event_ && destroy_event_) {
+        (void)destroy_event_(event_);
+    }
+    event_ = 0;
+
+    if (ctx_ && destroy_context_) {
+        (void)destroy_context_(ctx_);
+    }
     ctx_ = 0;
+
     if (lib_) dlclose(lib_);
     lib_ = 0;
 
     create_context_ = 0;
     destroy_context_ = 0;
-    get_context_iv_ = 0;
-    get_context_pv_ = 0;
+    create_event_ = 0;
+    destroy_event_ = 0;
+    get_event_ = 0;
+    get_event_iv_ = 0;
+    get_event_pv_ = 0;
     get_window_iv_ = 0;
+    destroy_window_ = 0;
     create_pixmap_ = 0;
     destroy_pixmap_ = 0;
     set_pixmap_iv_ = 0;
@@ -398,7 +568,11 @@ void CarPlayWindowSource::shutdown() {
     get_buffer_pv_ = 0;
     get_buffer_iv_ = 0;
     read_window_ = 0;
-    width_ = height_ = stride_ = 0;
-    scan_attempts_ = 0;
+
+    width_ = 0;
+    height_ = 0;
+    stride_ = 0;
+    target_posted_ = false;
+    event_count_ = 0;
     read_failures_ = 0;
 }
