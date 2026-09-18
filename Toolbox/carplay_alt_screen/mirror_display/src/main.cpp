@@ -1,4 +1,4 @@
-#include "carplay_window_source.h"
+#include "private111_direct_source.h"
 #include "cluster_video_display.h"
 
 #include <signal.h>
@@ -10,7 +10,7 @@
 
 static volatile sig_atomic_t g_stop = 0;
 static const unsigned kTargetFps = 30;
-static const char kBuildId[] = "context80-readback-v1-diag2";
+static const char kBuildId[] = "carplay-private111-direct-display-v1";
 
 static const char *volatile_path(const char *key, const char *fallback) {
     const char *v = getenv(key);
@@ -86,21 +86,13 @@ static bool persist_gate(const char *line) {
     f = fopen(gate_token_path(), "w");
     if (!f) return false;
     fprintf(f, "%s\n", line);
-    if (fclose(f) != 0) return false;
-    return true;
+    return fclose(f) == 0;
 }
 
 /*
- * Do not create a privileged Screen window-manager context at boot.
- *
- * The validated CarPlay/Stream111 hook already emits PHONE_REQUEST_111 once
- * the phone has established the main AirPlay session and explicitly requested
- * the private alternate screen. Follow that log first; only after this gate is
- * observed do we create the Screen WM observer.
- *
- * A complete initial scan is required before accepting a candidate marker:
- * an older PHONE_REQUEST line may exist earlier in the same log, followed by a
- * newer HOOK_INIT for the current dio_manager process.
+ * Wait for the phone to explicitly request private type111 before attaching
+ * either shared-memory source.  Unlike the retired Window58 readback path, this
+ * gate does not create a Screen manager context and never enumerates windows.
  */
 static bool wait_for_phone111_gate() {
     static const char kFlatHookLog[] = "/tmp/altscreen_hook.log";
@@ -130,9 +122,9 @@ static bool wait_for_phone111_gate() {
             if (!f) {
                 if (!reported_waiting) {
                     fprintf(stderr,
-                            "carplay-mirror: GATE waiting "
-                            "for=PHONE_REQUEST_111 screen_context=NOT_CREATED "
-                            "hook_log=%s\n",
+                            "direct111: PHASE=GATE_WAIT "
+                            "for=PHONE_REQUEST_111 screen_context=NONE "
+                            "window58_dependency=NONE hook_log=%s\n",
                             primary);
                     reported_waiting = true;
                 }
@@ -141,8 +133,8 @@ static bool wait_for_phone111_gate() {
             }
 
             fprintf(stderr,
-                    "carplay-mirror: GATE hook log attached path=%s "
-                    "screen_context=NOT_CREATED\n",
+                    "direct111: PHASE=GATE_LOG_ATTACHED path=%s "
+                    "screen_context=NONE window58_dependency=NONE\n",
                     opened_path ? opened_path : "-");
         }
 
@@ -169,34 +161,25 @@ static bool wait_for_phone111_gate() {
             if (consumed[0] && strcmp(candidate, consumed) == 0) {
                 if (!reported_consumed) {
                     fprintf(stderr,
-                            "carplay-mirror: GATE marker already consumed; "
-                            "waiting for next PHONE_REQUEST_111 session\n");
+                            "direct111: PHASE=GATE_CONSUMED "
+                            "waiting_for_next_private111_session=1\n");
                     reported_consumed = true;
                 }
             } else {
-                /*
-                 * Persist before opening Screen. If this sidecar crashes after
-                 * acquiring WM privileges, the boot supervisor must not spin
-                 * up another WM observer for the same CarPlay request.
-                 */
                 if (!persist_gate(candidate)) {
                     fprintf(stderr,
-                            "carplay-mirror: GATE token write failed path=%s; "
-                            "Screen context remains unopened\n",
+                            "direct111: ERROR PHASE=GATE_TOKEN_WRITE path=%s\n",
                             gate_token_path());
                     usleep(100000);
                     continue;
                 }
-
-                copy_line(consumed, sizeof(consumed), candidate);
                 if (f) {
                     fclose(f);
                     f = 0;
                 }
                 fprintf(stderr,
-                        "carplay-mirror: GATE PASS "
-                        "trigger=PHONE_REQUEST_111 "
-                        "screen_context=CREATE_NOW\n");
+                        "direct111: PHASE=GATE_PASS trigger=PHONE_REQUEST_111 "
+                        "next=H264_TAP_AND_DECODER_SHM\n");
                 return true;
             }
         }
@@ -209,15 +192,10 @@ static bool wait_for_phone111_gate() {
     return false;
 }
 
-/* Marker writes are deliberately best-effort. The launcher may run with /tmp
- * unavailable; runtime presentation must continue even when these files cannot
- * be created. */
-static void marker(bool on,
-                   const char *source,
-                   const char *mode,
-                   int pixel_valid) {
+static void marker(bool on, const char *source, const char *mode) {
     const char *ready = ready_path();
     const char *base = base_ready_path();
+
     if (!on) {
         unlink(ready);
         unlink(base);
@@ -230,13 +208,13 @@ static void marker(bool on,
                 "ready=1\n"
                 "pid=%ld\n"
                 "source=%s\n"
-                "sink=mirror-displayable3\n"
+                "sink=displayable3\n"
+                "context=80\n"
                 "mode=%s\n"
-                "pixel_valid=%d\n",
+                "window58_readback=0\n",
                 (long)getpid(),
-                source ? source : "unknown",
-                mode ? mode : "unknown",
-                pixel_valid ? 1 : 0);
+                source ? source : "private111-direct",
+                mode ? mode : "direct-display");
         fclose(f);
     }
 
@@ -246,38 +224,71 @@ static void marker(bool on,
                 "ready=1\n"
                 "pid=%ld\n"
                 "mode=%s\n"
-                "pixel_valid=%d\n",
+                "displayable=3\n"
+                "window58_readback=0\n",
                 (long)getpid(),
-                mode ? mode : "unknown",
-                pixel_valid ? 1 : 0);
+                mode ? mode : "direct-display");
         fclose(f);
     }
 }
 
-/*
- * Context ownership is intentionally outside this pixel sidecar.
- * The sidecar only proves Window58 readback and posts to displayable3.
- * Java/HMI owns terminal1 and ctx80={98,101,102,3}.
- */
-static bool activate() {
-    fprintf(stderr, "route: native context writer disabled; waiting for Java/HMI ctx80\n");
+/* Java/HMI remains the sole terminal1 Context80 owner. */
+static bool activate_context80() {
+    fprintf(stderr,
+            "direct111: PHASE=CONTEXT80_REQUEST owner=java "
+            "composite=98,101,102,3 displayable=3 native_dmdt=0\n");
     return true;
 }
-static void restore() {
-    fprintf(stderr, "route: native restore disabled; Java/HMI owns stock release\n");
+
+static void restore_context80() {
+    fprintf(stderr,
+            "direct111: PHASE=CONTEXT80_RELEASE owner=java "
+            "native_dmdt=0\n");
+}
+
+static int run_sink_grid(bool verbose) {
+    Mhi2qBackendConfig cfg;
+    cfg.width = 1440;
+    cfg.height = 455;
+    cfg.displayable_id = 3;
+    cfg.verbose = verbose;
+
+    ClusterVideoDisplay display;
+    if (!display.init(cfg)) return 20;
+    display.set_fullscreen_destination();
+    if (!display.present_test_grid()) {
+        display.shutdown();
+        return 21;
+    }
+
+    fprintf(stderr,
+            "direct111: PHASE=DISPLAYABLE3_FIRST_PRESENT "
+            "mode=sink-test-grid displayable=3 size=1440x455 "
+            "source_dependency=NONE\n");
+    marker(true, "diagnostic-test-grid", "sink-test-grid");
+    (void)activate_context80();
+
+    while (!g_stop) {
+        display.refresh();
+        usleep(100000);
+    }
+
+    marker(false, 0, 0);
+    restore_context80();
+    display.shutdown();
+    return 0;
 }
 
 int main(int argc, char **argv) {
     bool verbose = false;
     bool sink_test_grid = false;
     const char *grid_env = getenv("ALT111_SINK_TEST_GRID");
+
     if (grid_env &&
-        (!strcmp(grid_env, "1") ||
-         !strcmp(grid_env, "YES") ||
-         !strcmp(grid_env, "yes") ||
-         !strcmp(grid_env, "true"))) {
+        (!strcmp(grid_env, "1") || !strcmp(grid_env, "YES") ||
+         !strcmp(grid_env, "yes") || !strcmp(grid_env, "true")))
         sink_test_grid = true;
-    }
+
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--verbose")) verbose = true;
         if (!strcmp(argv[i], "--sink-test-grid")) sink_test_grid = true;
@@ -286,106 +297,68 @@ int main(int argc, char **argv) {
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
     signal(SIGHUP, on_signal);
-    marker(false, 0, 0, 0);
+    marker(false, 0, 0);
 
     fprintf(stderr,
-            "carplay-mirror: BUILD id=%s "
-            "mode=%s gate=%s "
-            "source_context=%s diagnostics=event_driven+pixel_truth\n",
-            kBuildId,
-            sink_test_grid ? "sink-test-grid" : "readback",
-            sink_test_grid ? "BASEVIDEO_ACTIVE_ONLY" : "PHONE_REQUEST_111",
-            sink_test_grid ? "NONE" :
-                "none_before_gate_then_window_manager_event");
+            "direct111: PHASE=BUILD id=%s "
+            "pipeline=private111-h264-tap-decoder-displayable3-context80 "
+            "decoder_backend=stock-omx-tap-v1 "
+            "window58_readback=0 screen_manage_window_sidecar=0\n",
+            kBuildId);
 
-    if (sink_test_grid) {
-        Mhi2qBackendConfig grid_cfg;
-        grid_cfg.width = 1440;
-        grid_cfg.height = 455;
-        grid_cfg.displayable_id = 3;
-        grid_cfg.verbose = verbose;
+    if (sink_test_grid)
+        return run_sink_grid(verbose);
 
-        ClusterVideoDisplay grid_display;
-        if (!grid_display.init(grid_cfg)) return 20;
-        grid_display.set_fullscreen_destination();
-        if (!grid_display.present_test_grid()) {
-            grid_display.shutdown();
-            return 21;
-        }
-
-        fprintf(stderr,
-                "carplay-mirror: SINK_TEST_GRID_PRESENT=YES "
-                "displayable=3 size=1440x455 source_window=NONE "
-                "stream111_dependency=NONE\n");
-        fprintf(stderr,
-                "carplay-mirror: GLES_PRESENT=YES mode=sink-test-grid "
-                "displayable=3 source_pixel_valid=NA\n");
-        marker(true, "diagnostic-test-grid", "sink-test-grid", 0);
-        if (!activate()) {
-            marker(false, 0, 0, 0);
-            grid_display.shutdown();
-            restore();
-            return 22;
-        }
-
-        fprintf(stderr,
-                "carplay-mirror: ACTIVE mode=sink-test-grid sink=displayable3 "
-                "context=80 java_requires=baseActive+baseReady\n");
-        while (!g_stop) {
-            grid_display.refresh();
-            usleep(100000);
-        }
-
-        marker(false, 0, 0, 0);
-        restore();
-        grid_display.shutdown();
-        fprintf(stderr,
-                "carplay-mirror: sink-test-grid stopped; "
-                "Java/HMI context release requested\n");
+    if (!wait_for_phone111_gate())
         return 0;
-    }
 
-    if (!wait_for_phone111_gate()) {
+    Private111DirectSource source(verbose);
+    if (!source.init()) {
         fprintf(stderr,
-                "carplay-mirror: stopped before PHONE_REQUEST_111; "
-                "Screen context was never created\n");
-        return 0;
+                "direct111: ERROR PHASE=SOURCE_INIT result=FAILED\n");
+        return 2;
     }
-
-    CarPlayWindowSource source(58, verbose);
-    if (!source.init()) return 2;
 
     VideoFrame frame;
-    bool reported_pixel_wait = false;
+    bool wait_reported = false;
+    unsigned long wait_loops = 0;
     fprintf(stderr,
-            "carplay-mirror: waiting for Window58 CREATE/POST/readback "
-            "and SOURCE_PIXEL_VALID after PHONE_REQUEST_111\n");
+            "direct111: PHASE=PIPELINE_WAIT "
+            "waiting=H264_TAP+DECODER_FIRST_FRAME "
+            "source=/carplay111_decoded window58_readback=0\n");
+
     while (!g_stop) {
-        if (source.read_frame(&frame)) {
-            if (source.pixel_valid()) break;
-            if (!reported_pixel_wait) {
-                fprintf(stderr,
-                        "carplay-mirror: SOURCE_PIXEL_GATE=WAITING "
-                        "readback_rc=OK reason=BLACK_OR_EMPTY_CONTENT "
-                        "ctx80_not_requested=1\n");
-                reported_pixel_wait = true;
-            }
+        if (source.read_frame(&frame))
+            break;
+
+        if (!wait_reported || (++wait_loops % 100u) == 0u) {
+            wait_reported = true;
+            fprintf(stderr,
+                    "direct111: PHASE=PIPELINE_PROGRESS "
+                    "h264_ready=%d h264_packets=%u h264_bytes=%u "
+                    "decoder_ready=%d decoded_frames=%u "
+                    "displayable3=NOT_CREATED\n",
+                    source.h264_ready() ? 1 : 0,
+                    (unsigned)source.h264_packets(),
+                    (unsigned)source.h264_bytes(),
+                    source.decoded_ready() ? 1 : 0,
+                    (unsigned)source.decoded_frames());
         }
         usleep(20000);
     }
+
     if (g_stop) {
         source.shutdown();
         return 0;
     }
 
     fprintf(stderr,
-            "carplay-mirror: source ready %dx%d stride=%d "
-            "pixel_valid=YES hash=0x%08lx nonblack_permille=%u changed=%s; "
-            "starting pinned Mirror pixel plane\n",
+            "direct111: PHASE=FIRST_DECODED_FRAME "
+            "backend=stock-omx-tap format=NV12 size=%dx%d stride=%d "
+            "h264_ready=%d generation=%u\n",
             frame.width, frame.height, frame.stride,
-            source.pixel_hash(),
-            source.pixel_nonblack_permille(),
-            source.pixel_changed() ? "YES" : "NO");
+            source.h264_ready() ? 1 : 0,
+            (unsigned)source.generation());
 
     Mhi2qBackendConfig cfg;
     cfg.width = 1440;
@@ -395,34 +368,40 @@ int main(int argc, char **argv) {
 
     ClusterVideoDisplay display;
     if (!display.init(cfg)) {
+        fprintf(stderr,
+                "direct111: ERROR PHASE=DISPLAYABLE3_INIT result=FAILED\n");
         source.shutdown();
         return 3;
     }
     display.set_fullscreen_destination();
 
     if (!display.present_frame(frame)) {
+        fprintf(stderr,
+                "direct111: ERROR PHASE=DISPLAYABLE3_FIRST_PRESENT "
+                "result=FAILED input_format=NV12\n");
         display.shutdown();
         source.shutdown();
         return 4;
     }
 
     fprintf(stderr,
-            "carplay-mirror: GLES_PRESENT=YES mode=readback "
-            "displayable=3 source_pixel_valid=1 hash=0x%08lx\n",
-            source.pixel_hash());
-    marker(true, "carplay111-window58", "readback", 1);
-    if (!activate()) {
-        marker(false, 0, 0, 0);
+            "direct111: PHASE=DISPLAYABLE3_FIRST_PRESENT result=OK "
+            "displayable=3 output=1440x455 source=private111-decoded "
+            "window58_readback=0\n");
+
+    marker(true, "private111-decoded-shm", "direct-display");
+    if (!activate_context80()) {
+        marker(false, 0, 0);
         display.shutdown();
         source.shutdown();
-        restore();
         return 5;
     }
 
     fprintf(stderr,
-            "carplay-mirror: ACTIVE source=window58 sink=displayable3 "
-            "context=80 first_present=1 pixel_plane=lanye-pinned "
-            "target_fps=%u\n",
+            "direct111: PHASE=DIRECT111_ACTIVE "
+            "pipeline=private111->H264_TAP->decoder->displayable3->Context80 "
+            "decoder_backend=stock-omx-tap-v1 "
+            "window58_readback=0 target_fps=%u\n",
             kTargetFps);
 
     unsigned failures = 0;
@@ -436,99 +415,82 @@ int main(int argc, char **argv) {
         const unsigned long long frame_start = now_us();
 
         if (source.read_frame(&frame)) {
-            if (!source.pixel_valid()) {
-                ++failures;
-                if (failures == 1 || failures == 30) {
-                    fprintf(stderr,
-                            "carplay-mirror: SOURCE_PIXEL_GATE=INVALID "
-                            "freezing_last_valid_frame=1 failures=%u "
-                            "hash=0x%08lx nonblack_permille=%u\n",
-                            failures,
-                            source.pixel_hash(),
-                            source.pixel_nonblack_permille());
-                }
-                usleep(100000);
-                continue;
-            }
-
             failures = 0;
             ++source_frames;
             if (!display.present_frame(frame)) {
                 fprintf(stderr,
-                        "carplay-mirror: display presentation failed; "
-                        "stopping safely\n");
+                        "direct111: ERROR PHASE=DISPLAY_PRESENT "
+                        "stopping_safely=1\n");
                 break;
             }
         } else {
             ++failures;
-            if (failures == 30) {
+            if (failures == 30u) {
                 fprintf(stderr,
-                        "carplay-mirror: source temporarily unavailable; "
-                        "freezing last frame failures=%u\n",
-                        failures);
+                        "direct111: PHASE=DECODED_SOURCE_STALL "
+                        "freeze_last_frame=1 failures=%u "
+                        "h264_packets=%u decoded_frames=%u\n",
+                        failures, (unsigned)source.h264_packets(),
+                        (unsigned)source.decoded_frames());
             }
-            if (failures > 150) {
+            if (failures > 150u) {
                 fprintf(stderr,
-                        "carplay-mirror: source lost; stopping safely "
-                        "failures=%u\n",
-                        failures);
+                        "direct111: ERROR PHASE=DECODED_SOURCE_LOST "
+                        "failures=%u h264_packets=%u h264_bytes=%u "
+                        "decoded_frames=%u\n",
+                        failures, (unsigned)source.h264_packets(),
+                        (unsigned)source.h264_bytes(),
+                        (unsigned)source.decoded_frames());
                 break;
             }
-            usleep(100000);
+            usleep(20000);
             continue;
         }
 
         const unsigned long long now = now_us();
-        if (verbose && now && stats_start &&
-            now - stats_start >= 10000000ULL) {
+        if (now && stats_start && now - stats_start >= 10000000ULL) {
             const unsigned long long span = now - stats_start;
             const unsigned long total_presented = display.frame_count();
             const unsigned long interval_presented =
                 total_presented >= stats_presented_base
-                    ? total_presented - stats_presented_base
-                    : 0;
+                    ? total_presented - stats_presented_base : 0;
             const unsigned long fps100 = span
                 ? (unsigned long)(((unsigned long long)interval_presented *
-                                   100000000ULL) /
-                                  span)
+                                   100000000ULL) / span)
                 : 0;
+
             fprintf(stderr,
-                    "carplay-mirror: RUN source=window58 size=%dx%d stride=%d "
-                    "source_frames=%lu presented_frames=%lu "
-                    "present_fps=%lu.%02lu target_fps=%u context=80 "
-                    "pixel_valid=%s hash=0x%08lx nonblack_permille=%u "
-                    "changed=%s\n",
-                    frame.width,
-                    frame.height,
-                    frame.stride,
-                    source_frames,
-                    total_presented,
-                    fps100 / 100,
-                    fps100 % 100,
-                    kTargetFps,
-                    source.pixel_valid() ? "YES" : "NO",
-                    source.pixel_hash(),
-                    source.pixel_nonblack_permille(),
-                    source.pixel_changed() ? "YES" : "NO");
+                    "direct111: PHASE=RUN generation=%u "
+                    "h264_ready=%d h264_packets=%u h264_bytes=%u "
+                    "decoded_frames=%u source_frames=%lu "
+                    "presented_frames=%lu present_fps=%lu.%02lu "
+                    "displayable=3 context=80 window58_readback=0\n",
+                    (unsigned)source.generation(),
+                    source.h264_ready() ? 1 : 0,
+                    (unsigned)source.h264_packets(),
+                    (unsigned)source.h264_bytes(),
+                    (unsigned)source.decoded_frames(),
+                    source_frames, total_presented,
+                    fps100 / 100, fps100 % 100);
+
             stats_presented_base = total_presented;
             stats_start = now;
         }
 
         const unsigned long long spent = now_us() - frame_start;
-        if (spent < frame_period_us) {
+        if (spent < frame_period_us)
             usleep((unsigned int)(frame_period_us - spent));
-        }
     }
 
     const unsigned long presented_frames = display.frame_count();
-    marker(false, 0, 0, 0);
-    restore();
+    marker(false, 0, 0);
+    restore_context80();
     display.shutdown();
     source.shutdown();
+
     fprintf(stderr,
-            "carplay-mirror: stopped; Java/HMI context release requested "
-            "source_frames=%lu presented_frames=%lu\n",
-            source_frames,
-            presented_frames);
+            "direct111: PHASE=STOP source_frames=%lu presented_frames=%lu "
+            "window58_readback=0\n",
+            source_frames, presented_frames);
     return 0;
 }
