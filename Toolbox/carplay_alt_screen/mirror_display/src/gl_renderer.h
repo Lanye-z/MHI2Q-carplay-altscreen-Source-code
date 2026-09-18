@@ -31,6 +31,7 @@ private:
     bool upload_packed_rgba_bytes(const unsigned char *pixels,
                                   int width, int height,
                                   bool swap_rb);
+    bool upload_nv12(const VideoFrame &frame);
 
     GLuint program_;
     GLuint vertex_shader_;
