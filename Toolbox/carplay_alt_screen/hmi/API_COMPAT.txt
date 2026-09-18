@@ -31,6 +31,9 @@ public final class com.luka.carplay.cluster.ClusterStateController {
   public static boolean isContextWriterThread();
     descriptor: ()Z
 
+  public static boolean isCompositeModeRequested();
+    descriptor: ()Z
+
   public static boolean isSmallScreenViewArea();
     descriptor: ()Z
 
