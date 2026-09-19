@@ -40,6 +40,8 @@ for marker in \
   'packed_tight_required=1' \
   'stream111_request_or_phone_marker' \
   'STREAM_111_REQUESTED=YES' \
+  'PHASE=PIPELINE_SOURCE_PRIMED' \
+  'startup_frame_progress_required=2' \
   'PHASE=H264_STREAM_VALID' \
   'PHASE=DECODER_FIRST_FRAME' \
   'PHASE=NV12_CSC_READY' \
