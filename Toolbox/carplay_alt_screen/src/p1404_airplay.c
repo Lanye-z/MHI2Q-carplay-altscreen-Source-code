@@ -277,6 +277,24 @@ const char *alt_cf_cString(void *o, char *buf, size_t cap) {
     return buf;
 }
 
+int alt_cf_data_bytes(const void *o, const uint8_t **data, size_t *bytes) {
+    long n;
+    const uint8_t *p;
+    if (data) *data = NULL;
+    if (bytes) *bytes = 0u;
+    if (!o || !data || !bytes) return 0;
+    if (!cf_data_len || !cf_data_ptr || !cf_get_typeid || !cf_data_typeid)
+        bind_cf();
+    if (!alt_cf_is_data(o) || !cf_data_len || !cf_data_ptr) return 0;
+    n = cf_data_len((cf_obj)o);
+    if (n <= 0) return 0;
+    p = cf_data_ptr((cf_obj)o);
+    if (!p) return 0;
+    *data = p;
+    *bytes = (size_t)n;
+    return 1;
+}
+
 void p1404_airplay_bind(void) { bind_cf(); bind_real(); }
 
 /* Public interposers may be reached from an earlier dependency constructor.
@@ -1241,6 +1259,53 @@ void *alt_bootstrap_server_create(void) {
     if (altscreen_runtime_ensure_initialized)
         altscreen_runtime_ensure_initialized();
     return target;
+}
+
+typedef int (*screen_stream_set_property_fn)(
+    const void *, unsigned, void *, const void *, const void *);
+static screen_stream_set_property_fn real_stream_set_property;
+
+static screen_stream_set_property_fn stock_stream_set_property_target(void) {
+    void *target = (void *)real_stream_set_property;
+    if (target) return real_stream_set_property;
+    target = p1404_stock_symbol_named ?
+        p1404_stock_symbol_named("_ScreenStreamSetProperty") : NULL;
+    if (target == (void *)&_ScreenStreamSetProperty) target = NULL;
+    if (target) real_stream_set_property = (screen_stream_set_property_fn)target;
+    return real_stream_set_property;
+}
+
+/*
+ * Stock CarPlay supplies AVCDecoderConfigurationRecord through the "avcc"
+ * ScreenStream property separately from ProcessData.  Mirror fifthBro's
+ * codec-config/frame separation, but keep this observer fail-open: config is
+ * merely cached by stream pointer and cannot create SHM or mark a stream
+ * private.  Only the existing private111 ProcessData identity gate later emits
+ * the cached config into /carplay111_h264.
+ */
+int _ScreenStreamSetProperty(const void *stream, unsigned flags, void *property,
+                             const void *qualifier, const void *value) {
+    screen_stream_set_property_fn target = stock_stream_set_property_target();
+    const uint8_t *bytes_ptr = NULL;
+    size_t bytes_len = 0u;
+    char keybuf[64];
+    const char *key;
+
+    if (!target) return -1;
+
+    if (altscreen_runtime_ensure_initialized)
+        altscreen_runtime_ensure_initialized();
+    if ((!altscreen_runtime_is_ready || altscreen_runtime_is_ready()) &&
+        p1404_identity_ok && p1404_armed && stream && property && value) {
+        if (!cf_get_typeid) bind_cf();
+        key = alt_cf_cString(property, keybuf, sizeof(keybuf));
+        if (key && !strcmp(key, "avcc") &&
+            alt_cf_data_bytes(value, &bytes_ptr, &bytes_len)) {
+            p111_h264_tap_note_avcc((void *)stream, bytes_ptr, bytes_len);
+        }
+    }
+
+    return target(stream, flags, property, qualifier, value);
 }
 
 void *alt_observe_proc(void *a0, void *a1, void *a2, void *a3, void *caller);
