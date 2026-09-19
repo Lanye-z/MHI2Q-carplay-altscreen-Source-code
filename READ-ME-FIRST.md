@@ -1,110 +1,117 @@
-# CarPlay private111 Direct Display V2 — vehicle test
+# CarPlay private111 Direct Display V2 — READ FIRST
 
 Branch: `carplay-private111-direct-display-v2`
 
-V1 has now answered the large architectural question: the CarPlay private
-type111 stream can reach the Audi Virtual Cockpit through stock OMX,
-displayable3 and Java-owned Context80. The V1 vehicle showed a continuously
-moving but garbled map, so V2 changes **only the decoded pixel-layout boundary**.
+## Do not use the current ZIP for the next vehicle test yet
 
-## Actual V2 pipeline
+The V2 source has been updated after the latest log/binary review, but the
+checked-in QNX sidecar executable is still the older V1 binary.
 
-```text
-iPhone CarPlay private type111
-  -> stock AirPlay control / framing
-  -> ScreenStreamProcessData
-  -> /carplay111_h264
-  -> stock Qualcomm/target MHI2Q platform OMX decoder
-  -> vendor Screen format 0x0001000c
-  -> stock CScreenRender post
-  -> exact stock screen_window_t
-  -> QNX screen_read_window linearizer
-       -> standard NV12 pixmap when supported
-       -> otherwise RGBA8888 -> CPU BT.601 -> NV12
-  -> /carplay111_decoded (unchanged V1 ABI)
-  -> existing V1 QNX sidecar
-  -> CPU BT.601 NV12 -> RGBA
-  -> GLES / libdisplayinit
-  -> displayable3
-  -> Java/HMI Context80 = {98,101,102,3}
-  -> Virtual Cockpit
-```
-
-The sidecar itself still does not enumerate/read Window58. V2 obtains the exact
-stock private renderer window inside the hook after the stock render call; this
-avoids the old WindowManager identity/visibility guessing path.
-
-Main110 remains stock. Java/HMI remains the sole Context80 owner.
-
-## What changed from V1
-
-V1 used the correct measured metadata:
+Current expected metadata:
 
 ```text
-1440x542
-Screen format 65548 / 0x0001000c
-stride 1536
-UV offset 0xCC000
+release_binary_status=V1_BINARY_STALE_V2_SOURCE_REBUILD_REQUIRED
+vehicle_zip_status=NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED
 ```
 
-but copied rows directly from the vendor pointer as if it were ordinary linear
-NV12. The moving garble proved that the pointer contains live decoded data but
-not in the assumed row-linear memory layout.
+A fresh QNX 6.5 ARMv7 build of
+`Toolbox/carplay_alt_screen/mirror_display` must be promoted before the next
+vehicle test.
 
-V2 no longer implements a guessed target MHI2Q platform detile formula. QNX Screen performs the
-vendor-layout conversion by screenshotting the exact stock window into a normal
-off-screen pixmap.
+## What is fixed in V2 source
 
-## Expected V2 evidence
+### 1. Decoded SHM SIGBUS hardening
 
-The new markers to watch are:
+Both consumer map functions now:
 
 ```text
-PHASE=FRAME_NATIVE_WINDOW_METADATA
-PHASE=FRAME_LINEARIZER_API ... result=READY
-PHASE=FRAME_LINEARIZER_PIXMAP backend=screen-nv12 ... result=READY
-# OR automatic fallback:
-PHASE=FRAME_LINEARIZER_FALLBACK ... to=screen-rgba
-PHASE=FRAME_LINEARIZER_PIXMAP backend=screen-rgba ... result=READY
-
-PHASE=FRAME_LINEARIZER_FIRST_FRAME
-PHASE=DECODER_FIRST_FRAME backend=stock-omx-tap
-renderer: PHASE=NV12_CSC_READY
-PHASE=DISPLAYABLE3_FIRST_PRESENT
-CTX80_OBSERVED actual=80
-PHASE=DIRECT111_ACTIVE
+shm_open
+ -> fstat
+ -> require st_size >= sizeof(expected SHM ABI)
+ -> mmap
+ -> validate magic/version/writer_pid
+ -> retry if not ready
 ```
 
-If `PHASE=FRAME_LINEARIZER_RAW_FALLBACK` appears before the first successful
-linearized frame, Screen linearization was unavailable and V2 preserved the V1
-raw-pointer path as diagnostic fail-open evidence. After
-`PHASE=FRAME_LINEARIZER_FIRST_FRAME`, later transient read failures use
-`FREEZE_LAST_GOOD` semantics instead of feeding tiled raw pixels again.
-Uniform/black frames are accepted as valid screenshots.
+The V2 crash location was in `map_frame()` at the
+`/carplay111_decoded` magic read, so decoded SHM is explicitly covered.
 
-## Vehicle-test procedure
+### 2. Producer reconnect/session reset
 
-Use the same clean install/start sequence as V1:
+A new private stream always resets the named SHM publication state, even if a
+new producer process again starts with numeric generation 1.
 
-1. Keep the iPhone disconnected during install.
-2. Install the branch package and complete a real MMI reboot.
-3. Run START and complete the requested second real MMI reboot.
-4. Connect the iPhone, open a CarPlay navigation route, and leave the session
-   connected long enough to collect STATUS/logs.
-5. Record whether the VC is correct, black, frozen, or still moving/garbled.
-6. Save the full log bundle before restoring or changing branches.
+Session identity is no longer treated as generation alone:
 
-## Deliberately not mixed into V2
+```text
+writer_pid + generation + stream_cookie
+```
 
-Do not add these until the pixel result is known:
+`writer_pid=0` is used during header transition and is published last after
+the new session header is ready.
 
-- FFmpeg stream-player;
-- standalone H.264 decoder;
-- `screen_blit`;
-- zero-copy/native-image import;
-- a new displayable;
-- a new Context;
-- a different CarPlay type111 state machine.
+### 3. Same-session sidecar recovery
 
-The checked-in display sidecar is intentionally the V1-proven binary. V2 CI
-rebuilds/promotes the universal hook that contains the new Screen linearizer.
+The launcher monitors abnormal sidecar exit before and after first present,
+with a bounded restart count.
+
+On an abnormal restart the sidecar may bypass an already-consumed phone gate
+**only after** validating an active, matching H264+decoded SHM session.
+Otherwise it waits for the next genuine `PHONE_REQUEST_111`.
+
+### 4. Raw vendor fallback removed
+
+A Screen readback failure never sends the original vendor OMX CPU pointer into
+`/carplay111_decoded`.
+
+Before first success it drops the auxiliary frame; after success it freezes the
+last good frame.
+
+### 5. Pixel and timing evidence
+
+The hook now logs separate readback and SHM-publish counts plus readback
+p50/p95/max latency.
+
+Optional diagnostic samples are off by default:
+
+```text
+ALT111_LINEARIZER_SAMPLE_NV12=1
+ALT111_CONSUMER_SAMPLE_NV12=1
+```
+
+Each writes at most three tight-NV12 frames under `/tmp`.
+
+## Architecture retained
+
+```text
+type111
+ -> stock OMX
+ -> stock renderer
+ -> Screen linearizer
+ -> /carplay111_decoded
+ -> sidecar
+ -> GLES / displayable3
+ -> Java Context80
+ -> VC
+```
+
+The MMI-proven displayable3/Java Context80 exit remains unchanged. The sidecar
+does not enumerate Window58 and does not call `screen_read_window`; readback
+remains in the private renderer hook.
+
+## Build after these source changes
+
+On a machine with the QNX 6.5 ARMv7 SDK:
+
+```sh
+./BUILD-MIRROR-QNX.sh
+```
+
+Then promote the resulting
+`Toolbox/carplay_alt_screen/mirror_display/build/carplay-alt111-mirror-display`
+to the release directory, change release status to
+`PRIVATE111_DIRECT_DISPLAY_V2`, refresh both SHA256 manifests, and rerun
+`VERIFY-NATIVE-DIRECT-RELEASE.sh`.
+
+Do not change the release status to vehicle-ready unless the rebuilt ELF
+contains the V2 markers checked by `build_qnx.sh`.
