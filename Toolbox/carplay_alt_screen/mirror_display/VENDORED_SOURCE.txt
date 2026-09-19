@@ -15,4 +15,4 @@ mirror_sink=displayable3_gles
 context_owner=Java_Context80
 context_composite=98,101,102,3
 release_status=QNX_ARMV7_BINARY_REBUILD_REQUIRED_AFTER_FINAL_HARDENING
-note=Final V2 source adds fresh-frame same-session recovery validation and packed-NV12 metadata guards after the previous V2 binary was built. Rebuild/promote the QNX ARMv7 sidecar before vehicle use.
+note=Final V2 source adds fresh-frame same-session recovery validation, packed-NV12 metadata guards, repeated normal-reconnect gating, startup fresh-frame priming, and stale-callback session isolation after the previous V2 binary was built. Rebuild/promote the QNX ARMv7 sidecar before vehicle use.
