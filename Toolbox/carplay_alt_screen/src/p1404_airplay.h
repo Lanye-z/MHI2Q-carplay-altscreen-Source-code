@@ -28,6 +28,9 @@ void alt_note_displays_container(const char *tag, void *container);
 /* Returns the actual dictionary that carries type == target. */
 void *alt_find_stream_descriptor(void *obj, uint32_t target_stream_type);
 const char *alt_cf_cString(void *cfstring, char *buf, size_t cap);
+/* Safe CFData byte view used by the exact _ScreenStreamSetProperty("avcc")
+ * observer. The returned pointer remains owned by the stock CF object. */
+int alt_cf_data_bytes(const void *obj, const uint8_t **data, size_t *bytes);
 int alt_cf_is_array(const void *obj);
 int alt_cf_is_dict(const void *obj);
 int alt_cf_int64(const void *obj, int64_t *out);
