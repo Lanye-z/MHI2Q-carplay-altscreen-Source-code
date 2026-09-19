@@ -62,14 +62,26 @@ grep -Fq 'private111_session_restart=enabled_while_basevideo_demand_active' "$IN
 grep -Fq 'lifecycle_watchdog_binary_rebuild_required=no' "$INFO" ||
     fail "BUILD_INFO lifecycle rebuild policy mismatch"
 
-grep -Fq 'p111_frame_tap_write(stream, buffer' "$NATIVE" ||
-    fail "decoded NV12 tap is not wired before stock render"
+grep -Fq 'p111_frame_tap_write_window(stream, stock_window' "$NATIVE" ||
+    fail "V2 Screen linearizer is not wired after stock render"
+grep -Fq '#define CSCREEN_WINDOW_OFF 0x08u' "$NATIVE" ||
+    fail "V2 exact stock window offset contract missing"
+grep -Fq 'PHASE=FRAME_LINEARIZER_RAW_FALLBACK' "$NATIVE" ||
+    fail "V2 raw diagnostic fail-open path missing"
 grep -A8 'static int native_route_requested' "$NATIVE" | grep -Fq 'return 0;' ||
-    fail "native route is not hard-disabled for direct-display V1"
+    fail "native route is not hard-disabled for direct-display V2"
 grep -Fq 'P111_QNX_NV12_FORMAT 65548u' "$TAP" ||
-    fail "measured QNX NV12 format support missing"
-grep -Fq 'qnx_nv12_128x32' "$TAP" ||
-    fail "measured QNX NV12 layout evidence missing"
+    fail "measured vendor Screen format support missing"
+grep -Fq 'P111_SCREEN_FORMAT_NV12 12' "$TAP" ||
+    fail "V2 standard NV12 readback target missing"
+grep -Fq 'P111_SCREEN_FORMAT_RGBA8888 8' "$TAP" ||
+    fail "V2 RGBA readback fallback missing"
+grep -Fq 'P111_SCREEN_PROPERTY_PLANAR_OFFSETS 33' "$TAP" ||
+    fail "V2 authoritative plane-offset query missing"
+grep -Fq 'screen_read_window' "$TAP" ||
+    fail "V2 Screen window linearizer missing"
+grep -Fq 'PHASE=FRAME_LINEARIZER_FIRST_FRAME' "$TAP" ||
+    fail "V2 first linearized frame diagnostic missing"
 grep -Fq 'decoder_backend=stock-omx-tap' "$SOURCE" ||
     fail "sidecar decoded source backend mismatch"
 
@@ -157,10 +169,11 @@ map_hook_sha=$(sed -n 's/.*"Toolbox\/carplay_alt_screen\/universal\/libcarplay_a
     fail "package map hook mismatch"
 
 echo "PRIVATE111_DIRECT_VERIFY=PASS"
-echo "pipeline=type111->H264Tap->stockOMX->NV12Tap->CPU_CSC_GLES->displayable3->Java80"
+echo "pipeline=type111->H264Tap->stockOMX->stockPost->ScreenLinearizer->NV12SHM->CPU_CSC_GLES->displayable3->Java80"
 echo "sidecar_sha256=$bin_sha"
 echo "hook_sha256=$hook_sha"
-echo "window58_readback=DISABLED"
+echo "sidecar_window58_observer=DISABLED"
+echo "hook_exact_stock_window_linearizer=ENABLED"
 echo "context_owner=JAVA80_ONLY"
 echo "session_end_policy=HOOK_DIRECT111_TAP_STOP_WATCHDOG_RESTART"
 echo "vehicle_zip_status=READY_FOR_VEHICLE_TEST"
