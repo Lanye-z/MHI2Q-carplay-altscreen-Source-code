@@ -58,7 +58,7 @@ type111 H264
   -> vendor Screen buffer 0x0001000c
   -> stock CScreenRender::render()
   -> stock screen_post_window()
-  -> exact stock screen_window_t (CScreenRender + 0x08)
+  -> exact stock screen_window_t captured during screen_create_window_buffers()
   -> screen_read_window()
        -> preferred: standard Screen NV12 pixmap (format 12)
        -> fallback: RGBA8888 pixmap -> CPU BT.601 -> NV12
@@ -83,8 +83,12 @@ One build exercises all useful cases:
 4. If NV12 pixmap creation/readback is unsupported, recreate the target as
    `SCREEN_FORMAT_RGBA8888=8`.
 5. Convert the CPU-visible MHI2Q BGRA byte order to limited-range BT.601 NV12.
-6. If Screen readback itself fails or produces no image detail, fall back to
-   the V1 raw-pointer tap **only as a diagnostic fail-open path**.
+6. A successful Screen readback is accepted even for a uniform/black frame.
+   Pixel-detail probing is diagnostic only.
+7. Before the first successful linearized frame, a genuine Screen failure may
+   use the V1 raw-pointer tap as a diagnostic fail-open path. After one good
+   linearized frame, transient failures freeze the last good frame instead of
+   reintroducing tiled garbage.
 
 The source is normally ~60 fps while the cockpit sink targets ~30 fps, so the
 blocking Screen readback is performed on every other stock render callback.
@@ -125,8 +129,7 @@ healthy but Screen readback did not linearize the stock window on that run.
 - No extra socket receive consumes private111 bytes.
 - Main110 is not routed through the V2 frame linearizer.
 - The sidecar still does not observe Window58 through a WindowManager census.
-- The hook uses only the exact `screen_window_t` owned by the private
-  `CScreenRender`.
+- The hook uses only the exact `screen_window_t` captured from the private renderer's real Screen buffer-creation call.
 - Context80 remains Java/HMI-owned.
 - No `screen_blit`, standalone FFmpeg decoder, zero-copy experiment, or
   displayable/context redesign is mixed into V2.
