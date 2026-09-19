@@ -233,10 +233,18 @@ bool Mhi2qBackend::init(const Mhi2qBackendConfig &cfg) {
     return true;
 }
 
-void Mhi2qBackend::swap() {
-    if (!ready_ || egl_surface_ == EGL_NO_SURFACE) return;
-    if (!eglSwapBuffers(egl_display_, egl_surface_))
+bool Mhi2qBackend::swap() {
+    if (!ready_ || egl_surface_ == EGL_NO_SURFACE)
+        return false;
+    if (!eglSwapBuffers(egl_display_, egl_surface_)) {
         log_egl_error("eglSwapBuffers");
+        fprintf(stderr,
+                "backend: PHASE=EGL_SWAP_FAILED result=FAILED "
+                "window58_readback=0 displayable=%d\n",
+                cfg_.displayable_id);
+        return false;
+    }
+    return true;
 }
 
 void Mhi2qBackend::destroy_native_window() {

@@ -378,7 +378,9 @@ int main(int argc, char **argv) {
     if (!display.present_frame(frame)) {
         fprintf(stderr,
                 "direct111: ERROR PHASE=DISPLAYABLE3_FIRST_PRESENT "
-                "result=FAILED input_format=NV12\n");
+                "result=FAILED input_format=NV12 "
+                "reason=texture_upload_or_egl_swap "
+                "see_EGL_SWAP_FAILED_above=1\n");
         display.shutdown();
         source.shutdown();
         return 4;
@@ -405,6 +407,8 @@ int main(int argc, char **argv) {
             kTargetFps);
 
     unsigned failures = 0;
+    bool in_stall = false;
+    unsigned long long stall_start_us = 0;
     unsigned long source_frames = 1;
     unsigned long stats_presented_base = display.frame_count();
     unsigned long long stats_start = now_us();
@@ -415,7 +419,22 @@ int main(int argc, char **argv) {
         const unsigned long long frame_start = now_us();
 
         if (source.read_frame(&frame)) {
+            if (in_stall) {
+                const unsigned long long now = now_us();
+                const unsigned long long stall_ms =
+                    (now && stall_start_us && now >= stall_start_us)
+                        ? (now - stall_start_us) / 1000ULL : 0;
+                fprintf(stderr,
+                        "direct111: PHASE=DECODED_SOURCE_RECOVERED "
+                        "stall_ms=%llu generation=%u decoded_frames=%u "
+                        "h264_packets=%u\n",
+                        stall_ms, (unsigned)source.generation(),
+                        (unsigned)source.decoded_frames(),
+                        (unsigned)source.h264_packets());
+            }
             failures = 0;
+            in_stall = false;
+            stall_start_us = 0;
             ++source_frames;
             if (!display.present_frame(frame)) {
                 fprintf(stderr,
@@ -425,24 +444,33 @@ int main(int argc, char **argv) {
             }
         } else {
             ++failures;
-            if (failures == 30u) {
+            if (!in_stall) {
+                in_stall = true;
+                stall_start_us = now_us();
                 fprintf(stderr,
                         "direct111: PHASE=DECODED_SOURCE_STALL "
-                        "freeze_last_frame=1 failures=%u "
-                        "h264_packets=%u decoded_frames=%u\n",
+                        "freeze_last_frame=1 failures=%u h264_packets=%u "
+                        "decoded_frames=%u generation=%u\n",
                         failures, (unsigned)source.h264_packets(),
-                        (unsigned)source.decoded_frames());
-            }
-            if (failures > 150u) {
+                        (unsigned)source.decoded_frames(),
+                        (unsigned)source.generation());
+            } else if ((failures % 250u) == 0u) {
+                const unsigned long long now = now_us();
+                const unsigned long long stall_ms =
+                    (now && stall_start_us && now >= stall_start_us)
+                        ? (now - stall_start_us) / 1000ULL : 0;
                 fprintf(stderr,
-                        "direct111: ERROR PHASE=DECODED_SOURCE_LOST "
-                        "failures=%u h264_packets=%u h264_bytes=%u "
-                        "decoded_frames=%u\n",
-                        failures, (unsigned)source.h264_packets(),
-                        (unsigned)source.h264_bytes(),
-                        (unsigned)source.decoded_frames());
-                break;
+                        "direct111: PHASE=DECODED_SOURCE_STALL "
+                        "freeze_last_frame=1 duration_ms=%llu failures=%u "
+                        "h264_packets=%u decoded_frames=%u generation=%u\n",
+                        stall_ms, failures,
+                        (unsigned)source.h264_packets(),
+                        (unsigned)source.decoded_frames(),
+                        (unsigned)source.generation());
             }
+            /* No fixed ~3s auto-exit: keep freezing the last frame and let the
+             * stop script / signal own teardown. Short decoded gaps are normal
+             * during nav-map / phone / OMX scheduling jitter. */
             usleep(20000);
             continue;
         }

@@ -110,7 +110,19 @@ jobs:
 
           assert 'private111_direct_source.cpp' in make
           assert 'carplay_window_source.cpp' not in make
-          print('DIRECT111_SOURCE_CONTRACT=PASS private_only=1 avcc_config=1 stock_forward=1 window58_readback=0')
+
+          bh = Path('Toolbox/carplay_alt_screen/mirror_display/src/mhi2q_backend.h').read_text()
+          bc = Path('Toolbox/carplay_alt_screen/mirror_display/src/mhi2q_backend.cpp').read_text()
+          cc = Path('Toolbox/carplay_alt_screen/mirror_display/src/cluster_video_display.cpp').read_text()
+          assert 'bool swap();' in bh
+          assert 'bool Mhi2qBackend::swap()' in bc
+          assert '!backend_.swap()' in cc
+          assert 'PHASE=EGL_SWAP_FAILED' in bc
+          assert 'PHASE=DECODED_SOURCE_RECOVERED' in side
+          assert 'freeze_last_frame=1' in side
+          assert 'failures > 150' not in side
+          assert 'PHASE=DECODED_SOURCE_LOST' not in side
+          print('DIRECT111_SOURCE_CONTRACT=PASS private_only=1 avcc_config=1 stock_forward=1 window58_readback=0 swap_propagation=1 stall_freeze=1')
           PY
 
       - name: Shell syntax

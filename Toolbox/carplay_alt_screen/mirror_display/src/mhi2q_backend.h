@@ -18,7 +18,7 @@ public:
     /* Create the managed displayable window and EGL surface only.
      * V2.2 Native never reads or writes Cluster context. */
     bool init(const Mhi2qBackendConfig &cfg);
-    void swap();
+    bool swap();
     void shutdown();
 
     int width() const { return cfg_.width; }

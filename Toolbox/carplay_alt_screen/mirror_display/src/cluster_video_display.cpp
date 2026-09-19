@@ -36,13 +36,24 @@ bool ClusterVideoDisplay::present_uploaded_frame() {
     if (!ready_) return false;
 
     /* Preserve the vehicle-tested first-frame timing from V2A/V2.2. The old
-     * no-op Native route call sat between these two submits; only that call is removed. */
+     * no-op Native route call sat between these two submits; only that call is removed.
+     * Each submit now propagates the swap result so a real EGL swap failure can never
+     * be surfaced as a successful first present. */
     renderer_.draw();
-    backend_.swap();
+    if (!backend_.swap()) {
+        fprintf(stderr,
+                "display: PHASE=EGL_SWAP_FAILED present=first_submit "
+                "first_frame_presented=%d\n", (int)first_frame_presented_);
+        return false;
+    }
 
     if (!first_frame_presented_) {
         renderer_.draw();
-        backend_.swap();
+        if (!backend_.swap()) {
+            fprintf(stderr,
+                    "display: PHASE=EGL_SWAP_FAILED present=second_timing_submit\n");
+            return false;
+        }
         first_frame_presented_ = true;
     }
 

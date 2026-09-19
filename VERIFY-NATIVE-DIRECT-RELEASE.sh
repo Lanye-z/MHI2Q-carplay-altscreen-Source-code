@@ -9,6 +9,10 @@ REL="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS"
 NATIVE="$ROOT/Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c"
 TAP="$ROOT/Toolbox/carplay_alt_screen/src/private111_direct_tap.c"
 SOURCE="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/private111_direct_source.cpp"
+BACKEND_H="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/mhi2q_backend.h"
+BACKEND_CPP="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/mhi2q_backend.cpp"
+CLUSTER_CPP="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/cluster_video_display.cpp"
+MAIN_CPP="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/main.cpp"
 START="$ROOT/Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh"
 CTRL="$ROOT/Toolbox/scripts/altscreen_chain_test_universal.sh"
 LAUNCH="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/start_vehicle.sh"
@@ -23,7 +27,7 @@ sha256_file(){
 }
 binary_strings(){ strings "$1" 2>/dev/null || grep -a -o '[[:print:]][[:print:]]*' "$1"; }
 
-for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$SOURCE" "$START" "$CTRL" "$LAUNCH" "$STOP"; do
+for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$MAIN_CPP" "$START" "$CTRL" "$LAUNCH" "$STOP"; do
     [ -s "$f" ] || fail "missing/empty: $f"
 done
 
@@ -61,6 +65,26 @@ grep -Fq 'qnx_nv12_128x32' "$TAP" ||
     fail "measured QNX NV12 layout evidence missing"
 grep -Fq 'decoder_backend=stock-omx-tap' "$SOURCE" ||
     fail "sidecar decoded source backend mismatch"
+
+# ---- Reliability contract: EGL swap failure must propagate to first present ----
+grep -Fq 'bool swap();' "$BACKEND_H" ||
+    fail "Mhi2qBackend::swap() must return bool"
+grep -Fq 'bool Mhi2qBackend::swap()' "$BACKEND_CPP" ||
+    fail "swap() implementation must return bool"
+grep -Fq 'if (!backend_.swap()) {' "$CLUSTER_CPP" ||
+    fail "present_uploaded_frame() must check swap() result"
+grep -Fq 'PHASE=EGL_SWAP_FAILED' "$BACKEND_CPP" ||
+    fail "eglSwapBuffers failure must emit EGL_SWAP_FAILED diagnostic"
+grep -Fq 'PHASE=DECODED_SOURCE_RECOVERED' "$MAIN_CPP" ||
+    fail "stall recovery diagnostic missing"
+grep -Fq 'freeze_last_frame=1' "$MAIN_CPP" ||
+    fail "decoded stall must freeze last frame"
+if grep -Fq 'failures > 150' "$MAIN_CPP"; then
+    fail "fixed ~3s stall auto-exit must not remain in main loop"
+fi
+if grep -Fq 'PHASE=DECODED_SOURCE_LOST' "$MAIN_CPP"; then
+    fail "DECODED_SOURCE_LOST auto-exit must not remain"
+fi
 
 grep -Fq 'echo observe > "$STATE_DIR/IAP2_PROFILE"' "$CTRL" ||
     fail "corrected iAP2 observe policy missing"

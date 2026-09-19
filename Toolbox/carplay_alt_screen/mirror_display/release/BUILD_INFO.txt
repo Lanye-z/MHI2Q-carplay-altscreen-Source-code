@@ -19,5 +19,7 @@ context_composite=98,101,102,3
 
 main110=untouched
 stock_private_forward=fail_open
+egl_swap_failure_propagation=enabled
+decoded_stall_policy=freeze_last_frame
 release_binary_status=PRIVATE111_DIRECT_DISPLAY_V1
 vehicle_zip_status=READY_FOR_VEHICLE_TEST
