@@ -16,6 +16,7 @@ MAIN_CPP="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/main.cpp"
 START="$ROOT/Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh"
 CTRL="$ROOT/Toolbox/scripts/altscreen_chain_test_universal.sh"
 LAUNCH="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/start_vehicle.sh"
+RELEASE_STOP="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh"
 STOP="$ROOT/Toolbox/scripts/stop_mmi_cockpit_carplay_test.sh"
 TOP="$ROOT/SHA256SUMS.txt"
 MAP="$ROOT/PACKAGE_SOURCE_MAP.json"
@@ -27,7 +28,7 @@ sha256_file(){
 }
 binary_strings(){ strings "$1" 2>/dev/null || grep -a -o '[[:print:]][[:print:]]*' "$1"; }
 
-for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$MAIN_CPP" "$START" "$CTRL" "$LAUNCH" "$STOP"; do
+for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$MAIN_CPP" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$STOP"; do
     [ -s "$f" ] || fail "missing/empty: $f"
 done
 
@@ -54,6 +55,12 @@ grep -Fq 'mirror_sink=displayable3_gles' "$INFO" ||
     fail "BUILD_INFO sink mismatch"
 grep -Fq 'context=80_java_only' "$INFO" ||
     fail "BUILD_INFO Java80 policy mismatch"
+grep -Fq 'private111_session_end_policy=hook_DIRECT111_TAP_STOP_watchdog' "$INFO" ||
+    fail "BUILD_INFO private111 session-end policy mismatch"
+grep -Fq 'private111_session_restart=enabled_while_basevideo_demand_active' "$INFO" ||
+    fail "BUILD_INFO private111 restart policy mismatch"
+grep -Fq 'lifecycle_watchdog_binary_rebuild_required=no' "$INFO" ||
+    fail "BUILD_INFO lifecycle rebuild policy mismatch"
 
 grep -Fq 'p111_frame_tap_write(stream, buffer' "$NATIVE" ||
     fail "decoded NV12 tap is not wired before stock render"
@@ -86,6 +93,22 @@ if grep -Fq 'PHASE=DECODED_SOURCE_LOST' "$MAIN_CPP"; then
     fail "DECODED_SOURCE_LOST auto-exit must not remain"
 fi
 
+# ---- Session lifecycle contract: freeze temporary stalls, release on real teardown ----
+grep -Fq 'PHASE=DIRECT111_TAP_STOP' "$LAUNCH" ||
+    fail "launcher does not observe explicit private111 teardown"
+grep -Fq 'MIRROR_LIFECYCLE_WATCH=STARTED' "$LAUNCH" ||
+    fail "launcher lifecycle watcher missing"
+grep -Fq 'LIFECYCLE_WATCH=PRIVATE111_STOP' "$LAUNCH" ||
+    fail "launcher session-end action missing"
+grep -Fq 'ALT111_MIRROR_RESTART_REASON=private111_session_end' "$LAUNCH" ||
+    fail "launcher next-session autorestart missing"
+grep -Fq 'stop.requested' "$LAUNCH" ||
+    fail "launcher explicit-stop race guard missing"
+grep -Fq 'lifecycle.pid' "$RELEASE_STOP" ||
+    fail "release stop does not terminate lifecycle watcher"
+grep -Fq ': > "$STOP_GUARD"' "$RELEASE_STOP" ||
+    fail "release stop does not publish stop guard before teardown"
+
 grep -Fq 'echo observe > "$STATE_DIR/IAP2_PROFILE"' "$CTRL" ||
     fail "corrected iAP2 observe policy missing"
 grep -Fq 'rm -f "$STATE_DIR/ARMED_IAP2"' "$CTRL" ||
@@ -109,10 +132,21 @@ grep -Fq 'LD_PRELOAD= "$BIN"' "$LAUNCH" ||
 grep -Fq 'DIRECT_DISPLAY_SIDECAR=STOPPED' "$STOP" ||
     fail "restore script is not aligned with direct-display V1"
 
+check_release_sha(){
+    rel_name="$1"
+    rel_path="$2"
+    expected=$(awk -v name="$rel_name" '$2 == name {print tolower($1)}' "$REL")
+    actual=$(sha256_file "$rel_path")
+    [ -n "$expected" ] && [ "$actual" = "$expected" ] ||
+        fail "release SHA256 mismatch: $rel_name"
+}
+
+check_release_sha "BUILD_INFO.txt" "$INFO"
+check_release_sha "carplay-alt111-mirror-display" "$BIN"
+check_release_sha "start_vehicle.sh" "$LAUNCH"
+check_release_sha "stop_vehicle.sh" "$RELEASE_STOP"
+
 bin_sha=$(sha256_file "$BIN")
-rel_bin_sha=$(awk '$2 == "carplay-alt111-mirror-display" {print tolower($1)}' "$REL")
-[ -n "$rel_bin_sha" ] && [ "$bin_sha" = "$rel_bin_sha" ] ||
-    fail "release sidecar SHA256 mismatch"
 
 hook_sha=$(sha256_file "$HOOK")
 top_hook_sha=$(awk '$2 == "Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so" {print tolower($1)}' "$TOP")
@@ -128,4 +162,5 @@ echo "sidecar_sha256=$bin_sha"
 echo "hook_sha256=$hook_sha"
 echo "window58_readback=DISABLED"
 echo "context_owner=JAVA80_ONLY"
+echo "session_end_policy=HOOK_DIRECT111_TAP_STOP_WATCHDOG_RESTART"
 echo "vehicle_zip_status=READY_FOR_VEHICLE_TEST"
