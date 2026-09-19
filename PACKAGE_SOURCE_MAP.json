@@ -77,8 +77,8 @@
   "Toolbox/scripts/stop_mmi_cockpit_carplay_test.sh": "9c2bf65a2f440df07d3d5c11f78624a42325491fbc082a7776a1f4b1c3a7596e",
   "VERIFY-BASEVIDEO3-STANDALONE.sh": "969de88d2d0bd25f7ff3053d1ea043c2d1c5a822ed2927e67ece661ab2b3773e",
   "VERIFY-CONTEXT80-READBACK-V1.sh": "3f640553e585591cbb04eed0743dc8f6a10c9b842261370d2b6a75b671f9a208",
-  "VERIFY-NATIVE-DIRECT-RELEASE.sh": "d6d1c5692e858620946c082b959b848474e996250212eb1012619a5f9ddfd665",
+  "VERIFY-NATIVE-DIRECT-RELEASE.sh": "0bf850e358203f339887c8d2bdbdeea2c2fa21d0cf811e4fceb2ee9f8084357b",
   "CARPLAY-PRIVATE111-DIRECT-DISPLAY-V2.md": "30f9e861e2a9bf2fe4446be1390bc437009b0e916ffedd1da5c4c8bd8b26aa0a",
-  ".github/workflows/private111-direct-display-v2.yml": "8f483f65f4e4aba9090c33434c0d9d4a3ed1ad3746301d9ab1e06e0618cec199",
+  ".github/workflows/private111-direct-display-v2.yml": "d3a8676a1658b238fb61690ba944b38db85ffcf966549b6aaf7cf3896724101c",
   "Toolbox/carplay_alt_screen/src/qnxshim/sys/stat.h": "0ff8c15594c3c263aab3b702922c1aaf4a289aa060b810d870b30f4cbf261030"
 }
