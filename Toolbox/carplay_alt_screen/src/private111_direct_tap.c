@@ -1218,16 +1218,18 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
     }
 
     if (rc != 0) {
+        int had_good = g_linearizer.frames != 0u;
         ++g_linearizer.failures;
         if (g_linearizer.failures == 1u ||
             (g_linearizer.failures % 60u) == 0u) {
-            altscreen_log("ERROR PHASE=FRAME_LINEARIZER_READ backend=%s rc=%d errno=%d failures=%u action=V1_RAW_FAIL_OPEN",
+            altscreen_log("ERROR PHASE=FRAME_LINEARIZER_READ backend=%s rc=%d errno=%d failures=%u action=%s",
                           g_linearizer.backend == P111_LINEARIZER_NV12 ?
                               "screen-nv12" : "screen-rgba",
-                          rc, errno, g_linearizer.failures);
+                          rc, errno, g_linearizer.failures,
+                          had_good ? "FREEZE_LAST_GOOD" : "V1_RAW_FAIL_OPEN");
         }
         linearizer_unlock();
-        return 0;
+        return had_good ? 1 : 0;
     }
 
     backend = g_linearizer.backend;
@@ -1236,17 +1238,32 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
     else if (backend == P111_LINEARIZER_RGBA)
         packed = linearizer_rgba_to_nv12_locked(width, height);
 
-    if (!packed || !linearizer_picture_has_detail_locked(width, height)) {
+    if (!packed) {
+        int had_good = g_linearizer.frames != 0u;
         ++g_linearizer.failures;
         if (g_linearizer.failures == 1u ||
             (g_linearizer.failures % 60u) == 0u) {
-            altscreen_log("WARN PHASE=FRAME_LINEARIZER_PIXEL backend=%s packed=%d detail=INVALID failures=%u action=V1_RAW_FAIL_OPEN",
+            altscreen_log("WARN PHASE=FRAME_LINEARIZER_PIXEL backend=%s packed=0 failures=%u action=%s",
                           backend == P111_LINEARIZER_NV12 ?
                               "screen-nv12" : "screen-rgba",
-                          packed, g_linearizer.failures);
+                          g_linearizer.failures,
+                          had_good ? "FREEZE_LAST_GOOD" : "V1_RAW_FAIL_OPEN");
         }
         linearizer_unlock();
-        return 0;
+        return had_good ? 1 : 0;
+    }
+
+    /*
+     * A uniform/black frame is legitimate during startup, route changes and
+     * map transitions.  Pixel-detail probing is diagnostic only; never reject
+     * a successful Screen screenshot solely because luma variance is low.
+     */
+    if (!linearizer_picture_has_detail_locked(width, height) &&
+        (g_linearizer.frames == 0u ||
+         ((g_linearizer.frames + 1u) % 300u) == 0u)) {
+        altscreen_log("PHASE=FRAME_LINEARIZER_PIXEL backend=%s detail=LOW accepted=1 reason=valid_uniform_frame",
+                      backend == P111_LINEARIZER_NV12 ?
+                          "screen-nv12" : "screen-rgba");
     }
 
     ++g_linearizer.frames;
