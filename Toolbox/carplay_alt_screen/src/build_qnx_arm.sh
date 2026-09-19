@@ -167,6 +167,7 @@ ScreenCopyMain
 ScreenStreamCreate
 ScreenStreamProcessData
 ScreenStreamStart
+_ScreenStreamSetProperty
 _ZN3dio13CScreenRender6configERKNS_16st_screen_configE
 _ZN3dio13CScreenRender6renderEPh
 close
