@@ -16,6 +16,7 @@
         AirPlayReceiverSessionStart;
         AirPlayReceiverSessionTearDown;
         ScreenStreamProcessData;
+        _ScreenStreamSetProperty;
         ScreenCopyMain;
         ScreenStreamCreate;
         ScreenStreamStart;
