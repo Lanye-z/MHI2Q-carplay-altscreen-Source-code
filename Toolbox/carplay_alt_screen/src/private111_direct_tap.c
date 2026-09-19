@@ -789,7 +789,7 @@ static int qnx_nv12_padded_layout(uint32_t width, uint32_t height,
 
 
 /*
- * Direct-display V2: the stock i.MX6 OMX decoder exposes Screen format
+ * Direct-display V2: the stock OMX/Screen decoder path exposes Screen format
  * 0x0001000c (65548).  V1 proved the stride/plane offsets but incorrectly
  * treated the CPU pointer as a linear raster.  The resulting picture moved
  * with CarPlay but was visibly tiled/garbled.
