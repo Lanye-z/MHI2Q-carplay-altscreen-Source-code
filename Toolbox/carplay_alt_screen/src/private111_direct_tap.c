@@ -38,6 +38,11 @@ static void *g_stream;
 static uint32_t g_generation;
 static uint32_t g_attach_logged_generation;
 static uint32_t g_frame_reserve_seq;
+/* Process-local slot ownership. A slot being copied must never be reused, and
+ * the currently published slot must never be overwritten before a newer frame
+ * is fully ready. This keeps the existing SHM v1 ABI while closing the
+ * producer/consumer tearing window. Value is the reserved frame sequence, 0=free. */
+static uint32_t g_frame_slot_owner[P111_FRAME_SLOTS];
 static unsigned g_h264_map_attempts;
 static unsigned g_frame_map_attempts;
 static int g_seen_h264;
@@ -419,6 +424,7 @@ static void reset_frame_for_generation_locked(void) {
     g_frame->drop_count = 0;
     g_frame->last_copy_bytes = 0;
     g_frame_reserve_seq = 0;
+    memset(g_frame_slot_owner, 0, sizeof(g_frame_slot_owner));
     __sync_synchronize();
     g_frame->active = 1;
 }
@@ -684,6 +690,7 @@ void p111_frame_tap_write(void *stream, const unsigned char *buffer,
     unsigned char *dst;
     int padded;
     uint32_t y;
+    unsigned i, start_slot;
 
     if (!stream || !buffer || !width || !height) return;
     if (!env_truth("ALT111_DIRECT_FRAME_TAP", 1)) return;
@@ -706,11 +713,37 @@ void p111_frame_tap_write(void *stream, const unsigned char *buffer,
     generation = g_generation;
     seq = ++g_frame_reserve_seq;
     if (!seq) seq = ++g_frame_reserve_seq;
-    slot = seq % P111_FRAME_SLOTS;
+
+    /*
+     * Never copy into the currently published slot: the sidecar may be in the
+     * middle of memcpy() from it while global sequence/current_slot still point
+     * there. Also never share a slot with another in-flight callback. With three
+     * slots this leaves two producer slots behind one stable published slot.
+     */
+    slot = P111_FRAME_SLOTS;
+    start_slot = (unsigned)(seq % P111_FRAME_SLOTS);
+    for (i = 0; i < P111_FRAME_SLOTS; ++i) {
+        unsigned candidate = (start_slot + i) % P111_FRAME_SLOTS;
+        if (g_frame_slot_owner[candidate] != 0u)
+            continue;
+        if (g_frame->sequence && candidate == g_frame->current_slot)
+            continue;
+        slot = candidate;
+        break;
+    }
+    if (slot >= P111_FRAME_SLOTS) {
+        ++g_frame->drop_count;
+        tap_unlock();
+        return;
+    }
+    g_frame_slot_owner[slot] = seq;
+
     dst = &g_frame->data[(size_t)slot * P111_FRAME_SLOT_BYTES];
     padded = qnx_nv12_padded_layout(width, height, format, buffer,
                                     &src_stride, &uv_offset);
     if (!padded) {
+        if (g_frame_slot_owner[slot] == seq)
+            g_frame_slot_owner[slot] = 0u;
         ++g_frame->drop_count;
         if (g_layout_error_logged_generation != generation) {
             g_layout_error_logged_generation = generation;
@@ -741,6 +774,8 @@ void p111_frame_tap_write(void *stream, const unsigned char *buffer,
     if (g_stream != stream || g_generation != generation ||
         !g_frame || !g_frame->active) {
         if (g_frame) ++g_frame->drop_count;
+        if (slot < P111_FRAME_SLOTS && g_frame_slot_owner[slot] == seq)
+            g_frame_slot_owner[slot] = 0u;
         tap_unlock();
         return;
     }
@@ -754,9 +789,20 @@ void p111_frame_tap_write(void *stream, const unsigned char *buffer,
     if (g_frame->sequence &&
         (int32_t)(seq - g_frame->sequence) <= 0) {
         ++g_frame->drop_count;
+        if (g_frame_slot_owner[slot] == seq)
+            g_frame_slot_owner[slot] = 0u;
         tap_unlock();
         return;
     }
+
+    /*
+     * Publish with an explicit invalidation window. The existing reader samples
+     * sequence before and after its memcpy. Setting sequence=0 before changing
+     * metadata/current_slot guarantees that any mixed old/new snapshot is
+     * rejected without changing the SHM ABI or requiring a sidecar rebuild.
+     */
+    g_frame->sequence = 0u;
+    __sync_synchronize();
 
     g_frame->width = width;
     g_frame->height = height;
@@ -767,6 +813,8 @@ void p111_frame_tap_write(void *stream, const unsigned char *buffer,
     g_frame->last_copy_bytes = bytes;
     __sync_synchronize();
     g_frame->sequence = seq;
+    if (g_frame_slot_owner[slot] == seq)
+        g_frame_slot_owner[slot] = 0u;
     ++g_frame->frame_count;
 
     if (!g_seen_frame) {
