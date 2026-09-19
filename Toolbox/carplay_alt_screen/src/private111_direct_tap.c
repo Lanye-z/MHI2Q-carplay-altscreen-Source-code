@@ -42,6 +42,7 @@ static p111_frame_shm_t *g_frame;
 static volatile unsigned g_tap_lock;
 static void *g_stream;
 static uint32_t g_generation;
+static uint32_t g_stale_callback_count;
 static uint32_t g_attach_logged_generation;
 static uint32_t g_frame_reserve_seq;
 /* Process-local slot ownership. A slot being copied must never be reused, and
@@ -560,10 +561,29 @@ static void reset_frame_for_generation_locked(int force) {
                   (unsigned)g_frame->generation, (unsigned)g_frame->active);
 }
 
-static void begin_stream_locked(void *stream) {
+static int begin_stream_locked(void *stream) {
     int new_session = 0;
 
-    if (g_stream != stream || !g_generation) {
+    if (!stream) return 0;
+
+    /*
+     * Session ownership is monotonic until explicit teardown. A late callback
+     * from an older stream (or an early callback from a replacement stream
+     * before current teardown completes) must never switch g_stream and reset
+     * the shared-memory publication back to another session.
+     */
+    if (g_stream && g_stream != stream) {
+        ++g_stale_callback_count;
+        if (g_stale_callback_count == 1u ||
+            (g_stale_callback_count & 255u) == 0u) {
+            altscreen_log("PHASE=DIRECT111_TAP_STALE_CALLBACK stream=%p current_stream=%p generation=%u count=%u action=DROP_NO_SESSION_SWITCH",
+                          stream, g_stream, g_generation,
+                          g_stale_callback_count);
+        }
+        return 0;
+    }
+
+    if (!g_stream || !g_generation) {
         g_stream = stream;
         ++g_generation;
         if (!g_generation) ++g_generation;
@@ -577,6 +597,7 @@ static void begin_stream_locked(void *stream) {
         g_frame_map_attempts = 0;
         g_attach_logged_generation = 0;
         g_frame_reserve_seq = 0;
+        g_stale_callback_count = 0u;
         new_session = 1;
     }
 
@@ -601,6 +622,7 @@ static void begin_stream_locked(void *stream) {
                       (unsigned)(PROT_READ | PROT_WRITE), new_session,
                       (unsigned)getpid());
     }
+    return 1;
 }
 
 static uint32_t scan_annexb_flags(const uint8_t *d, size_t n,
@@ -715,8 +737,7 @@ void p111_h264_tap_write(void *stream, const void *data, size_t bytes) {
 
     if (!stream || !data || !bytes) return;
     tap_lock();
-    begin_stream_locked(stream);
-    if (!g_h264 || !g_h264->active) {
+    if (!begin_stream_locked(stream) || !g_h264 || !g_h264->active) {
         tap_unlock();
         return;
     }
@@ -1381,6 +1402,20 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
     if (!stream || !screen_window || !width || !height) return 0;
     if (!env_truth("ALT111_DIRECT_FRAME_TAP", 1)) return 1;
 
+    tap_lock();
+    if (g_stream && g_stream != stream) {
+        ++g_stale_callback_count;
+        if (g_stale_callback_count == 1u ||
+            (g_stale_callback_count & 255u) == 0u) {
+            altscreen_log("PHASE=FRAME_LINEARIZER_STALE_CALLBACK stream=%p current_stream=%p generation=%u count=%u action=DROP_BEFORE_READBACK",
+                          stream, g_stream, g_generation,
+                          g_stale_callback_count);
+        }
+        tap_unlock();
+        return 1;
+    }
+    tap_unlock();
+
     linearizer_lock();
     requests = ++g_linearizer.requests;
 
@@ -1550,8 +1585,7 @@ int p111_frame_tap_write(void *stream, const unsigned char *buffer,
     if (!bytes || bytes > P111_FRAME_SLOT_BYTES) return 0;
 
     tap_lock();
-    begin_stream_locked(stream);
-    if (!g_frame || !g_frame->active) {
+    if (!begin_stream_locked(stream) || !g_frame || !g_frame->active) {
         tap_unlock();
         return 0;
     }
