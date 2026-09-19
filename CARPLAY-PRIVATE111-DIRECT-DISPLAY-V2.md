@@ -71,7 +71,7 @@ type111 H264
 ```
 
 Screen, rather than V2, owns the vendor-layout conversion. No hand-written
-i.MX6 tile-address formula is guessed.
+target MHI2Q platform tile-address formula is guessed.
 
 ## Automatic fallback order
 
