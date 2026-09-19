@@ -27,6 +27,7 @@ struct p111_avcc_cache {
     uint32_t emitted_generation;
     uint8_t length_size;
     uint8_t valid;
+    uint8_t property_logged;
     uint8_t data[P111_AVCC_CACHE_MAX];
 };
 
@@ -157,6 +158,7 @@ void p111_h264_tap_note_avcc(void *stream, const void *data, size_t bytes) {
     tap_lock();
     c = find_avcc_locked(stream, 1);
     if (c) {
+        int first_property = !c->property_logged;
         c->bytes = (uint32_t)bytes;
         c->valid = valid ? 1u : 0u;
         c->length_size = length_size;
@@ -164,6 +166,20 @@ void p111_h264_tap_note_avcc(void *stream, const void *data, size_t bytes) {
         c->pps = pps;
         c->emitted_generation = 0u;
         memcpy(c->data, data, bytes);
+        c->property_logged = 1u;
+        if (first_property) {
+            altscreen_log("PHASE=H264_AVCC_PROPERTY stream=%p bytes=%u valid=%d nal_length_size=%u sps=%u pps=%u first16=%02x%02x%02x%02x_%02x%02x%02x%02x_%02x%02x%02x%02x_%02x%02x%02x%02x shm_dependency=NONE",
+                          stream, (unsigned)bytes, valid,
+                          (unsigned)length_size, sps, pps,
+                          byte_or_zero(d,bytes,0), byte_or_zero(d,bytes,1),
+                          byte_or_zero(d,bytes,2), byte_or_zero(d,bytes,3),
+                          byte_or_zero(d,bytes,4), byte_or_zero(d,bytes,5),
+                          byte_or_zero(d,bytes,6), byte_or_zero(d,bytes,7),
+                          byte_or_zero(d,bytes,8), byte_or_zero(d,bytes,9),
+                          byte_or_zero(d,bytes,10), byte_or_zero(d,bytes,11),
+                          byte_or_zero(d,bytes,12), byte_or_zero(d,bytes,13),
+                          byte_or_zero(d,bytes,14), byte_or_zero(d,bytes,15));
+        }
     }
     tap_unlock();
 }
@@ -225,6 +241,9 @@ static p111_h264_shm_t *map_h264(void) {
                   (unsigned)P111_H264_RING_SIZE,
                   (unsigned)(PROT_READ | PROT_WRITE), (unsigned)MAP_SHARED,
                   (unsigned)g_h264->writer_pid, g_h264_map_attempts);
+    if (g_h264_map_attempts > 1u)
+        altscreen_log("PHASE=H264_TAP_SHM_RECOVERED attempt=%u previous_failures=%u",
+                      g_h264_map_attempts, g_h264_map_attempts - 1u);
     return g_h264;
 }
 
@@ -282,6 +301,9 @@ static p111_frame_shm_t *map_frame(void) {
                   (unsigned)P111_FRAME_SLOTS, (unsigned)P111_FRAME_SLOT_BYTES,
                   (unsigned)(PROT_READ | PROT_WRITE), (unsigned)MAP_SHARED,
                   (unsigned)g_frame->writer_pid, g_frame_map_attempts);
+    if (g_frame_map_attempts > 1u)
+        altscreen_log("PHASE=FRAME_TAP_SHM_RECOVERED attempt=%u previous_failures=%u",
+                      g_frame_map_attempts, g_frame_map_attempts - 1u);
     return g_frame;
 }
 
@@ -686,25 +708,28 @@ void p111_frame_tap_write(void *stream, const unsigned char *buffer,
     dst = &g_frame->data[(size_t)slot * P111_FRAME_SLOT_BYTES];
     padded = qnx_nv12_padded_layout(width, height, format, buffer,
                                     &src_stride, &uv_offset);
+    if (!padded) {
+        ++g_frame->drop_count;
+        altscreen_log("ERROR PHASE=FRAME_TAP_UNSUPPORTED_LAYOUT stream=%p generation=%u buffer=%p config_format=%u config_usage=0x%x visible=%ux%u action=DROP_STOCK_FORWARD_UNCHANGED",
+                      stream, generation, buffer, format, usage, width, height);
+        tap_unlock();
+        return;
+    }
     tap_unlock();
 
     /*
-     * Never hold g_tap_lock across the ~1.2 MB frame copy.  ProcessData can
+     * Never hold g_tap_lock across the ~1.2 MB frame copy. ProcessData can
      * continue feeding compressed H264 while the stock-OMX fallback is packed.
+     * Only the vehicle-measured QNX NV12 layouts are accepted; unknown layouts
+     * are dropped instead of being guessed as tight NV12.
      */
-    if (padded) {
-        for (y = 0; y < height; ++y)
-            memcpy(dst + (size_t)y * width,
-                   buffer + (size_t)y * src_stride, width);
-        for (y = 0; y < uv_rows; ++y)
-            memcpy(dst + (size_t)pixels + (size_t)y * width,
-                   buffer + (size_t)uv_offset + (size_t)y * src_stride,
-                   width);
-    } else {
-        memcpy(dst, buffer, bytes);
-        src_stride = width;
-        uv_offset = pixels;
-    }
+    for (y = 0; y < height; ++y)
+        memcpy(dst + (size_t)y * width,
+               buffer + (size_t)y * src_stride, width);
+    for (y = 0; y < uv_rows; ++y)
+        memcpy(dst + (size_t)pixels + (size_t)y * width,
+               buffer + (size_t)uv_offset + (size_t)y * src_stride,
+               width);
 
     __sync_synchronize();
     tap_lock();
@@ -731,7 +756,7 @@ void p111_frame_tap_write(void *stream, const unsigned char *buffer,
         altscreen_log("PHASE=FRAME_TAP_LAYOUT stream=%p generation=%u buffer=%p config_format=%u config_usage=0x%x visible=%ux%u source_layout=%s source_stride=%u uv_offset=%u packed_stride=%u packed_bytes=%u first16=%02x%02x%02x%02x_%02x%02x%02x%02x_%02x%02x%02x%02x_%02x%02x%02x%02x",
                       stream, generation, buffer, format, usage,
                       width, height,
-                      padded ? "qnx_nv12_128x32" : "tight_fallback",
+                      "qnx_nv12_128x32",
                       src_stride, uv_offset, width, bytes,
                       byte_or_zero(buffer,16,0), byte_or_zero(buffer,16,1),
                       byte_or_zero(buffer,16,2), byte_or_zero(buffer,16,3),
