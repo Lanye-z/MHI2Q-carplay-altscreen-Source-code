@@ -1,6 +1,7 @@
 #include "private111_direct_tap.h"
 #include "private111_direct_shm.h"
 
+#include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -10,20 +11,41 @@
 
 extern void altscreen_log(const char *fmt, ...);
 
+#define P111_AVCC_CACHE_SLOTS 8u
+#define P111_AVCC_CACHE_MAX   512u
+#define P111_MAP_MAX_ATTEMPTS 3u
+
+/* QNX Screen/WFD NV12 format observed on the 1440x542 private111 buffers. */
+#define P111_QNX_NV12_FORMAT 65548u
+#define P111_QNX_NV12_FORMAT_LEGACY 12u
+
+struct p111_avcc_cache {
+    void *stream;
+    uint32_t bytes;
+    uint32_t sps;
+    uint32_t pps;
+    uint32_t emitted_generation;
+    uint8_t length_size;
+    uint8_t valid;
+    uint8_t data[P111_AVCC_CACHE_MAX];
+};
+
 static p111_h264_shm_t *g_h264;
 static p111_frame_shm_t *g_frame;
-static int g_h264_fd = -1;
-static int g_frame_fd = -1;
 static volatile unsigned g_tap_lock;
 static void *g_stream;
 static uint32_t g_generation;
-static int g_h264_map_failed;
-static int g_frame_map_failed;
+static uint32_t g_attach_logged_generation;
+static uint32_t g_frame_reserve_seq;
+static unsigned g_h264_map_attempts;
+static unsigned g_frame_map_attempts;
 static int g_seen_h264;
 static int g_seen_frame;
 static int g_seen_sps;
 static int g_seen_pps;
 static int g_seen_idr;
+static struct p111_avcc_cache g_avcc[P111_AVCC_CACHE_SLOTS];
+static unsigned g_avcc_recycle;
 
 static void tap_lock(void) {
     while (__sync_lock_test_and_set(&g_tap_lock, 1u) != 0u) { }
@@ -46,32 +68,150 @@ static int env_truth(const char *name, int default_value) {
     return 1;
 }
 
-static p111_h264_shm_t *map_h264(void) {
-    void *p;
-    if (g_h264) return g_h264;
-    if (g_h264_map_failed) return NULL;
+static uint8_t byte_or_zero(const uint8_t *d, size_t n, size_t i) {
+    return (d && i < n) ? d[i] : 0u;
+}
 
-    g_h264_fd = shm_open(P111_H264_SHM_NAME, O_RDWR | O_CREAT, 0666);
-    if (g_h264_fd < 0) {
-        g_h264_map_failed = 1;
-        altscreen_log("ERROR PHASE=H264_TAP_SHM_OPEN name=%s result=FAILED",
-                      P111_H264_SHM_NAME);
+static uint32_t be_len(const uint8_t *d, unsigned bytes) {
+    uint32_t v = 0;
+    unsigned i;
+    for (i = 0; i < bytes; ++i) v = (v << 8) | d[i];
+    return v;
+}
+
+static int parse_avcc_config(const uint8_t *d, size_t n,
+                             uint8_t *length_size,
+                             unsigned *sps_out, unsigned *pps_out) {
+    size_t pos;
+    unsigned i, sps_count, pps_count;
+    unsigned sps_seen = 0, pps_seen = 0;
+    uint8_t ls;
+
+    if (length_size) *length_size = 0;
+    if (sps_out) *sps_out = 0;
+    if (pps_out) *pps_out = 0;
+    if (!d || n < 7u || d[0] != 1u) return 0;
+
+    ls = (uint8_t)((d[4] & 3u) + 1u);
+    if (ls < 1u || ls > 4u) return 0;
+
+    sps_count = d[5] & 0x1fu;
+    if (!sps_count) return 0;
+    pos = 6u;
+    for (i = 0; i < sps_count; ++i) {
+        uint32_t len;
+        if (pos + 2u > n) return 0;
+        len = ((uint32_t)d[pos] << 8) | d[pos + 1u];
+        pos += 2u;
+        if (!len || pos + len > n) return 0;
+        if ((d[pos] & 0x1fu) == 7u) ++sps_seen;
+        pos += len;
+    }
+    if (pos + 1u > n) return 0;
+
+    pps_count = d[pos++];
+    for (i = 0; i < pps_count; ++i) {
+        uint32_t len;
+        if (pos + 2u > n) return 0;
+        len = ((uint32_t)d[pos] << 8) | d[pos + 1u];
+        pos += 2u;
+        if (!len || pos + len > n) return 0;
+        if ((d[pos] & 0x1fu) == 8u) ++pps_seen;
+        pos += len;
+    }
+
+    if (!sps_seen || !pps_seen) return 0;
+    if (length_size) *length_size = ls;
+    if (sps_out) *sps_out = sps_seen;
+    if (pps_out) *pps_out = pps_seen;
+    return 1;
+}
+
+static struct p111_avcc_cache *find_avcc_locked(void *stream, int create) {
+    unsigned i, free_slot = P111_AVCC_CACHE_SLOTS;
+    if (!stream) return NULL;
+    for (i = 0; i < P111_AVCC_CACHE_SLOTS; ++i) {
+        if (g_avcc[i].stream == stream) return &g_avcc[i];
+        if (!g_avcc[i].stream && free_slot == P111_AVCC_CACHE_SLOTS)
+            free_slot = i;
+    }
+    if (!create) return NULL;
+    if (free_slot == P111_AVCC_CACHE_SLOTS) {
+        free_slot = g_avcc_recycle++ % P111_AVCC_CACHE_SLOTS;
+    }
+    memset(&g_avcc[free_slot], 0, sizeof(g_avcc[free_slot]));
+    g_avcc[free_slot].stream = stream;
+    return &g_avcc[free_slot];
+}
+
+void p111_h264_tap_note_avcc(void *stream, const void *data, size_t bytes) {
+    const uint8_t *d = (const uint8_t *)data;
+    struct p111_avcc_cache *c;
+    uint8_t length_size = 0;
+    unsigned sps = 0, pps = 0;
+    int valid;
+
+    if (!stream || !data || !bytes || bytes > P111_AVCC_CACHE_MAX) return;
+    valid = parse_avcc_config(d, bytes, &length_size, &sps, &pps);
+
+    tap_lock();
+    c = find_avcc_locked(stream, 1);
+    if (c) {
+        c->bytes = (uint32_t)bytes;
+        c->valid = valid ? 1u : 0u;
+        c->length_size = length_size;
+        c->sps = sps;
+        c->pps = pps;
+        c->emitted_generation = 0u;
+        memcpy(c->data, data, bytes);
+    }
+    tap_unlock();
+}
+
+/* Map failures are diagnostic, not fatal to stock CarPlay.  Retry a few times
+ * per private generation because the resource manager can become ready just
+ * after the first callback. */
+static p111_h264_shm_t *map_h264(void) {
+    int fd, err;
+    void *p;
+    const size_t bytes = sizeof(p111_h264_shm_t);
+
+    if (g_h264) return g_h264;
+    if (g_h264_map_attempts >= P111_MAP_MAX_ATTEMPTS) return NULL;
+    ++g_h264_map_attempts;
+
+    errno = 0;
+    fd = shm_open(P111_H264_SHM_NAME, O_RDWR | O_CREAT, 0666);
+    if (fd < 0) {
+        err = errno;
+        altscreen_log("ERROR PHASE=H264_TAP_SHM_OPEN name=%s attempt=%u fd=%d bytes=%u errno=%d result=FAILED",
+                      P111_H264_SHM_NAME, g_h264_map_attempts, fd,
+                      (unsigned)bytes, err);
         return NULL;
     }
-    if (ftruncate(g_h264_fd, (off_t)sizeof(p111_h264_shm_t)) != 0) {
-        g_h264_map_failed = 1;
-        altscreen_log("ERROR PHASE=H264_TAP_SHM_SIZE name=%s bytes=%u result=FAILED",
-                      P111_H264_SHM_NAME, (unsigned)sizeof(p111_h264_shm_t));
+
+    errno = 0;
+    if (ftruncate(fd, (off_t)bytes) != 0) {
+        err = errno;
+        altscreen_log("ERROR PHASE=H264_TAP_SHM_SIZE name=%s attempt=%u fd=%d bytes=%u errno=%d result=FAILED",
+                      P111_H264_SHM_NAME, g_h264_map_attempts, fd,
+                      (unsigned)bytes, err);
+        close(fd);
         return NULL;
     }
-    p = mmap(NULL, sizeof(p111_h264_shm_t), PROT_READ | PROT_WRITE,
-             MAP_SHARED, g_h264_fd, 0);
+
+    errno = 0;
+    p = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    err = errno;
+    close(fd);
     if (p == MAP_FAILED || !p) {
-        g_h264_map_failed = 1;
-        altscreen_log("ERROR PHASE=H264_TAP_SHM_MAP name=%s result=FAILED",
-                      P111_H264_SHM_NAME);
+        altscreen_log("ERROR PHASE=H264_TAP_SHM_MAP name=%s attempt=%u fd=%d bytes=%u prot=0x%x flags=0x%x result=%p errno=%d",
+                      P111_H264_SHM_NAME, g_h264_map_attempts, fd,
+                      (unsigned)bytes, (unsigned)(PROT_READ | PROT_WRITE),
+                      (unsigned)MAP_SHARED, p, err);
         return NULL;
     }
+
     g_h264 = (p111_h264_shm_t *)p;
     if (g_h264->magic != P111_H264_SHM_MAGIC ||
         g_h264->version != P111_H264_SHM_VERSION) {
@@ -80,38 +220,55 @@ static p111_h264_shm_t *map_h264(void) {
         g_h264->version = P111_H264_SHM_VERSION;
     }
     g_h264->writer_pid = (uint32_t)getpid();
-    altscreen_log("PHASE=H264_TAP_SHM_READY name=%s bytes=%u ring=%u writer_pid=%u",
+    altscreen_log("PHASE=H264_TAP_SHM_READY name=%s bytes=%u ring=%u prot=0x%x flags=0x%x writer_pid=%u attempt=%u",
                   P111_H264_SHM_NAME, (unsigned)sizeof(*g_h264),
-                  (unsigned)P111_H264_RING_SIZE, (unsigned)g_h264->writer_pid);
+                  (unsigned)P111_H264_RING_SIZE,
+                  (unsigned)(PROT_READ | PROT_WRITE), (unsigned)MAP_SHARED,
+                  (unsigned)g_h264->writer_pid, g_h264_map_attempts);
     return g_h264;
 }
 
 static p111_frame_shm_t *map_frame(void) {
+    int fd, err;
     void *p;
-    if (g_frame) return g_frame;
-    if (g_frame_map_failed) return NULL;
+    const size_t bytes = sizeof(p111_frame_shm_t);
 
-    g_frame_fd = shm_open(P111_FRAME_SHM_NAME, O_RDWR | O_CREAT, 0666);
-    if (g_frame_fd < 0) {
-        g_frame_map_failed = 1;
-        altscreen_log("ERROR PHASE=FRAME_TAP_SHM_OPEN name=%s result=FAILED",
-                      P111_FRAME_SHM_NAME);
+    if (g_frame) return g_frame;
+    if (g_frame_map_attempts >= P111_MAP_MAX_ATTEMPTS) return NULL;
+    ++g_frame_map_attempts;
+
+    errno = 0;
+    fd = shm_open(P111_FRAME_SHM_NAME, O_RDWR | O_CREAT, 0666);
+    if (fd < 0) {
+        err = errno;
+        altscreen_log("ERROR PHASE=FRAME_TAP_SHM_OPEN name=%s attempt=%u fd=%d bytes=%u errno=%d result=FAILED",
+                      P111_FRAME_SHM_NAME, g_frame_map_attempts, fd,
+                      (unsigned)bytes, err);
         return NULL;
     }
-    if (ftruncate(g_frame_fd, (off_t)sizeof(p111_frame_shm_t)) != 0) {
-        g_frame_map_failed = 1;
-        altscreen_log("ERROR PHASE=FRAME_TAP_SHM_SIZE name=%s bytes=%u result=FAILED",
-                      P111_FRAME_SHM_NAME, (unsigned)sizeof(p111_frame_shm_t));
+
+    errno = 0;
+    if (ftruncate(fd, (off_t)bytes) != 0) {
+        err = errno;
+        altscreen_log("ERROR PHASE=FRAME_TAP_SHM_SIZE name=%s attempt=%u fd=%d bytes=%u errno=%d result=FAILED",
+                      P111_FRAME_SHM_NAME, g_frame_map_attempts, fd,
+                      (unsigned)bytes, err);
+        close(fd);
         return NULL;
     }
-    p = mmap(NULL, sizeof(p111_frame_shm_t), PROT_READ | PROT_WRITE,
-             MAP_SHARED, g_frame_fd, 0);
+
+    errno = 0;
+    p = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    err = errno;
+    close(fd);
     if (p == MAP_FAILED || !p) {
-        g_frame_map_failed = 1;
-        altscreen_log("ERROR PHASE=FRAME_TAP_SHM_MAP name=%s result=FAILED",
-                      P111_FRAME_SHM_NAME);
+        altscreen_log("ERROR PHASE=FRAME_TAP_SHM_MAP name=%s attempt=%u fd=%d bytes=%u prot=0x%x flags=0x%x result=%p errno=%d",
+                      P111_FRAME_SHM_NAME, g_frame_map_attempts, fd,
+                      (unsigned)bytes, (unsigned)(PROT_READ | PROT_WRITE),
+                      (unsigned)MAP_SHARED, p, err);
         return NULL;
     }
+
     g_frame = (p111_frame_shm_t *)p;
     if (g_frame->magic != P111_FRAME_SHM_MAGIC ||
         g_frame->version != P111_FRAME_SHM_VERSION) {
@@ -120,66 +277,163 @@ static p111_frame_shm_t *map_frame(void) {
         g_frame->version = P111_FRAME_SHM_VERSION;
     }
     g_frame->writer_pid = (uint32_t)getpid();
-    altscreen_log("PHASE=FRAME_TAP_SHM_READY name=%s bytes=%u slots=%u slot_bytes=%u writer_pid=%u",
+    altscreen_log("PHASE=FRAME_TAP_SHM_READY name=%s bytes=%u slots=%u slot_bytes=%u prot=0x%x flags=0x%x writer_pid=%u attempt=%u",
                   P111_FRAME_SHM_NAME, (unsigned)sizeof(*g_frame),
                   (unsigned)P111_FRAME_SLOTS, (unsigned)P111_FRAME_SLOT_BYTES,
-                  (unsigned)g_frame->writer_pid);
+                  (unsigned)(PROT_READ | PROT_WRITE), (unsigned)MAP_SHARED,
+                  (unsigned)g_frame->writer_pid, g_frame_map_attempts);
     return g_frame;
 }
 
+static uint32_t write_h264_record_locked(const void *data, size_t bytes,
+                                         uint32_t flags) {
+    p111_h264_record_t rec;
+    uint32_t need, pos;
+
+    if (!g_h264 || !g_h264->active || !data || !bytes) return 0u;
+    if (bytes > (size_t)(P111_H264_RING_SIZE - sizeof(rec))) {
+        ++g_h264->drop_count;
+        return 0u;
+    }
+
+    rec.magic = P111_H264_RECORD_MAGIC;
+    rec.sequence = g_h264->write_seq + 1u;
+    rec.payload_bytes = (uint32_t)bytes;
+    rec.flags = flags;
+
+    need = (uint32_t)sizeof(rec) + (uint32_t)bytes;
+    pos = g_h264->write_pos;
+    if (pos > P111_H264_RING_SIZE || need > P111_H264_RING_SIZE - pos) {
+        if (pos < P111_H264_RING_SIZE &&
+            P111_H264_RING_SIZE - pos >= sizeof(rec)) {
+            p111_h264_record_t wrap;
+            memset(&wrap, 0, sizeof(wrap));
+            wrap.magic = P111_H264_RECORD_MAGIC;
+            wrap.sequence = rec.sequence;
+            wrap.flags = P111_H264_FLAG_WRAP;
+            memcpy(&g_h264->ring[pos], &wrap, sizeof(wrap));
+        }
+        pos = 0u;
+        ++g_h264->wrap_count;
+    }
+
+    memcpy(&g_h264->ring[pos], &rec, sizeof(rec));
+    memcpy(&g_h264->ring[pos + sizeof(rec)], data, bytes);
+    __sync_synchronize();
+    g_h264->write_pos = pos + need;
+    g_h264->write_seq = rec.sequence;
+    g_h264->last_payload_bytes = (uint32_t)bytes;
+    g_h264->total_bytes += (uint32_t)bytes;
+    ++g_h264->packet_count;
+    return rec.sequence;
+}
+
+static void emit_cached_avcc_locked(void *stream) {
+    struct p111_avcc_cache *c = find_avcc_locked(stream, 0);
+    uint32_t flags, seq;
+    if (!c || !c->valid || !c->bytes || !g_h264 || !g_h264->active ||
+        c->emitted_generation == g_generation)
+        return;
+
+    flags = P111_H264_FLAG_AVCC | P111_H264_FLAG_CONFIG;
+    if (c->sps) flags |= P111_H264_FLAG_SPS;
+    if (c->pps) flags |= P111_H264_FLAG_PPS;
+    seq = write_h264_record_locked(c->data, c->bytes, flags);
+    if (!seq) return;
+
+    g_h264->sps_count += c->sps;
+    g_h264->pps_count += c->pps;
+    c->emitted_generation = g_generation;
+    if (c->sps) g_seen_sps = 1;
+    if (c->pps) g_seen_pps = 1;
+
+    altscreen_log("PHASE=H264_AVCC_CONFIG stream=%p generation=%u seq=%u bytes=%u nal_length_size=%u sps=%u pps=%u first16=%02x%02x%02x%02x_%02x%02x%02x%02x_%02x%02x%02x%02x_%02x%02x%02x%02x",
+                  stream, g_generation, seq, c->bytes,
+                  (unsigned)c->length_size, c->sps, c->pps,
+                  byte_or_zero(c->data,c->bytes,0), byte_or_zero(c->data,c->bytes,1),
+                  byte_or_zero(c->data,c->bytes,2), byte_or_zero(c->data,c->bytes,3),
+                  byte_or_zero(c->data,c->bytes,4), byte_or_zero(c->data,c->bytes,5),
+                  byte_or_zero(c->data,c->bytes,6), byte_or_zero(c->data,c->bytes,7),
+                  byte_or_zero(c->data,c->bytes,8), byte_or_zero(c->data,c->bytes,9),
+                  byte_or_zero(c->data,c->bytes,10), byte_or_zero(c->data,c->bytes,11),
+                  byte_or_zero(c->data,c->bytes,12), byte_or_zero(c->data,c->bytes,13),
+                  byte_or_zero(c->data,c->bytes,14), byte_or_zero(c->data,c->bytes,15));
+}
+
+static void reset_h264_for_generation_locked(void) {
+    if (!g_h264 || g_h264->generation == g_generation) return;
+    g_h264->active = 0;
+    g_h264->generation = g_generation;
+    g_h264->stream_cookie = stream_cookie(g_stream);
+    g_h264->write_pos = 0;
+    g_h264->write_seq = 0;
+    g_h264->total_bytes = 0;
+    g_h264->packet_count = 0;
+    g_h264->drop_count = 0;
+    g_h264->wrap_count = 0;
+    g_h264->last_payload_bytes = 0;
+    g_h264->sps_count = 0;
+    g_h264->pps_count = 0;
+    g_h264->idr_count = 0;
+    g_h264->annexb_count = 0;
+    __sync_synchronize();
+    g_h264->active = 1;
+}
+
+static void reset_frame_for_generation_locked(void) {
+    if (!g_frame || g_frame->generation == g_generation) return;
+    g_frame->active = 0;
+    g_frame->generation = g_generation;
+    g_frame->stream_cookie = stream_cookie(g_stream);
+    g_frame->width = 0;
+    g_frame->height = 0;
+    g_frame->stride = 0;
+    g_frame->format = P111_FRAME_FORMAT_NV12;
+    g_frame->frame_bytes = 0;
+    g_frame->sequence = 0;
+    g_frame->current_slot = 0;
+    g_frame->frame_count = 0;
+    g_frame->drop_count = 0;
+    g_frame->last_copy_bytes = 0;
+    g_frame_reserve_seq = 0;
+    __sync_synchronize();
+    g_frame->active = 1;
+}
+
 static void begin_stream_locked(void *stream) {
-    const uint32_t cookie = stream_cookie(stream);
-    if (g_stream == stream && g_generation) return;
+    int new_generation = 0;
 
-    g_stream = stream;
-    ++g_generation;
-    if (!g_generation) ++g_generation;
-    g_seen_h264 = 0;
-    g_seen_frame = 0;
-    g_seen_sps = 0;
-    g_seen_pps = 0;
-    g_seen_idr = 0;
-
-    if (map_h264()) {
-        g_h264->active = 0;
-        g_h264->generation = g_generation;
-        g_h264->stream_cookie = cookie;
-        g_h264->write_pos = 0;
-        g_h264->write_seq = 0;
-        g_h264->total_bytes = 0;
-        g_h264->packet_count = 0;
-        g_h264->drop_count = 0;
-        g_h264->wrap_count = 0;
-        g_h264->last_payload_bytes = 0;
-        g_h264->sps_count = 0;
-        g_h264->pps_count = 0;
-        g_h264->idr_count = 0;
-        g_h264->annexb_count = 0;
-        __sync_synchronize();
-        g_h264->active = 1;
+    if (g_stream != stream || !g_generation) {
+        g_stream = stream;
+        ++g_generation;
+        if (!g_generation) ++g_generation;
+        g_seen_h264 = 0;
+        g_seen_frame = 0;
+        g_seen_sps = 0;
+        g_seen_pps = 0;
+        g_seen_idr = 0;
+        g_h264_map_attempts = 0;
+        g_frame_map_attempts = 0;
+        g_attach_logged_generation = 0;
+        g_frame_reserve_seq = 0;
+        new_generation = 1;
     }
 
-    if (env_truth("ALT111_DIRECT_FRAME_TAP", 1) && map_frame()) {
-        g_frame->active = 0;
-        g_frame->generation = g_generation;
-        g_frame->stream_cookie = cookie;
-        g_frame->width = 0;
-        g_frame->height = 0;
-        g_frame->stride = 0;
-        g_frame->format = P111_FRAME_FORMAT_NV12;
-        g_frame->frame_bytes = 0;
-        g_frame->sequence = 0;
-        g_frame->current_slot = 0;
-        g_frame->frame_count = 0;
-        g_frame->drop_count = 0;
-        g_frame->last_copy_bytes = 0;
-        __sync_synchronize();
-        g_frame->active = 1;
-    }
+    if (!g_h264) (void)map_h264();
+    if (env_truth("ALT111_DIRECT_FRAME_TAP", 1) && !g_frame)
+        (void)map_frame();
 
-    altscreen_log("PHASE=DIRECT111_TAP_ATTACH stream=%p generation=%u cookie=0x%08x h264=%d decoded_fallback=%d stock_forward=1",
-                  stream, g_generation, cookie, g_h264 != NULL,
-                  g_frame != NULL);
+    reset_h264_for_generation_locked();
+    reset_frame_for_generation_locked();
+    emit_cached_avcc_locked(stream);
+
+    if (new_generation || g_attach_logged_generation != g_generation) {
+        g_attach_logged_generation = g_generation;
+        altscreen_log("PHASE=DIRECT111_TAP_ATTACH stream=%p generation=%u cookie=0x%08x h264=%d decoded_fallback=%d stock_forward=1 mmap_prot=0x%x",
+                      stream, g_generation, stream_cookie(stream),
+                      g_h264 != NULL, g_frame != NULL,
+                      (unsigned)(PROT_READ | PROT_WRITE));
+    }
 }
 
 static uint32_t scan_annexb_flags(const uint8_t *d, size_t n,
@@ -219,10 +473,78 @@ static uint32_t scan_annexb_flags(const uint8_t *d, size_t n,
     return flags;
 }
 
+static uint32_t scan_avcc_flags_len(const uint8_t *d, size_t n,
+                                    unsigned length_size,
+                                    unsigned *sps, unsigned *pps,
+                                    unsigned *idr, unsigned *nals) {
+    size_t pos = 0;
+    uint32_t flags = 0;
+    unsigned count = 0;
+    unsigned lsps = 0, lpps = 0, lidr = 0;
+
+    if (!d || !n || length_size < 1u || length_size > 4u) return 0;
+    while (pos + length_size <= n) {
+        uint32_t len = be_len(d + pos, length_size);
+        uint8_t nal;
+        pos += length_size;
+        if (!len || pos + len > n) return 0;
+        nal = d[pos] & 0x1fu;
+        if (!nal) return 0;
+        if (nal == 7u) { ++lsps; flags |= P111_H264_FLAG_SPS; }
+        else if (nal == 8u) { ++lpps; flags |= P111_H264_FLAG_PPS; }
+        else if (nal == 5u) { ++lidr; flags |= P111_H264_FLAG_IDR; }
+        ++count;
+        pos += len;
+    }
+    if (!count || pos != n) return 0;
+    if (sps) *sps = lsps;
+    if (pps) *pps = lpps;
+    if (idr) *idr = lidr;
+    if (nals) *nals = count;
+    return flags | P111_H264_FLAG_AVCC;
+}
+
+static uint32_t scan_avcc_flags(const uint8_t *d, size_t n,
+                                unsigned preferred_length_size,
+                                unsigned *sps, unsigned *pps,
+                                unsigned *idr, unsigned *nals,
+                                unsigned *used_length_size) {
+    unsigned candidates[4];
+    unsigned i, count = 0;
+    uint32_t flags;
+
+    if (preferred_length_size >= 1u && preferred_length_size <= 4u)
+        candidates[count++] = preferred_length_size;
+    for (i = 4u; i >= 1u; --i) {
+        unsigned j, duplicate = 0;
+        for (j = 0; j < count; ++j)
+            if (candidates[j] == i) duplicate = 1;
+        if (!duplicate) candidates[count++] = i;
+        if (i == 1u) break;
+    }
+
+    for (i = 0; i < count; ++i) {
+        unsigned lsps = 0, lpps = 0, lidr = 0, lnals = 0;
+        flags = scan_avcc_flags_len(d, n, candidates[i],
+                                    &lsps, &lpps, &lidr, &lnals);
+        if (!(flags & P111_H264_FLAG_AVCC)) continue;
+        if (sps) *sps = lsps;
+        if (pps) *pps = lpps;
+        if (idr) *idr = lidr;
+        if (nals) *nals = lnals;
+        if (used_length_size) *used_length_size = candidates[i];
+        return flags;
+    }
+    return 0;
+}
+
 void p111_h264_tap_write(void *stream, const void *data, size_t bytes) {
-    p111_h264_record_t rec;
-    uint32_t need, pos, flags;
-    unsigned sps = 0, pps = 0, idr = 0, annexb = 0;
+    const uint8_t *d = (const uint8_t *)data;
+    struct p111_avcc_cache *cfg;
+    uint32_t seq, flags;
+    unsigned sps = 0, pps = 0, idr = 0, annexb = 0, avcc_nals = 0;
+    unsigned preferred = 0, used_length = 0;
+    const char *format_name = "unknown";
 
     if (!stream || !data || !bytes) return;
     tap_lock();
@@ -232,110 +554,123 @@ void p111_h264_tap_write(void *stream, const void *data, size_t bytes) {
         return;
     }
 
-    if (bytes > (size_t)(P111_H264_RING_SIZE - sizeof(rec))) {
-        ++g_h264->drop_count;
-        tap_unlock();
-        return;
-    }
+    cfg = find_avcc_locked(stream, 0);
+    if (cfg && cfg->valid) preferred = cfg->length_size;
 
-    flags = scan_annexb_flags((const uint8_t *)data, bytes,
-                              &sps, &pps, &idr, &annexb);
+    flags = scan_annexb_flags(d, bytes, &sps, &pps, &idr, &annexb);
+    if (flags & P111_H264_FLAG_ANNEXB) {
+        format_name = "annexb";
+    } else {
+        sps = pps = idr = 0;
+        flags = scan_avcc_flags(d, bytes, preferred,
+                                &sps, &pps, &idr, &avcc_nals, &used_length);
+        if (flags & P111_H264_FLAG_AVCC) format_name = "avcc";
+    }
+    flags |= P111_H264_FLAG_FRAME;
+
     g_h264->sps_count += sps;
     g_h264->pps_count += pps;
     g_h264->idr_count += idr;
     g_h264->annexb_count += annexb;
 
-    rec.magic = P111_H264_RECORD_MAGIC;
-    rec.sequence = g_h264->write_seq + 1u;
-    rec.payload_bytes = (uint32_t)bytes;
-    rec.flags = flags;
-
-    need = (uint32_t)sizeof(rec) + (uint32_t)bytes;
-    pos = g_h264->write_pos;
-    if (pos > P111_H264_RING_SIZE || need > P111_H264_RING_SIZE - pos) {
-        if (P111_H264_RING_SIZE - pos >= sizeof(rec)) {
-            p111_h264_record_t wrap;
-            memset(&wrap, 0, sizeof(wrap));
-            wrap.magic = P111_H264_RECORD_MAGIC;
-            wrap.sequence = rec.sequence;
-            wrap.flags = P111_H264_FLAG_WRAP;
-            memcpy(&g_h264->ring[pos], &wrap, sizeof(wrap));
-        }
-        pos = 0;
-        ++g_h264->wrap_count;
+    seq = write_h264_record_locked(data, bytes, flags);
+    if (!seq) {
+        tap_unlock();
+        return;
     }
-
-    memcpy(&g_h264->ring[pos], &rec, sizeof(rec));
-    memcpy(&g_h264->ring[pos + sizeof(rec)], data, bytes);
-    __sync_synchronize();
-    g_h264->write_pos = pos + need;
-    g_h264->write_seq = rec.sequence;
-    g_h264->last_payload_bytes = (uint32_t)bytes;
-    g_h264->total_bytes += (uint32_t)bytes;
-    ++g_h264->packet_count;
 
     if (!g_seen_h264) {
         g_seen_h264 = 1;
-        altscreen_log("PHASE=H264_TAP_FIRST_DATA stream=%p generation=%u bytes=%u flags=0x%x",
-                      stream, g_generation, (unsigned)bytes, (unsigned)flags);
+        altscreen_log("PHASE=H264_TAP_FIRST_DATA stream=%p generation=%u seq=%u bytes=%u format=%s nal_length_size=%u annexb_nals=%u avcc_nals=%u flags=0x%x first16=%02x%02x%02x%02x_%02x%02x%02x%02x_%02x%02x%02x%02x_%02x%02x%02x%02x",
+                      stream, g_generation, seq, (unsigned)bytes, format_name,
+                      used_length ? used_length : preferred, annexb, avcc_nals,
+                      (unsigned)flags,
+                      byte_or_zero(d,bytes,0), byte_or_zero(d,bytes,1),
+                      byte_or_zero(d,bytes,2), byte_or_zero(d,bytes,3),
+                      byte_or_zero(d,bytes,4), byte_or_zero(d,bytes,5),
+                      byte_or_zero(d,bytes,6), byte_or_zero(d,bytes,7),
+                      byte_or_zero(d,bytes,8), byte_or_zero(d,bytes,9),
+                      byte_or_zero(d,bytes,10), byte_or_zero(d,bytes,11),
+                      byte_or_zero(d,bytes,12), byte_or_zero(d,bytes,13),
+                      byte_or_zero(d,bytes,14), byte_or_zero(d,bytes,15));
     }
     if (sps && !g_seen_sps) {
         g_seen_sps = 1;
-        altscreen_log("PHASE=H264_TAP_FIRST_SPS stream=%p generation=%u seq=%u",
-                      stream, g_generation, rec.sequence);
+        altscreen_log("PHASE=H264_TAP_FIRST_SPS stream=%p generation=%u seq=%u source=%s",
+                      stream, g_generation, seq, format_name);
     }
     if (pps && !g_seen_pps) {
         g_seen_pps = 1;
-        altscreen_log("PHASE=H264_TAP_FIRST_PPS stream=%p generation=%u seq=%u",
-                      stream, g_generation, rec.sequence);
+        altscreen_log("PHASE=H264_TAP_FIRST_PPS stream=%p generation=%u seq=%u source=%s",
+                      stream, g_generation, seq, format_name);
     }
     if (idr && !g_seen_idr) {
         g_seen_idr = 1;
-        altscreen_log("PHASE=H264_TAP_FIRST_IDR stream=%p generation=%u seq=%u H264_STREAM_VALID=%s",
-                      stream, g_generation, rec.sequence,
+        altscreen_log("PHASE=H264_TAP_FIRST_IDR stream=%p generation=%u seq=%u source=%s H264_STREAM_VALID=%s",
+                      stream, g_generation, seq, format_name,
                       (g_seen_sps && g_seen_pps) ? "YES" : "WAITING_CONFIG");
     }
     if ((g_h264->packet_count & 255u) == 0u) {
-        altscreen_log("PHASE=H264_TAP_PROGRESS stream=%p generation=%u packets=%u bytes=%u seq=%u wraps=%u drops=%u sps=%u pps=%u idr=%u",
+        altscreen_log("PHASE=H264_TAP_PROGRESS stream=%p generation=%u packets=%u bytes=%u seq=%u wraps=%u drops=%u sps=%u pps=%u idr=%u format=%s",
                       stream, g_generation, g_h264->packet_count,
                       g_h264->total_bytes, g_h264->write_seq,
                       g_h264->wrap_count, g_h264->drop_count,
                       g_h264->sps_count, g_h264->pps_count,
-                      g_h264->idr_count);
+                      g_h264->idr_count, format_name);
     }
 
     tap_unlock();
 }
 
+static uint32_t align_up_u32(uint32_t value, uint32_t alignment) {
+    return (value + alignment - 1u) & ~(alignment - 1u);
+}
+
+static int qnx_nv12_padded_layout(uint32_t width, uint32_t height,
+                                  uint32_t format, const unsigned char *buffer,
+                                  uint32_t *src_stride, uint32_t *uv_offset) {
+    uint32_t stride, padded_y;
+    if (!buffer || !width || !height) return 0;
+    if (format != P111_QNX_NV12_FORMAT &&
+        format != P111_QNX_NV12_FORMAT_LEGACY)
+        return 0;
+
+    /*
+     * P1404 real-car evidence for private111:
+     * 1440x542 format=65548 stride=1536 UV offset=0xCC000.
+     * Those values are exactly align(width,128) and
+     * align(width,128)*align(height,32).  Apply this only to the measured QNX
+     * NV12 formats; all unknown formats remain on the conservative tight path.
+     */
+    stride = align_up_u32(width, 128u);
+    padded_y = align_up_u32(height, 32u);
+    if (stride < width || padded_y < height ||
+        stride > 8192u || padded_y > 8192u)
+        return 0;
+    if (src_stride) *src_stride = stride;
+    if (uv_offset) *uv_offset = stride * padded_y;
+    return 1;
+}
+
 void p111_frame_tap_write(void *stream, const unsigned char *buffer,
-                          uint32_t width, uint32_t height) {
-    uint32_t pixels, bytes, slot, seq;
+                          uint32_t width, uint32_t height,
+                          uint32_t format, uint32_t usage) {
+    uint32_t pixels, bytes, uv_rows, slot, seq, generation;
+    uint32_t src_stride = 0, uv_offset = 0;
     unsigned char *dst;
+    int padded;
+    uint32_t y;
 
     if (!stream || !buffer || !width || !height) return;
     if (!env_truth("ALT111_DIRECT_FRAME_TAP", 1)) return;
 
-    /*
-     * Keep arithmetic inside 32-bit ARM operations.  The target build rejects
-     * compiler runtime helpers such as __aeabi_uldivmod, and private111 display
-     * geometry is far below these fail-closed sanity bounds.
-     */
-    if (width > 4096u || height > 4096u || width > 0xffffffffu / height) {
-        tap_lock();
-        begin_stream_locked(stream);
-        if (g_frame) ++g_frame->drop_count;
-        tap_unlock();
+    if (width > 4096u || height > 4096u || width > 0xffffffffu / height)
         return;
-    }
     pixels = width * height;
-    bytes = pixels + (pixels >> 1);
-    if (!bytes || bytes > P111_FRAME_SLOT_BYTES) {
-        tap_lock();
-        begin_stream_locked(stream);
-        if (g_frame) ++g_frame->drop_count;
-        tap_unlock();
-        return;
-    }
+    uv_rows = (height + 1u) >> 1;
+    if (uv_rows > 0xffffffffu / width) return;
+    bytes = pixels + width * uv_rows;
+    if (!bytes || bytes > P111_FRAME_SLOT_BYTES) return;
 
     tap_lock();
     begin_stream_locked(stream);
@@ -344,41 +679,81 @@ void p111_frame_tap_write(void *stream, const unsigned char *buffer,
         return;
     }
 
-    seq = g_frame->sequence + 1u;
+    generation = g_generation;
+    seq = ++g_frame_reserve_seq;
+    if (!seq) seq = ++g_frame_reserve_seq;
     slot = seq % P111_FRAME_SLOTS;
     dst = &g_frame->data[(size_t)slot * P111_FRAME_SLOT_BYTES];
+    padded = qnx_nv12_padded_layout(width, height, format, buffer,
+                                    &src_stride, &uv_offset);
+    tap_unlock();
 
     /*
-     * Measured stock CScreenRender config uses NV12 buffers.  This copy is an
-     * explicitly-labelled fallback/diagnostic backend; it never changes or
-     * consumes the stock buffer and the real renderer is still called.
+     * Never hold g_tap_lock across the ~1.2 MB frame copy.  ProcessData can
+     * continue feeding compressed H264 while the stock-OMX fallback is packed.
      */
-    memcpy(dst, buffer, bytes);
+    if (padded) {
+        for (y = 0; y < height; ++y)
+            memcpy(dst + (size_t)y * width,
+                   buffer + (size_t)y * src_stride, width);
+        for (y = 0; y < uv_rows; ++y)
+            memcpy(dst + (size_t)pixels + (size_t)y * width,
+                   buffer + (size_t)uv_offset + (size_t)y * src_stride,
+                   width);
+    } else {
+        memcpy(dst, buffer, bytes);
+        src_stride = width;
+        uv_offset = pixels;
+    }
+
     __sync_synchronize();
+    tap_lock();
+    if (g_stream != stream || g_generation != generation ||
+        !g_frame || !g_frame->active) {
+        if (g_frame) ++g_frame->drop_count;
+        tap_unlock();
+        return;
+    }
+
     g_frame->width = width;
     g_frame->height = height;
-    g_frame->stride = width;
+    g_frame->stride = width; /* SHM is always packed tight for the sidecar. */
     g_frame->format = P111_FRAME_FORMAT_NV12;
     g_frame->frame_bytes = bytes;
     g_frame->current_slot = slot;
     g_frame->last_copy_bytes = bytes;
+    __sync_synchronize();
     g_frame->sequence = seq;
     ++g_frame->frame_count;
 
     if (!g_seen_frame) {
         g_seen_frame = 1;
-        altscreen_log("PHASE=DECODER_FIRST_FRAME backend=stock-omx-tap stream=%p generation=%u seq=%u format=NV12 size=%ux%u bytes=%u window58_readback=0",
-                      stream, g_generation, seq, width, height, bytes);
+        altscreen_log("PHASE=FRAME_TAP_LAYOUT stream=%p generation=%u buffer=%p config_format=%u config_usage=0x%x visible=%ux%u source_layout=%s source_stride=%u uv_offset=%u packed_stride=%u packed_bytes=%u first16=%02x%02x%02x%02x_%02x%02x%02x%02x_%02x%02x%02x%02x_%02x%02x%02x%02x",
+                      stream, generation, buffer, format, usage,
+                      width, height,
+                      padded ? "qnx_nv12_128x32" : "tight_fallback",
+                      src_stride, uv_offset, width, bytes,
+                      byte_or_zero(buffer,16,0), byte_or_zero(buffer,16,1),
+                      byte_or_zero(buffer,16,2), byte_or_zero(buffer,16,3),
+                      byte_or_zero(buffer,16,4), byte_or_zero(buffer,16,5),
+                      byte_or_zero(buffer,16,6), byte_or_zero(buffer,16,7),
+                      byte_or_zero(buffer,16,8), byte_or_zero(buffer,16,9),
+                      byte_or_zero(buffer,16,10), byte_or_zero(buffer,16,11),
+                      byte_or_zero(buffer,16,12), byte_or_zero(buffer,16,13),
+                      byte_or_zero(buffer,16,14), byte_or_zero(buffer,16,15));
+        altscreen_log("PHASE=DECODER_FIRST_FRAME backend=stock-omx-tap stream=%p generation=%u seq=%u format=NV12 size=%ux%u bytes=%u source_stride=%u window58_readback=0",
+                      stream, generation, seq, width, height, bytes, src_stride);
     } else if ((g_frame->frame_count % 300u) == 0u) {
-        altscreen_log("PHASE=DECODER_PROGRESS backend=stock-omx-tap stream=%p generation=%u frames=%u seq=%u size=%ux%u drops=%u",
-                      stream, g_generation, g_frame->frame_count, seq,
-                      width, height, g_frame->drop_count);
+        altscreen_log("PHASE=DECODER_PROGRESS backend=stock-omx-tap stream=%p generation=%u frames=%u seq=%u size=%ux%u source_stride=%u drops=%u",
+                      stream, generation, g_frame->frame_count, seq,
+                      width, height, src_stride, g_frame->drop_count);
     }
 
     tap_unlock();
 }
 
 void p111_direct_tap_stream_end(void *stream) {
+    unsigned i;
     tap_lock();
     if (!stream || g_stream == stream) {
         if (g_h264) {
@@ -394,6 +769,12 @@ void p111_direct_tap_stream_end(void *stream) {
                       g_h264 ? g_h264->packet_count : 0u,
                       g_frame ? g_frame->frame_count : 0u);
         g_stream = NULL;
+    }
+    if (stream) {
+        for (i = 0; i < P111_AVCC_CACHE_SLOTS; ++i) {
+            if (g_avcc[i].stream == stream)
+                memset(&g_avcc[i], 0, sizeof(g_avcc[i]));
+        }
     }
     tap_unlock();
 }
