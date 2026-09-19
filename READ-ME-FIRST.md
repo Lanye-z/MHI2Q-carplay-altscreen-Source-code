@@ -7,8 +7,11 @@ Branch: `carplay-private111-direct-display-v2`
 The previous V2 QNX sidecar was successfully rebuilt and promoted, but a final
 static audit found additional lifecycle hardening that changes sidecar source:
 same-session abnormal recovery now requires **fresh decoded-frame progress**
-instead of trusting stale active flags, and decoded-frame metadata must match the
-packed-tight NV12 ABI before rendering.
+instead of trusting stale active flags, decoded-frame metadata must match the
+packed-tight NV12 ABI before rendering, normal reconnects use the repeated
+per-session `STREAM_111_REQUESTED=YES` gate, initial display creation requires
+two fresh frames from one SHM identity, and stale old-stream callbacks cannot
+switch producer ownership back to an old session.
 
 Therefore the currently checked-in release ELF is intentionally marked stale
 until one more real QNX 6.5 ARMv7 rebuild is promoted.
