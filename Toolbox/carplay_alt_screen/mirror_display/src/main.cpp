@@ -324,16 +324,35 @@ int main(int argc, char **argv) {
 
     if (env_truth("ALT111_RECOVER_CURRENT_SESSION")) {
         if (source.init()) {
+            VideoFrame recovery_probe;
+            unsigned fresh_frames = 0u;
             source_initialized = true;
-            for (unsigned retry = 0; retry < 30u && !g_stop; ++retry) {
-                if (source.current_session_active()) {
-                    recovered_current_session = true;
-                    fprintf(stderr,
-                            "direct111: PHASE=GATE_RECOVER_CURRENT_SESSION "
-                            "validated=1 retries=%u policy=active_matching_h264_and_decoded_shm "
-                            "consumed_phone_gate_bypass=1\n",
-                            retry);
-                    break;
+
+            /*
+             * Matching active flags alone are not enough: a producer that died
+             * before clearing SHM can leave stale active=1 metadata behind.
+             * Require two distinct stable decoded frames while H264+decoded SHM
+             * identities still match before bypassing the consumed phone gate.
+             */
+            for (unsigned retry = 0; retry < 80u && !g_stop; ++retry) {
+                if (!source.current_session_active()) {
+                    fresh_frames = 0u;
+                    usleep(50000);
+                    continue;
+                }
+
+                if (source.read_frame(&recovery_probe)) {
+                    ++fresh_frames;
+                    if (fresh_frames >= 2u) {
+                        recovered_current_session = true;
+                        fprintf(stderr,
+                                "direct111: PHASE=GATE_RECOVER_CURRENT_SESSION "
+                                "validated=1 retries=%u fresh_decoded_frames=%u "
+                                "policy=matching_identity_plus_frame_progress "
+                                "consumed_phone_gate_bypass=1\n",
+                                retry, fresh_frames);
+                        break;
+                    }
                 }
                 usleep(50000);
             }
@@ -341,7 +360,8 @@ int main(int argc, char **argv) {
         if (!recovered_current_session) {
             fprintf(stderr,
                     "direct111: PHASE=GATE_RECOVER_CURRENT_SESSION "
-                    "validated=0 action=FALLBACK_TO_PHONE_REQUEST_GATE\n");
+                    "validated=0 reason=no_fresh_matching_frame_progress "
+                    "action=FALLBACK_TO_PHONE_REQUEST_GATE\n");
             if (source_initialized) {
                 source.shutdown();
                 source_initialized = false;
