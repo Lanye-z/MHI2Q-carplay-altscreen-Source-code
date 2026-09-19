@@ -915,6 +915,7 @@ static int linearizer_create_pixmap_locked(uint32_t width, uint32_t height,
     int size[2];
     int offsets[3] = {0, 0, 0};
     int stride = 0;
+    int actual_format = -1;
     void *buffer = NULL;
     unsigned char *pixels = NULL;
 
@@ -944,6 +945,16 @@ static int linearizer_create_pixmap_locked(uint32_t width, uint32_t height,
         altscreen_log("WARN PHASE=FRAME_LINEARIZER_PIXMAP backend=%s format=%d size=%ux%u result=FAILED errno=%d",
                       backend == P111_LINEARIZER_NV12 ? "screen-nv12" : "screen-rgba",
                       format, width, height, errno);
+        linearizer_release_pixmap_locked();
+        return 0;
+    }
+
+    if (g_linearizer.get_buffer_iv(buffer,
+            P111_SCREEN_PROPERTY_FORMAT, &actual_format) != 0 ||
+        actual_format != format) {
+        altscreen_log("WARN PHASE=FRAME_LINEARIZER_PIXMAP backend=%s requested_format=%d actual_format=%d result=FORMAT_MISMATCH",
+                      backend == P111_LINEARIZER_NV12 ? "screen-nv12" : "screen-rgba",
+                      format, actual_format);
         linearizer_release_pixmap_locked();
         return 0;
     }
@@ -986,7 +997,7 @@ static int linearizer_create_pixmap_locked(uint32_t width, uint32_t height,
 
     altscreen_log("PHASE=FRAME_LINEARIZER_PIXMAP backend=%s format=%d size=%ux%u stride=%d offsets=%d,%d,%d usage=0x%x result=READY",
                   backend == P111_LINEARIZER_NV12 ? "screen-nv12" : "screen-rgba",
-                  format, width, height, stride,
+                  actual_format, width, height, stride,
                   offsets[0], offsets[1], offsets[2], usage);
     return 1;
 }
