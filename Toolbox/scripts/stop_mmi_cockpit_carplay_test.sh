@@ -1,5 +1,5 @@
 #!/bin/sh
-# Context80 readback RESTORE ORIGINAL.
+# private111 direct-display V1 RESTORE ORIGINAL.
 # Releases Java80 demand, restores the exact pre-install carplay_hook.jar, then
 # restores the native AltScreen/preload transaction. No MMI Mirror is involved.
 set -u
@@ -142,6 +142,6 @@ RC=$?
 [ "$RC" -eq 0 ] || exit "$RC"
 
 echo "BASEVIDEO3_BOOT_DEMAND=DISABLED"
-echo "READBACK_SIDECAR=STOPPED native_dmdt=DISABLED"
-echo "RESTORE=PASS integrated=AltScreen+Window58Readback+Java80 reboot_required=YES"
+echo "DIRECT_DISPLAY_SIDECAR=STOPPED native_dmdt=DISABLED"
+echo "RESTORE=PASS integrated=AltScreen+H264Tap+DecoderTap+Displayable3+Java80 reboot_required=YES"
 exit 0
