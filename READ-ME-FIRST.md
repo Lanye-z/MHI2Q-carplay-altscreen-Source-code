@@ -1,67 +1,116 @@
-# CarPlay Second Screen / Context80 Readback V1
+# CarPlay private111 Direct Display V1 — first vehicle test
 
-Branch: `test/carplay-basevideo3-context80-readback-v1`
+Branch: `carplay-private111-direct-display-v1`
+
+This branch is intentionally frozen at the **prove-the-picture-first** stage.
+Do not add `screen_blit`, zero-copy or a standalone Qualcomm decoder before the
+first vehicle run.
+
+## Actual V1 pipeline
 
 ```text
-iPhone Type111
-  -> private ScreenSession / ScreenStream
-  -> stock Qualcomm OMX + CScreenRender
-  -> source Window58
-  -> screen_read_window()
-  -> BGRA CPU frame
-  -> GLES
-  -> destination displayable3
-  -> Java/HMI ctx80={98,101,102,3}
+iPhone CarPlay private type111
+  -> stock AirPlay control / framing
+  -> ScreenStreamProcessData
+  -> /carplay111_h264 (independent compressed-stream evidence)
+  -> stock Qualcomm OMX decoder
+  -> private CScreenRender decoded NV12
+  -> /carplay111_decoded (3-slot decoded fallback)
+  -> CPU BT.601 NV12 -> RGBA
+  -> GLES / libdisplayinit
+  -> displayable3 (1440x455)
+  -> Java/HMI Context80 = {98,101,102,3}
   -> Virtual Cockpit
 ```
 
-The previous direct BaseVideo3 test proved Stream111 and stock OMX/CScreenRender, but
-`screen_manage_window()` changed its direct displayable3 producer from
-`visible=1` to `visible=0`; a later force-visible call returned success while
-the property still read back as 0. This branch separates decoder producer, pixel
-bridge, display sink and context owner.
+The sidecar does **not** call `screen_read_window()`, does not consume Window58
+pixels, and does not write terminal/context state. Java/HMI is the sole Context80
+owner. Main110 remains on the stock path.
 
-## Seven fixes
+The current iAP2 policy is deliberately `observe` with `ARMED_IAP2` absent.
+Do not re-enable the retired ThemeAssets 21/17 mutation for this test. The
+private type111 path is armed through the info/feature/create111 controls.
 
-1. Stock private renderer is restored to Window58; it is no longer the final displayable3.
-2. `/tmp/mmi-mirror-basevideo.ready` means destination first-present, not source post.
-3. `screen_read_window -> BGRA -> GLES` is installed and launched.
-4. Window58 and displayable3 have separate ownership.
-5. Final displayable3 is created by the proven libdisplayinit backend instead of assuming QNX numeric ID equals Audi displayable identity.
-6. The skipped stock window-group lifecycle is no longer the final VC sink lifecycle; libdisplayinit/EGL owns destination lifecycle.
-7. Annex-B SPS/PPS/IDR observer counters are non-authoritative for the stock AVCC decoder; successful stock posts plus successful readback/present are the readiness truth.
+## Release identity
 
-Java/HMI is the only terminal1 context writer. The release sidecar's historical
-dmdt commands are neutralized and START clears stale FULL_CHAIN_MODE /
-NATIVE_DISPLAY_MODE markers.
+The checked-in QNX ARMv7 sidecar is the promoted direct-display V1 candidate:
 
-Expected STATUS progression:
 ```text
-NATIVE_FRAME_READY=YES
-WINDOW58_IDENTITY=ID_STRING_MATCH ... id_string='58' ...
-DEST_FRAME_READY=YES
-READBACK_SIDECAR=RUNNING
-JAVA_CTX80_REQUEST=YES
-JAVA_CTX80_ACTUAL=80 source=IDisplayManager.getCurrentContextID
+release_binary_status=PRIVATE111_DIRECT_DISPLAY_V1
+vehicle_zip_status=READY_FOR_VEHICLE_TEST
+window58_readback=disabled
+mirror_sink=displayable3_gles
+context=80_java_only
+```
+
+The universal hook is rebuilt/promoted by the branch CI. Source changes to the
+sidecar itself require a real QNX 6.5 ARMv7 rebuild before they may be treated as
+vehicle-ready.
+
+## Recommended first-car sequence
+
+1. If an older AltScreen/MMI-Cockpit-Carplay experiment is still installed,
+   restore that package to stock first and perform a complete MMI reboot.
+2. Use a clean ZIP of **this branch**. Keep this vehicle's own backup/log
+   directories; do not import backups from another vehicle.
+3. Keep the iPhone disconnected while installing.
+4. Run **INSTALL**, confirm it reports PASS, then perform a complete MMI reboot.
+5. Run **START**, confirm it reports PASS, then perform a second complete MMI
+   reboot. This ensures the preload, Java80 controller and boot sidecar all start
+   from the same armed state.
+6. Connect the iPhone only after the second reboot. Open a navigation route that
+   normally supplies the instrument-cluster second screen.
+7. Leave the session connected while collecting **STATUS / logs**.
+
+If the sidecar has already consumed a `PHONE_REQUEST_111` gate and is manually
+restarted during the same phone session, reconnect CarPlay before judging the
+retry. A new session produces a new gate token.
+
+## Expected evidence order
+
+The useful progression for one run is:
+
+```text
+PHASE=PHONE_REQUEST_111 ... PHONE_REQUESTED_ALTSCREEN=YES
+PHASE=STREAM_111_ACCEPT_RETURN
+PHASE=VIDEO_111_FIRST_PAYLOAD
+
+PHASE=H264_TAP_SHM_READY
+PHASE=H264_TAP_FIRST_DATA
+PHASE=H264_AVCC_PROPERTY / PHASE=H264_AVCC_CONFIG
+PHASE=H264_TAP_FIRST_IDR
+
+PHASE=FRAME_TAP_SHM_READY
+PHASE=FRAME_TAP_LAYOUT ... qnx_nv12_128x32
+PHASE=DECODER_FIRST_FRAME backend=stock-omx-tap
+
+direct111: PHASE=GATE_PASS
+direct111: PHASE=DECODED_SHM_ATTACHED
+direct111: PHASE=DECODER_FIRST_FRAME
+renderer: PHASE=NV12_CSC_READY backend=cpu-bt601
+direct111: PHASE=DISPLAYABLE3_FIRST_PRESENT result=OK
+CTX80_OBSERVED actual=80
+direct111: PHASE=DIRECT111_ACTIVE
+```
+
+STATUS should then converge to:
+
+```text
 PHYSICAL_ROUTE_READY=SOFTWARE_CHAIN_COMPLETE
 ```
 
-The QNX-generated numeric `SCREEN_PROPERTY_ID` is diagnostic only. Window58
-matching is based exclusively on the owner-defined
-`SCREEN_PROPERTY_ID_STRING="58"`; numeric-ID fallback is disabled. The ID compatibility helper is loaded only
-inside the readback sidecar; it is never added to the CarPlay/dio_manager preload.
+That line means the observable software chain is complete. The final success
+criterion is still **a visible CarPlay second-screen image on the VC**.
 
-The last line still requires visual confirmation on the VC.
+## First-run interpretation
 
+If H264 evidence is present but there is no decoded frame, stay on the
+stock-OMX/tap boundary. If decoded NV12 exists but displayable3 fails, stay on
+the sidecar/GLES boundary. If displayable3 first-present succeeds but Context80
+is not observed, stay on Java/HMI ownership. Do not change multiple layers at
+once.
 
-
-
-## Finalized HMI artifact
-
-The vehicle JAR is rebuilt only at ClusterStateController.class; all other entries stay inherited from the pinned BaseVideo3 JAR.
-
-size    = 143072
-cksum   = 1515795662
-SHA256  = 6dc947960f1b1dbfd6589cc927f25bcd93a0168604d5df4d5402b790f7ce3f31
-ctx80   = {98,101,102,3}
-proof   = CTX80_OBSERVED actual=80
+The current sidecar intentionally keeps the proven CPU NV12-to-RGBA path for
+this first run. Hardware CSC / `screen_blit`, direct NV12 composition and
+standalone Qualcomm decoding are follow-up optimizations after physical
+visibility is confirmed.
