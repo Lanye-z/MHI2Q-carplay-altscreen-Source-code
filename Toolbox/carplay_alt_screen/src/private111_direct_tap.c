@@ -744,6 +744,19 @@ void p111_frame_tap_write(void *stream, const unsigned char *buffer,
         tap_unlock();
         return;
     }
+    /*
+     * CScreenRender is normally serialized, but do not depend on that ABI
+     * detail. If two callbacks copied different slots concurrently, an older
+     * reserved sequence must never publish after a newer frame already won.
+     * This strengthens the 3-slot producer/consumer contract without changing
+     * the SHM layout seen by the existing QNX sidecar.
+     */
+    if (g_frame->sequence &&
+        (int32_t)(seq - g_frame->sequence) <= 0) {
+        ++g_frame->drop_count;
+        tap_unlock();
+        return;
+    }
 
     g_frame->width = width;
     g_frame->height = height;
