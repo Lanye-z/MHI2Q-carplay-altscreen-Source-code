@@ -160,7 +160,7 @@ MIRROR_RC=$?
 [ "$MIRROR_RC" -eq 0 ] || { rollback; exit "$MIRROR_RC"; }
 
 cleanup
-echo "DISPLAY_PATH=PRIVATE111_DIRECT source=ScreenStreamProcessData h264_shm=/carplay111_h264 decoder_backend=stock_omx_tap_v1 decoded_shm=/carplay111_decoded sink=displayable3_gles window58_readback=0"
+echo "DISPLAY_PATH=PRIVATE111_DIRECT source=ScreenStreamProcessData h264_shm=/carplay111_h264 decoder_backend=stock_omx_screen_linearized_shm decoded_shm=/carplay111_decoded sink=displayable3_gles window58_readback=0"
 echo "HMI_CONTROL_PLANE=JAVA80 context=80 composite=98,101,102,3"
 echo "CONTEXT_POLICY=JAVA_ONLY native_dmdt=0 sidecar_dmdt=0"
 echo "BASEVIDEO3_BOOT_DEMAND=ENABLED marker=/tmp/mmi-mirror-active"
