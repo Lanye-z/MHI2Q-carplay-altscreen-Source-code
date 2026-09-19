@@ -16,4 +16,4 @@ mirror_sink=displayable3_gles
 context_owner=Java_Context80
 context_composite=98,101,102,3
 release_status=QNX_ARMV7_BINARY_PROMOTED_VEHICLE_CANDIDATE
-note=V2 sidecar source now contains SHM size guards, session identity and same-session recovery. The checked-in release ELF remains the older V1 binary until a fresh QNX 6.5 ARMv7 rebuild is promoted; do not treat source-only V2 commits as vehicle-ready.
+note=V2 QNX ARMv7 sidecar rebuilt and promoted. The release ELF now carries the V2 SHM size guards, session identity and same-session recovery logic, and is vehicle-ready for on-car validation.

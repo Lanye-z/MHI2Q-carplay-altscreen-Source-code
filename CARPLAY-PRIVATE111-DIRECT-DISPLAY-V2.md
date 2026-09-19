@@ -144,21 +144,21 @@ disabled by default.
 
 ## Important release state
 
-The **source** now contains the V2 SHM/recovery fixes, but the checked-in
-`carplay-alt111-mirror-display` ELF is still the older V1 sidecar binary.
-The hosted GitHub CI does not contain the licensed QNX 6.5 ARMv7 toolchain
-needed to rebuild that executable.
+The checked-in `carplay-alt111-mirror-display` ELF has been rebuilt with a real
+QNX 6.5 ARMv7 SDK and promoted. The release ELF now carries the V2 SHM size
+guards, session identity and same-session recovery logic.
 
-Therefore the repository intentionally says:
+The repository now reports:
 
 ```text
-release_binary_status=V1_BINARY_STALE_V2_SOURCE_REBUILD_REQUIRED
-vehicle_zip_status=NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED
+release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2
+vehicle_zip_status=READY_FOR_VEHICLE_TEST
 ```
 
-Do not use the current ZIP as a V2 vehicle package until
-`build_qnx.sh` has rebuilt the sidecar with a real QNX 6.5 ARMv7 SDK and the
-release binary/hash metadata have been promoted.
+This ZIP is the V2 vehicle-ready package: the V2 sidecar binary and the
+associated release/hash metadata have been promoted. The hook side remains
+unchanged (Screen linearizer stays in `libcarplay_altscreen.so`, the sidecar
+does not call `screen_read_window`).
 
 ## Required markers after the QNX sidecar rebuild
 

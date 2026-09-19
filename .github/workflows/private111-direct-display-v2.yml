@@ -178,14 +178,33 @@ jobs:
           info=Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt
           bin=Toolbox/carplay_alt_screen/mirror_display/release/carplay-alt111-mirror-display
           test -s "$bin"
-          grep -Fq 'release_binary_status=V1_BINARY_STALE_V2_SOURCE_REBUILD_REQUIRED' "$info"
-          grep -Fq 'vehicle_zip_status=NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED' "$info"
-          strings "$bin" | grep -Fq 'carplay-private111-direct-display-v1'
-          if strings "$bin" | grep -Fq 'carplay-private111-direct-display-v2'; then
-            echo "DIRECT111_V2_FAIL BUILD_INFO says stale but binary already claims V2" >&2
+          if grep -Fq 'release_binary_status=V1_BINARY_STALE_V2_SOURCE_REBUILD_REQUIRED' "$info"; then
+            # source-only phase: checked-in binary must still be V1 and not claim V2
+            grep -Fq 'vehicle_zip_status=NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED' "$info"
+            strings "$bin" | grep -Fq 'carplay-private111-direct-display-v1'
+            if strings "$bin" | grep -Fq 'carplay-private111-direct-display-v2'; then
+              echo "DIRECT111_V2_FAIL BUILD_INFO says stale but binary already claims V2" >&2
+              exit 1
+            fi
+            echo "DIRECT111_V2_DISPLAY_BINARY=SOURCE_ONLY checked_in_binary=v1"
+          elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$info"; then
+            # promoted phase: binary must carry the V2 build id and be vehicle-ready
+            grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$info"
+            strings "$bin" | grep -Fq 'carplay-private111-direct-display-v2'
+            strings "$bin" | grep -Fq 'PHASE=DECODED_SHM_WAIT_SIZE'
+            strings "$bin" | grep -Fq 'PHASE=SOURCE_SESSION'
+            strings "$bin" | grep -Fq 'PHASE=GATE_RECOVER_CURRENT_SESSION'
+            strings "$bin" | grep -Fq 'PHASE=DISPLAYABLE3_FIRST_PRESENT'
+            strings "$bin" | grep -Fq 'PHASE=DIRECT111_ACTIVE'
+            if strings "$bin" | grep -Fq 'screen_read_window'; then
+              echo "DIRECT111_V2_FAIL Screen readback must remain in hook, not sidecar" >&2
+              exit 1
+            fi
+            echo "DIRECT111_V2_DISPLAY_BINARY=PROMOTED_V2 vehicle_zip_status=READY_FOR_VEHICLE_TEST"
+          else
+            echo "DIRECT111_V2_FAIL unknown sidecar release state" >&2
             exit 1
           fi
-          echo "DIRECT111_V2_DISPLAY_BINARY=REBUILD_REQUIRED source_v2=YES checked_in_binary=v1"
 
       - name: Promote validated V2 universal hook
         if: github.ref == 'refs/heads/carplay-private111-direct-display-v2'

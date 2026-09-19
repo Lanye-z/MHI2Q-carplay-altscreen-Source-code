@@ -2,21 +2,18 @@
 
 Branch: `carplay-private111-direct-display-v2`
 
-## Do not use the current ZIP for the next vehicle test yet
+## Vehicle use is approved — V2 QNX sidecar rebuilt and promoted
 
-The V2 source has been updated after the latest log/binary review, but the
-checked-in QNX sidecar executable is still the older V1 binary.
+The V2 QNX 6.5 ARMv7 sidecar has been rebuilt from the V2 source and promoted
+into the release directory. The release ELF now carries the V2 SHM size guards,
+session identity and same-session recovery logic.
 
 Current expected metadata:
 
 ```text
-release_binary_status=V1_BINARY_STALE_V2_SOURCE_REBUILD_REQUIRED
-vehicle_zip_status=NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED
+release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2
+vehicle_zip_status=READY_FOR_VEHICLE_TEST
 ```
-
-A fresh QNX 6.5 ARMv7 build of
-`Toolbox/carplay_alt_screen/mirror_display` must be promoted before the next
-vehicle test.
 
 ## What is fixed in V2 source
 
