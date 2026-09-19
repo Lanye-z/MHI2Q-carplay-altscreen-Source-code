@@ -31,8 +31,11 @@ check_marker() {
 }
 
 for marker in \
-  'carplay-private111-direct-display-v1' \
+  'carplay-private111-direct-display-v2' \
   'PHASE=H264_SHM_ATTACHED' \
+  'PHASE=DECODED_SHM_WAIT_SIZE' \
+  'PHASE=SOURCE_SESSION' \
+  'PHASE=GATE_RECOVER_CURRENT_SESSION' \
   'PHASE=H264_STREAM_VALID' \
   'PHASE=DECODER_FIRST_FRAME' \
   'PHASE=NV12_CSC_READY' \
@@ -55,5 +58,5 @@ if strings "$BIN" | grep -Fq 'WINDOW_MANAGER_CONTEXT event observer ready'; then
   exit 1
 fi
 
-echo "MIRROR_BUILD_ID=carplay-private111-direct-display-v1"
+echo "MIRROR_BUILD_ID=carplay-private111-direct-display-v2"
 echo "MIRROR_BUILD=PASS output=$ROOT/$BIN"
