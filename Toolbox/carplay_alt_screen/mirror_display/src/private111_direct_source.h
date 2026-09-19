@@ -14,6 +14,7 @@ public:
 
     bool init();
     bool read_frame(VideoFrame *frame);
+    bool current_session_active();
     void shutdown();
 
     bool h264_ready() const { return h264_ready_; }
@@ -43,11 +44,20 @@ private:
     size_t local_capacity_;
 
     uint32_t generation_;
+    uint32_t writer_pid_;
+    uint32_t stream_cookie_;
+    uint32_t h264_writer_pid_;
+    uint32_t h264_generation_;
+    uint32_t h264_stream_cookie_;
     uint32_t last_sequence_;
     uint32_t last_h264_packets_;
     uint32_t last_h264_bytes_;
     uint32_t last_frame_count_;
     uint32_t last_logged_h264_packets_;
+    uint32_t consumer_copy_count_;
+    uint32_t h264_map_attempts_;
+    uint32_t frame_map_attempts_;
+    uint32_t sample_count_;
 
     bool h264_ready_;
     bool decoded_ready_;
