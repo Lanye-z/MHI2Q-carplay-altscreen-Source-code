@@ -75,22 +75,34 @@ for candidate in "$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/altscreen_hook.log" "$DEV
     [ -f "$candidate" ] && { HOOK_LOG=$candidate; break; }
 done
 
+H264_SHM=0
+FRAME_SHM=0
+AVCC_CONFIG=0
 H264_DATA=0
 H264_SPS=0
 H264_PPS=0
 H264_IDR=0
+FRAME_LAYOUT=0
 DECODER_FRAME=0
+MAP_FAILURE=0
 if [ -n "$HOOK_LOG" ]; then
+    grep -q 'PHASE=H264_TAP_SHM_READY' "$HOOK_LOG" 2>/dev/null && H264_SHM=1
+    grep -q 'PHASE=FRAME_TAP_SHM_READY' "$HOOK_LOG" 2>/dev/null && FRAME_SHM=1
+    grep -q 'PHASE=H264_AVCC_CONFIG' "$HOOK_LOG" 2>/dev/null && AVCC_CONFIG=1
+    grep -q 'ERROR PHASE=H264_TAP_SHM_MAP\|ERROR PHASE=FRAME_TAP_SHM_MAP' "$HOOK_LOG" 2>/dev/null && MAP_FAILURE=1
     grep -q 'PHASE=H264_TAP_FIRST_DATA' "$HOOK_LOG" 2>/dev/null && H264_DATA=1
     grep -q 'PHASE=H264_TAP_FIRST_SPS' "$HOOK_LOG" 2>/dev/null && H264_SPS=1
     grep -q 'PHASE=H264_TAP_FIRST_PPS' "$HOOK_LOG" 2>/dev/null && H264_PPS=1
     grep -q 'PHASE=H264_TAP_FIRST_IDR' "$HOOK_LOG" 2>/dev/null && H264_IDR=1
+    grep -q 'PHASE=FRAME_TAP_LAYOUT' "$HOOK_LOG" 2>/dev/null && FRAME_LAYOUT=1
     grep -q 'PHASE=DECODER_FIRST_FRAME backend=stock-omx-tap' "$HOOK_LOG" 2>/dev/null && DECODER_FRAME=1
 
+    echo "SHM_WRITER_READY=h264:$H264_SHM decoded:$FRAME_SHM map_failure:$MAP_FAILURE"
+    echo "H264_CODEC_CONFIG=$AVCC_CONFIG"
     echo "H264_TAP_DATA=$H264_DATA SPS=$H264_SPS PPS=$H264_PPS IDR=$H264_IDR"
-    echo "DECODER_FIRST_FRAME=$DECODER_FRAME backend=stock-omx-tap"
+    echo "FRAME_TAP_LAYOUT=$FRAME_LAYOUT DECODER_FIRST_FRAME=$DECODER_FRAME backend=stock-omx-tap"
     echo "HOOK_DIRECT111_LOG_TAIL_BEGIN"
-    grep -E 'PHASE=(STREAM_111_|VIDEO_111_|H264_TAP_|DIRECT111_TAP_|FRAME_TAP_|DECODER_)' "$HOOK_LOG" 2>/dev/null | tail -n 80 || true
+    grep -E 'PHASE=(STREAM_111_|VIDEO_111_|H264_TAP_|H264_AVCC_|DIRECT111_TAP_|FRAME_TAP_|DECODER_)|ERROR PHASE=(H264_TAP_SHM_|FRAME_TAP_SHM_)' "$HOOK_LOG" 2>/dev/null | tail -n 80 || true
     echo "HOOK_DIRECT111_LOG_TAIL_END"
 else
     echo "H264_TAP_DATA=UNKNOWN hook_log_missing=1"
