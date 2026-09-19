@@ -61,7 +61,7 @@ elif grep -Fq 'release_binary_status=V2_BINARY_STALE_HARDENING_REBUILD_REQUIRED'
 elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$INFO"; then
     grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$INFO" ||
         fail "rebuilt V2 sidecar is not marked vehicle-ready"
-    for marker in         'carplay-private111-direct-display-v2'         'PHASE=DECODED_SHM_WAIT_SIZE'         'PHASE=SOURCE_SESSION'         'PHASE=GATE_RECOVER_CURRENT_SESSION'         'PHASE=DISPLAYABLE3_FIRST_PRESENT'         'PHASE=DIRECT111_ACTIVE'
+    for marker in 'carplay-private111-direct-display-v2' 'PHASE=DECODED_SHM_WAIT_SIZE' 'PHASE=SOURCE_SESSION' 'PHASE=GATE_RECOVER_CURRENT_SESSION' 'matching_identity_plus_frame_progress' 'packed_tight_required=1' 'PHASE=DISPLAYABLE3_FIRST_PRESENT' 'PHASE=DIRECT111_ACTIVE'
     do
         binary_strings "$BIN" | grep -Fq "$marker" ||
             fail "V2 sidecar marker missing: $marker"
@@ -212,7 +212,7 @@ grep -Fq ': > "$STOP_GUARD"' "$RELEASE_STOP" ||
     fail "release stop does not publish stop guard before teardown"
 grep -Fq 'RECOVERY_LOCK=' "$RELEASE_STOP" ||
     fail "release stop recovery lock path missing"
-if grep -Fq '"$NS/stop.requested"' "$RELEASE_STOP" | grep -Fq 'rm -f'; then
+if grep -F 'rm -f' "$RELEASE_STOP" | grep -Fq 'stop.requested'; then
     fail "release stop must retain stop guard to suppress delayed restart"
 fi
 grep -Fq 'stop_guard=RETAINED' "$RELEASE_STOP" ||
