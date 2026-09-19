@@ -120,6 +120,8 @@ jobs:
           assert 'shm_publish_success=1' in tap
           assert 'readback_p50_ms=' in tap and 'readback_p95_ms=' in tap
           assert 'ALT111_LINEARIZER_SAMPLE_NV12' in tap
+          assert 'FRAME_LINEARIZER_SLOW' in tap
+          assert 'DIRECT111_TAP_STOP_STALE' in tap
 
           assert '#include <sys/stat.h>' in source
           assert 'fstat(frame_fd_' in source
@@ -129,13 +131,16 @@ jobs:
           assert 'current_session_active' in source
           assert 'writer1 != writer2' in source
           assert 'ALT111_CONSUMER_SAMPLE_NV12' in source
+          assert 'packed_tight_required=1' in source
 
           assert 'carplay-private111-direct-display-v2' in side
           assert 'GATE_RECOVER_CURRENT_SESSION' in side
           assert 'ALT111_RECOVER_CURRENT_SESSION' in side
+          assert 'matching_identity_plus_frame_progress' in side
           assert 'MIRROR_ABNORMAL_RESTART=SCHEDULED' in launch
           assert 'ALT111_RECOVER_CURRENT_SESSION=1' in launch
           assert 'MAX_ABNORMAL_RESTARTS' in launch
+          assert 'phase=before_first_present' in launch
 
           print('DIRECT111_V2_SOURCE_CONTRACT=PASS stock_first=1 exact_window_handle=1 no_raw_vendor_fallback=1 producer_session_reset=1 shm_fstat_guard=1 consumer_identity=1 same_session_recovery=1 readback_publish_accounting=1')
           PY
@@ -187,6 +192,15 @@ jobs:
               exit 1
             fi
             echo "DIRECT111_V2_DISPLAY_BINARY=SOURCE_ONLY checked_in_binary=v1"
+          elif grep -Fq 'release_binary_status=V2_BINARY_STALE_HARDENING_REBUILD_REQUIRED' "$info"; then
+            grep -Fq 'vehicle_zip_status=NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED' "$info"
+            strings "$bin" | grep -Fq 'carplay-private111-direct-display-v2'
+            strings "$bin" | grep -Fq 'PHASE=GATE_RECOVER_CURRENT_SESSION'
+            if strings "$bin" | grep -Fq 'matching_identity_plus_frame_progress'; then
+              echo "DIRECT111_V2_FAIL BUILD_INFO says hardening rebuild required but binary already contains final marker" >&2
+              exit 1
+            fi
+            echo "DIRECT111_V2_DISPLAY_BINARY=STALE_V2_HARDENING_REBUILD_REQUIRED"
           elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$info"; then
             # promoted phase: binary must carry the V2 build id and be vehicle-ready
             grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$info"
@@ -350,4 +364,8 @@ jobs:
           fi
 
           echo "DIRECT111_V2_HOOK_PROMOTED_SHA256=$HOOK_SHA"
-          echo "DIRECT111_V2_VEHICLE_STATUS=NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED"
+          if grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt; then
+            echo "DIRECT111_V2_VEHICLE_STATUS=READY_FOR_VEHICLE_TEST"
+          else
+            echo "DIRECT111_V2_VEHICLE_STATUS=NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED"
+          fi
