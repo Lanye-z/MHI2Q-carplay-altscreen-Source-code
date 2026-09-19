@@ -9,7 +9,7 @@
   "Toolbox/GEM/mqb-carplayAltScreen.esd": "0ed97ef846f6cf87c7a737fbaa2e49df2e45fdaa410d319063b4e6de31a12663",
   "Toolbox/carplay_alt_screen/SOURCE_PROVENANCE.md": "e413947e829f25aa9162fe4aba719ba8686cf229531bc946104c625372c8a147",
   "Toolbox/carplay_alt_screen/hmi/API_COMPAT.txt": "73b87d406f1985919790a286642e5444e5ea98ff393b7f1248918a304511802a",
-  "Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt": "520b1e02162ffb2f8abe76289ee4e42adf5961037afd0505d7990305d6cb65e4",
+  "Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt": "85dd08d03a9674626e343872f4f0660665b0d00303e0efa9a7cf6d0d5579d17f",
   "Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar": "6dc947960f1b1dbfd6589cc927f25bcd93a0168604d5df4d5402b790f7ce3f31",
   "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java": "89d5eb2871d3cb09a2e0fb00d90d6eb7809173816012074767e5368d504c8818",
   "Toolbox/carplay_alt_screen/hmi/stubs/de/audi/atip/base/IFrameworkAccess.java": "e093d6e7ed0c0e641311a35aaa7ef6b04228808ae001eff29d821229023dfba6",
