@@ -63,6 +63,10 @@ fi
 
 DEMAND="${ALT111_MIRROR_ACTIVE_FILE:-/tmp/mmi-mirror-active}"
 RESTART_REASON="${ALT111_MIRROR_RESTART_REASON:-}"
+RESTART_COUNT="${ALT111_MIRROR_RESTART_COUNT:-0}"
+MAX_ABNORMAL_RESTARTS="${ALT111_MIRROR_MAX_ABNORMAL_RESTARTS:-3}"
+case "$RESTART_COUNT" in ''|*[!0-9]*) RESTART_COUNT=0 ;; esac
+case "$MAX_ABNORMAL_RESTARTS" in ''|*[!0-9]*) MAX_ABNORMAL_RESTARTS=3 ;; esac
 
 export ALT111_MIRROR_READY_FILE="$READY"
 export ALT111_MIRROR_BASE_READY_FILE="$BASE_READY"
@@ -111,7 +115,7 @@ if [ -f "$WATCH_PIDFILE" ]; then
 fi
 
 rm -f "$READY" "$BASE_READY"
-if [ "$RESTART_REASON" = "private111_session_end" ]; then
+if [ -n "$RESTART_REASON" ]; then
   {
     echo ""
     echo "MIRROR_SESSION_RESTART reason=$RESTART_REASON launcher_pid=$$"
@@ -121,7 +125,7 @@ else
 fi
 
 {
-  echo "MIRROR_LAUNCH_ENV=READY pid=$$ bin=$BIN volatile_mode=$VOLATILE_MODE restart_reason=${RESTART_REASON:-NONE}"
+  echo "MIRROR_LAUNCH_ENV=READY pid=$ bin=$BIN volatile_mode=$VOLATILE_MODE restart_reason=${RESTART_REASON:-NONE} restart_count=$RESTART_COUNT max_abnormal_restarts=$MAX_ABNORMAL_RESTARTS recover_current_session=${ALT111_RECOVER_CURRENT_SESSION:-0}"
   echo "PATH=$PATH"
   echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-<unset>}"
   echo "HOOK_LOG=$HOOK_LOG"
@@ -151,6 +155,35 @@ sidecar_is_current() {
   kill -0 "$PID" 2>/dev/null
 }
 
+schedule_abnormal_restart() {
+  WHY=$1
+  NEXT=$((RESTART_COUNT + 1))
+  if [ "$NEXT" -gt "$MAX_ABNORMAL_RESTARTS" ]; then
+    echo "MIRROR_ABNORMAL_RESTART=EXHAUSTED reason=$WHY count=$RESTART_COUNT max=$MAX_ABNORMAL_RESTARTS"
+    return 1
+  fi
+  [ -f "$DEMAND" ] || {
+    echo "MIRROR_ABNORMAL_RESTART=SUPPRESSED reason=$WHY demand_present=0"
+    return 1
+  }
+  [ ! -f "$STOP_GUARD" ] || {
+    echo "MIRROR_ABNORMAL_RESTART=SUPPRESSED reason=$WHY explicit_stop=1"
+    return 1
+  }
+
+  DELAY=$NEXT
+  rm -f "$PIDFILE" "$READY" "$BASE_READY"
+  echo "MIRROR_ABNORMAL_RESTART=SCHEDULED reason=$WHY next_count=$NEXT delay_s=$DELAY recover_current_session=1"
+  (
+    sleep "$DELAY"
+    ALT111_MIRROR_RESTART_REASON=sidecar_abnormal \
+    ALT111_MIRROR_RESTART_COUNT="$NEXT" \
+    ALT111_RECOVER_CURRENT_SESSION=1 \
+      /bin/sh "$ROOT/start_vehicle.sh" >>"$AUTORESTART_LOG" 2>&1
+  ) &
+  return 0
+}
+
 # Deliberately do not inherit the CarPlay/dio_manager preload into the sidecar.
 # Direct-display consumes SHM only and does not need any Window58 ID bridge.
 LD_PRELOAD= "$BIN" $MIRROR_ARGS >>"$LOGFILE" 2>&1 &
@@ -167,20 +200,33 @@ if [ "$SINK_TEST_GRID_MODE" = "0" ]; then
   (
     BASELINE="$(count_tap_stops)"
 
-    # Before first physical destination present, absorb stop records into the
-    # baseline. This avoids killing a new attempt because an earlier failed
-    # private111 setup was torn down before displayable3 became ready.
-    while sidecar_is_current && [ ! -f "$STOP_GUARD" ] && [ ! -f "$BASE_READY" ]; do
+    # Before first physical destination present, absorb old stop records but
+    # also supervise the sidecar itself. A crash here used to make the watcher
+    # exit silently, leaving the already-consumed PHONE_REQUEST gate unusable.
+    while [ ! -f "$STOP_GUARD" ] && [ ! -f "$BASE_READY" ]; do
+      if ! sidecar_is_current; then
+        rm -f "$WATCH_PIDFILE"
+        schedule_abnormal_restart "before_first_present" || true
+        exit 0
+      fi
       BASELINE="$(count_tap_stops)"
       sleep 1
     done
 
-    sidecar_is_current || exit 0
+    sidecar_is_current || {
+      schedule_abnormal_restart "before_watch_armed" || true
+      exit 0
+    }
     [ ! -f "$STOP_GUARD" ] || exit 0
 
     echo "LIFECYCLE_WATCH=ARMED sidecar_pid=$PID stop_count=$BASELINE hook_log=$HOOK_LOG base_ready=$BASE_READY"
 
-    while sidecar_is_current && [ ! -f "$STOP_GUARD" ]; do
+    while [ ! -f "$STOP_GUARD" ]; do
+      if ! sidecar_is_current; then
+        rm -f "$WATCH_PIDFILE"
+        schedule_abnormal_restart "after_first_present" || true
+        exit 0
+      fi
       CURRENT_STOPS="$(count_tap_stops)"
       if [ "$CURRENT_STOPS" -lt "$BASELINE" ]; then
         # Defensive handling for an unexpected log replacement/truncation.
@@ -203,7 +249,10 @@ if [ "$SINK_TEST_GRID_MODE" = "0" ]; then
 
         if [ -f "$DEMAND" ] && [ ! -f "$STOP_GUARD" ]; then
           echo "LIFECYCLE_WATCH=RESTART_NEXT_SESSION demand=$DEMAND gate_policy=next_PHONE_REQUEST_111"
-          ALT111_MIRROR_RESTART_REASON=private111_session_end             /bin/sh "$ROOT/start_vehicle.sh" >>"$AUTORESTART_LOG" 2>&1 &
+          ALT111_MIRROR_RESTART_REASON=private111_session_end \
+          ALT111_MIRROR_RESTART_COUNT=0 \
+          ALT111_RECOVER_CURRENT_SESSION=0 \
+            /bin/sh "$ROOT/start_vehicle.sh" >>"$AUTORESTART_LOG" 2>&1 &
         else
           echo "LIFECYCLE_WATCH=NO_RESTART demand_present=$([ -f "$DEMAND" ] && echo 1 || echo 0) explicit_stop=$([ -f "$STOP_GUARD" ] && echo 1 || echo 0)"
         fi
@@ -226,6 +275,10 @@ if ! kill -0 "$PID" 2>/dev/null; then
     [ -z "$WATCH_PID" ] || kill -TERM "$WATCH_PID" 2>/dev/null || true
   fi
   rm -f "$PIDFILE" "$WATCH_PIDFILE"
+  if schedule_abnormal_restart "startup_probe"; then
+    echo "MIRROR_DISPLAY=RECOVERY_SCHEDULED current_session_validation=required"
+    exit 0
+  fi
   exit 3
 fi
 
