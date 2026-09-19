@@ -43,6 +43,7 @@ if [ -d "$VOLATILE" ]; then
   STOP_GUARD="$VOLATILE/stop.requested"
   LOGFILE="$VOLATILE/mirror.log"
   AUTORESTART_LOG="$VOLATILE/autorestart.log"
+  RECOVERY_LOCK="$VOLATILE/recovery.lock"
   READY="$VOLATILE/ready"
   BASE_READY="${ALT111_JAVA_BASE_READY_FILE:-/tmp/mmi-mirror-basevideo.ready}"
   GATE_TOKEN="$VOLATILE/phone111.gate"
@@ -54,6 +55,7 @@ else
   STOP_GUARD="$TMP_ROOT/MMI-Cockpit-Carplay.mirror.stop.requested"
   LOGFILE="$TMP_ROOT/MMI-Cockpit-Carplay.mirror.log"
   AUTORESTART_LOG="$TMP_ROOT/MMI-Cockpit-Carplay.mirror.autorestart.log"
+  RECOVERY_LOCK="$TMP_ROOT/MMI-Cockpit-Carplay.mirror.recovery.lock"
   READY="$TMP_ROOT/MMI-Cockpit-Carplay.mirror.ready"
   BASE_READY="${ALT111_JAVA_BASE_READY_FILE:-/tmp/mmi-mirror-basevideo.ready}"
   GATE_TOKEN="$TMP_ROOT/MMI-Cockpit-Carplay.mirror.phone111.gate"
@@ -93,6 +95,15 @@ if [ -n "$RESTART_REASON" ] && [ -f "$STOP_GUARD" ]; then
 fi
 if [ -z "$RESTART_REASON" ]; then
   rm -f "$STOP_GUARD"
+fi
+
+# An abnormal-restart lock prevents the startup probe and lifecycle watcher from
+# scheduling the same recovery twice. Keep it until the delayed child actually
+# starts, then release it for future failures.
+if [ "$RESTART_REASON" = "sidecar_abnormal" ]; then
+  rmdir "$RECOVERY_LOCK" 2>/dev/null || true
+elif [ -z "$RESTART_REASON" ]; then
+  rmdir "$RECOVERY_LOCK" 2>/dev/null || true
 fi
 
 if [ -f "$PIDFILE" ]; then
@@ -158,17 +169,24 @@ sidecar_is_current() {
 
 schedule_abnormal_restart() {
   WHY=$1
+  if ! mkdir "$RECOVERY_LOCK" 2>/dev/null; then
+    echo "MIRROR_ABNORMAL_RESTART=ALREADY_SCHEDULED reason=$WHY lock=$RECOVERY_LOCK"
+    return 0
+  fi
   NEXT=$((RESTART_COUNT + 1))
   if [ "$NEXT" -gt "$MAX_ABNORMAL_RESTARTS" ]; then
     echo "MIRROR_ABNORMAL_RESTART=EXHAUSTED reason=$WHY count=$RESTART_COUNT max=$MAX_ABNORMAL_RESTARTS"
+    rmdir "$RECOVERY_LOCK" 2>/dev/null || true
     return 1
   fi
   [ -f "$DEMAND" ] || {
     echo "MIRROR_ABNORMAL_RESTART=SUPPRESSED reason=$WHY demand_present=0"
+    rmdir "$RECOVERY_LOCK" 2>/dev/null || true
     return 1
   }
   [ ! -f "$STOP_GUARD" ] || {
     echo "MIRROR_ABNORMAL_RESTART=SUPPRESSED reason=$WHY explicit_stop=1"
+    rmdir "$RECOVERY_LOCK" 2>/dev/null || true
     return 1
   }
 
