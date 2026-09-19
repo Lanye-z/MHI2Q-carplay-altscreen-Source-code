@@ -407,27 +407,58 @@ int main(int argc, char **argv) {
     VideoFrame frame;
     bool wait_reported = false;
     unsigned long wait_loops = 0;
+    unsigned startup_fresh_frames = 0u;
+    uint32_t startup_writer = 0u;
+    uint32_t startup_generation = 0u;
+    uint32_t startup_cookie = 0u;
     fprintf(stderr,
             "direct111: PHASE=PIPELINE_WAIT "
-            "waiting=H264_TAP+DECODER_FIRST_FRAME "
+            "waiting=H264_TAP+DECODER_FRESH_PROGRESS "
+            "startup_frame_progress_required=2 "
             "source=/carplay111_decoded window58_readback=0\n");
 
     while (!g_stop) {
-        if (source.read_frame(&frame))
-            break;
+        if (source.read_frame(&frame)) {
+            const uint32_t writer = source.writer_pid();
+            const uint32_t gen = source.generation();
+            const uint32_t cookie = source.stream_cookie();
+
+            if (writer != startup_writer ||
+                gen != startup_generation ||
+                cookie != startup_cookie) {
+                startup_writer = writer;
+                startup_generation = gen;
+                startup_cookie = cookie;
+                startup_fresh_frames = 1u;
+            } else {
+                ++startup_fresh_frames;
+            }
+
+            if (startup_fresh_frames >= 2u) {
+                fprintf(stderr,
+                        "direct111: PHASE=PIPELINE_SOURCE_PRIMED "
+                        "fresh_frames=%u writer_pid=%u generation=%u "
+                        "cookie=0x%08x stale_single_frame_rejected=1\n",
+                        startup_fresh_frames, (unsigned)startup_writer,
+                        (unsigned)startup_generation,
+                        (unsigned)startup_cookie);
+                break;
+            }
+        }
 
         if (!wait_reported || (++wait_loops % 100u) == 0u) {
             wait_reported = true;
             fprintf(stderr,
                     "direct111: PHASE=PIPELINE_PROGRESS "
                     "h264_ready=%d h264_packets=%u h264_bytes=%u "
-                    "decoder_ready=%d decoded_frames=%u "
+                    "decoder_ready=%d decoded_frames=%u fresh_frames=%u "
                     "displayable3=NOT_CREATED\n",
                     source.h264_ready() ? 1 : 0,
                     (unsigned)source.h264_packets(),
                     (unsigned)source.h264_bytes(),
                     source.decoded_ready() ? 1 : 0,
-                    (unsigned)source.decoded_frames());
+                    (unsigned)source.decoded_frames(),
+                    startup_fresh_frames);
         }
         usleep(20000);
     }
