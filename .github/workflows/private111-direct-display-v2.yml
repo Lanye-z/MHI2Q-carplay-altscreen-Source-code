@@ -141,6 +141,8 @@ jobs:
           assert 'GATE_RECOVER_CURRENT_SESSION' in side
           assert 'ALT111_RECOVER_CURRENT_SESSION' in side
           assert 'matching_identity_plus_frame_progress' in side
+          assert 'stream111_request_or_phone_marker' in side
+          assert 'STREAM_111_REQUESTED=YES' in side
           assert 'MIRROR_ABNORMAL_RESTART=SCHEDULED' in launch
           assert 'ALT111_RECOVER_CURRENT_SESSION=1' in launch
           assert 'MAX_ABNORMAL_RESTARTS' in launch
@@ -222,6 +224,8 @@ jobs:
             strings "$bin" | grep -Fq 'PHASE=GATE_RECOVER_CURRENT_SESSION'
             strings "$bin" | grep -Fq 'matching_identity_plus_frame_progress'
             strings "$bin" | grep -Fq 'packed_tight_required=1'
+            strings "$bin" | grep -Fq 'stream111_request_or_phone_marker'
+            strings "$bin" | grep -Fq 'STREAM_111_REQUESTED=YES'
             strings "$bin" | grep -Fq 'PHASE=DISPLAYABLE3_FIRST_PRESENT'
             strings "$bin" | grep -Fq 'PHASE=DIRECT111_ACTIVE'
             if strings "$bin" | grep -Fq 'screen_read_window'; then
