@@ -1,12 +1,13 @@
 /*
  * p1404_cockpit_native.c - private111 stock-decoder compatibility staging.
  *
- * Direct-display V1 no longer consumes Window58 and no sidecar calls
- * screen_read_window().  The existing private stock OmxVideoImpl/CScreenRender
- * binding is temporarily retained only as a vehicle-proven decoder backend:
- * decoded NV12 is tapped before the stock render call and exported through
- * /carplay111_decoded.  The real instrument sink is the separate MMI-derived
- * displayable3 sidecar under Java-owned Context80.
+ * Direct-display V2 keeps the V1-proven private111/stock OMX/displayable3/
+ * Context80 chain and changes only decoded-pixel acquisition. The vendor
+ * 0x0001000c OMX/Screen buffer is no longer treated as row-linear NV12.
+ * After stock CScreenRender posts each private frame, Screen linearizes the
+ * exact stock window into a normal pixmap; the result is repacked into the
+ * existing /carplay111_decoded NV12 SHM. The real instrument sink remains the
+ * separate MMI-derived displayable3 sidecar under Java-owned Context80.
  *
  * The historical displayable58/manage-window code below remains active only so
  * stock OMX can complete its normal buffer lifecycle while this fallback is
@@ -58,6 +59,9 @@ extern void *p1404_direct_stock_symbol_named(const char *name)
 
 #define CSCREEN_CONFIG_SYMBOL "_ZN3dio13CScreenRender6configERKNS_16st_screen_configE"
 #define CSCREEN_RENDER_SYMBOL "_ZN3dio13CScreenRender6renderEPh"
+/* Stock K1004 disassembly: CScreenRender+0x08 is the exact screen_window_t
+ * passed to screen_post_window(); +0x40 is CWindowBuffers. */
+#define CSCREEN_WINDOW_OFF 0x08u
 
 typedef int (*f_cscreen_config_t)(void *, const struct p1404_screen_config *);
 typedef int (*f_cscreen_render_t)(void *, unsigned char *);
@@ -1302,22 +1306,38 @@ int p1404_hook_cscreen_render(void *self, unsigned char *buffer) {
     native_unlock();
 
     /*
-     * Direct-display V1: copy the already-decoded private NV12 frame before the
-     * stock CScreenRender posts it.  This is a fallback decoder backend only;
-     * the H264 ingress is independently mirrored to /carplay111_h264.  Main110
-     * never enters this branch because ownership is bound to the private stream.
+     * Direct-display V2 deliberately lets stock render first.  The decoded
+     * pointer is Screen format 0x0001000c on the tested i.MX6 firmware and V1
+     * proved that treating it as row-linear NV12 produces the moving garbled
+     * picture.  After stock posts the exact buffer, ask Screen to linearize the
+     * renderer's own window into a normal pixmap.
+     *
+     * Main110 never enters this branch because ownership is bound to the
+     * private stream.  Stock rendering remains the authoritative fail-open
+     * path and is never suppressed by the V2 linearizer.
      */
-    if (owned_private && config_ok && stream && buffer &&
-        config_width && config_height) {
-        p111_frame_tap_write(stream, buffer, config_width, config_height,
-                             config_format, config_usage);
-    }
-
-    /* Keep the stock call fail-open during V1 so a tap/display failure cannot
-     * stall the private ProcessFrames loop or Main110.  The direct sidecar does
-     * not read Window58 and does not depend on the return path below. */
     rc = g_real_render(self, buffer);
     if (rc != 0 || !owned_private || !config_ok) return rc;
+
+    if (stream && buffer && config_width && config_height) {
+        void *stock_window = read_ptr_at(self, CSCREEN_WINDOW_OFF);
+        if (!p111_frame_tap_write_window(stream, stock_window,
+                                         config_width, config_height,
+                                         config_format, config_usage)) {
+            /*
+             * Diagnostic fail-open only: if Screen screenshot/linearization is
+             * unavailable, preserve the V1 raw tap so the session and its
+             * moving-frame evidence are not lost.  A visible garbled fallback
+             * is explicitly not a V2 pixel-success result.
+             */
+            p111_frame_tap_write(stream, buffer,
+                                 config_width, config_height,
+                                 config_format, config_usage);
+            altscreen_log("WARN PHASE=FRAME_LINEARIZER_RAW_FALLBACK stream=%p renderer=%p window=%p format=%u usage=0x%x stock_render_rc=%d",
+                          stream, self, stock_window,
+                          config_format, config_usage, rc);
+        }
+    }
 
     now = obs_now_us();
     native_lock();
