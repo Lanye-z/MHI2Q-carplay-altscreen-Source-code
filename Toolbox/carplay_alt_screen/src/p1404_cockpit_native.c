@@ -59,9 +59,6 @@ extern void *p1404_direct_stock_symbol_named(const char *name)
 
 #define CSCREEN_CONFIG_SYMBOL "_ZN3dio13CScreenRender6configERKNS_16st_screen_configE"
 #define CSCREEN_RENDER_SYMBOL "_ZN3dio13CScreenRender6renderEPh"
-/* Stock K1004 disassembly: CScreenRender+0x08 is the exact screen_window_t
- * passed to screen_post_window(); +0x40 is CWindowBuffers. */
-#define CSCREEN_WINDOW_OFF 0x08u
 
 typedef int (*f_cscreen_config_t)(void *, const struct p1404_screen_config *);
 typedef int (*f_cscreen_render_t)(void *, unsigned char *);
@@ -98,12 +95,14 @@ struct native_slot {
     void *stream;
     void *video_impl;
     void *renderer;
+    screen_window_t window;
     uint64_t first_post_at;
     uint64_t last_post_at;
     uint32_t generation;
     uint32_t state_generation;
     uint32_t posts;
     uint32_t action_generation;
+    uint32_t linearizer_raw_fallbacks;
     unsigned long owner_thread;
     int monitor_started;
     int action;
@@ -991,6 +990,7 @@ void p1404_cockpit_native_detach(void *receiver, void *stream) {
         slot->stream = NULL;
         slot->receiver = NULL;
         slot->renderer = NULL;
+        slot->window = NULL;
         ++slot->generation;
     }
     native_unlock();
@@ -1145,6 +1145,7 @@ int p1404_hook_cscreen_config(void *self, const struct p1404_screen_config *conf
     int group_skipped = 0;
     int manage_rc = -1;
     int buffers_rc = -1;
+    screen_window_t managed_window = NULL;
     int rc;
 
     if (altscreen_runtime_ensure_initialized)
@@ -1206,11 +1207,12 @@ int p1404_hook_cscreen_config(void *self, const struct p1404_screen_config *conf
         manage_rc = g_managed_config.manage_rc;
         buffers_rc = g_managed_config.buffers_rc;
         managed_ok = g_managed_config.managed;
+        managed_window = g_managed_config.window;
         memset(&g_managed_config, 0, sizeof(g_managed_config));
         native_unlock();
-        altscreen_log("PHASE=NATIVE_111_MANAGED_WINDOW receiver=%p stream=%p renderer=%p group_skipped=%d manage_rc=%d buffers_rc=%d managed=%d manager=displaymanager stock_buffer_owner=1 compat_decoder_staging=1 direct_sink_window58=0",
-                      receiver, stream, self, group_skipped, manage_rc,
-                      buffers_rc, managed_ok);
+        altscreen_log("PHASE=NATIVE_111_MANAGED_WINDOW receiver=%p stream=%p renderer=%p window=%p group_skipped=%d manage_rc=%d buffers_rc=%d managed=%d manager=displaymanager stock_buffer_owner=1 compat_decoder_staging=1 direct_sink_window58=0",
+                      receiver, stream, self, managed_window,
+                      group_skipped, manage_rc, buffers_rc, managed_ok);
         if (rc == 0 && !managed_ok) rc = NATIVE_CONFIG_REFUSED_STATUS;
     }
     if (rewritten) {
@@ -1234,6 +1236,8 @@ int p1404_hook_cscreen_config(void *self, const struct p1404_screen_config *conf
                 slot->generation == generation) {
                 slot->preconfig_rewritten = 1;
                 slot->config_ok = geometry_match;
+                slot->window = managed_window;
+                slot->linearizer_raw_fallbacks = 0u;
                 slot->config_width = native_config.source_width;
                 slot->config_height = native_config.source_height;
                 slot->config_format = native_config.format;
@@ -1264,6 +1268,7 @@ int p1404_hook_cscreen_render(void *self, unsigned char *buffer) {
     struct altscreen_ctx snap;
     void *receiver = NULL;
     void *stream = NULL;
+    screen_window_t stock_window = NULL;
     uint64_t now;
     uint64_t first_post_at = 0;
     uint32_t posts = 0;
@@ -1302,6 +1307,7 @@ int p1404_hook_cscreen_render(void *self, unsigned char *buffer) {
         config_height = slot->config_height;
         config_format = slot->config_format;
         config_usage = slot->config_usage;
+        stock_window = slot->window;
     }
     native_unlock();
 
@@ -1310,7 +1316,9 @@ int p1404_hook_cscreen_render(void *self, unsigned char *buffer) {
      * pointer is Screen format 0x0001000c on the tested i.MX6 firmware and V1
      * proved that treating it as row-linear NV12 produces the moving garbled
      * picture.  After stock posts the exact buffer, ask Screen to linearize the
-     * renderer's own window into a normal pixmap.
+     * renderer's own window into a normal pixmap. The window handle is the
+     * exact handle captured from screen_create_window_buffers() during config;
+     * render does not infer another CScreenRender object offset.
      *
      * Main110 never enters this branch because ownership is bound to the
      * private stream.  Stock rendering remains the authoritative fail-open
@@ -1320,22 +1328,31 @@ int p1404_hook_cscreen_render(void *self, unsigned char *buffer) {
     if (rc != 0 || !owned_private || !config_ok) return rc;
 
     if (stream && buffer && config_width && config_height) {
-        void *stock_window = read_ptr_at(self, CSCREEN_WINDOW_OFF);
         if (!p111_frame_tap_write_window(stream, stock_window,
                                          config_width, config_height,
                                          config_format, config_usage)) {
+            uint32_t fallback_count = 0u;
             /*
-             * Diagnostic fail-open only: if Screen screenshot/linearization is
-             * unavailable, preserve the V1 raw tap so the session and its
-             * moving-frame evidence are not lost.  A visible garbled fallback
-             * is explicitly not a V2 pixel-success result.
+             * Diagnostic fail-open only before Screen has produced a usable
+             * linearized frame. Once the linearizer has succeeded, it reports
+             * later transient read failures as handled so the sidecar freezes
+             * the last good frame instead of reintroducing V1 tiled garbage.
              */
             p111_frame_tap_write(stream, buffer,
                                  config_width, config_height,
                                  config_format, config_usage);
-            altscreen_log("WARN PHASE=FRAME_LINEARIZER_RAW_FALLBACK stream=%p renderer=%p window=%p format=%u usage=0x%x stock_render_rc=%d",
-                          stream, self, stock_window,
-                          config_format, config_usage, rc);
+            native_lock();
+            slot = find_renderer_locked(self);
+            if (slot && slot->generation == generation &&
+                slot->stream == stream)
+                fallback_count = ++slot->linearizer_raw_fallbacks;
+            native_unlock();
+            if (fallback_count == 1u || (fallback_count % 60u) == 0u) {
+                altscreen_log("WARN PHASE=FRAME_LINEARIZER_RAW_FALLBACK stream=%p renderer=%p window=%p format=%u usage=0x%x stock_render_rc=%d count=%u rate_limited=1",
+                              stream, self, stock_window,
+                              config_format, config_usage, rc,
+                              fallback_count);
+            }
         }
     }
 
