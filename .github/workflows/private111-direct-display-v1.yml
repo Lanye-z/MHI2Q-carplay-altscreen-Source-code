@@ -11,6 +11,7 @@ on:
       - 'Toolbox/carplay_alt_screen/hmi/**'
       - 'Toolbox/scripts/**'
       - 'CARPLAY-PRIVATE111-DIRECT-DISPLAY-V1.md'
+      - 'READ-ME-FIRST.md'
   workflow_dispatch:
 
 concurrency:
@@ -113,11 +114,38 @@ jobs:
       - name: Shell syntax
         run: |
           set -euo pipefail
-          for f in             Toolbox/carplay_alt_screen/mirror_display/release/start_vehicle.sh             Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh             Toolbox/scripts/altscreen_chain_test.sh             Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh             Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh             Toolbox/scripts/status_mmi_cockpit_carplay_test.sh
+          for f in             Toolbox/carplay_alt_screen/mirror_display/release/start_vehicle.sh             Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh             Toolbox/scripts/altscreen_chain_test.sh             Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh             Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh             Toolbox/scripts/status_mmi_cockpit_carplay_test.sh \
+            Toolbox/scripts/stop_mmi_cockpit_carplay_test.sh
           do
             sh -n "$f"
           done
           echo "DIRECT111_SHELL_SYNTAX=PASS"
+
+      - name: Enforce first-vehicle integration contract
+        run: |
+          set -euo pipefail
+          ctrl=Toolbox/scripts/altscreen_chain_test_universal.sh
+          start=Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh
+          launch=Toolbox/carplay_alt_screen/mirror_display/release/start_vehicle.sh
+          restore=Toolbox/scripts/stop_mmi_cockpit_carplay_test.sh
+
+          grep -Fq 'echo observe > "$STATE_DIR/IAP2_PROFILE"' "$ctrl"
+          grep -Fq 'rm -f "$STATE_DIR/ARMED_IAP2"' "$ctrl"
+          grep -Fq 'DISPLAY_PATH=PRIVATE111_DIRECT' "$ctrl"
+          grep -Fq 'h264_shm=/carplay111_h264' "$ctrl"
+          grep -Fq 'decoded_shm=/carplay111_decoded' "$ctrl"
+          if grep -Fq 'DISPLAY_PATH=WINDOW58_READBACK' "$ctrl"; then
+            echo "DIRECT111_CONTRACT_FAIL stale Window58 readback runtime label" >&2
+            exit 1
+          fi
+
+          grep -Fq 'touch /tmp/mmi-mirror-active' "$start"
+          grep -Fq '/mnt/app/root/carplay-altscreen/bin/mirror/start_vehicle.sh' "$start"
+          grep -Fq 'meaning=destination_first_successful_gles_present' "$start"
+          grep -Fq 'LD_PRELOAD= "$BIN"' "$launch"
+          grep -Fq 'DIRECT_DISPLAY_SIDECAR=STOPPED' "$restore"
+
+          echo "DIRECT111_FIRST_VEHICLE_CONTRACT=PASS iap2=observe window58_readback=0 java80_only=1"
 
       - name: Enforce direct-display sidecar release
         run: |
