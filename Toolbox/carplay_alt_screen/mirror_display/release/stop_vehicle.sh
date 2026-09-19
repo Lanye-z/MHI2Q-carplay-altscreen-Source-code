@@ -8,10 +8,12 @@ if [ -d "$NS" ]; then
   PIDFILE="$NS/pid"
   WATCH_PIDFILE="$NS/lifecycle.pid"
   STOP_GUARD="$NS/stop.requested"
+  RECOVERY_LOCK="$NS/recovery.lock"
 else
   PIDFILE="$FLAT.pid"
   WATCH_PIDFILE="$FLAT.lifecycle.pid"
   STOP_GUARD="$FLAT.stop.requested"
+  RECOVERY_LOCK="$FLAT.recovery.lock"
 fi
 
 # Publish the guard before killing anything so a concurrent private111 teardown
@@ -47,8 +49,12 @@ if [ -f "$PIDFILE" ]; then
   fi
 fi
 
-rm -f   "$NS/pid" "$NS/lifecycle.pid" "$NS/ready" "$NS/basevideo.ready" "$NS/stop.requested"   "$FLAT.pid" "$FLAT.lifecycle.pid" "$FLAT.ready" "$FLAT.basevideo.ready" "$FLAT.stop.requested"   /tmp/mmi-mirror-basevideo.ready
-
-echo "MIRROR_DISPLAY=STOPPED lifecycle_watch=STOPPED context_writer=JAVA80 native_dmdt=DISABLED"
-
+# Keep STOP_GUARD published after STOP. Any already-scheduled delayed recovery
+# child must continue to see the explicit-stop decision. A future manual START
+# (RESTART_REASON empty) is the only path that clears this guard.
+rm -f "$NS/pid" "$NS/lifecycle.pid" "$NS/ready" "$NS/basevideo.ready" \
+      "$FLAT.pid" "$FLAT.lifecycle.pid" "$FLAT.ready" "$FLAT.basevideo.ready" \
+      /tmp/mmi-mirror-basevideo.ready
 rmdir "$RECOVERY_LOCK" 2>/dev/null || true
+
+echo "MIRROR_DISPLAY=STOPPED lifecycle_watch=STOPPED context_writer=JAVA80 native_dmdt=DISABLED stop_guard=RETAINED"
