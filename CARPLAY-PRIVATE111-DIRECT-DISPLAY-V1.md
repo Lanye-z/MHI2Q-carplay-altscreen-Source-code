@@ -107,16 +107,25 @@ This means one vehicle run can distinguish:
 
 ## Release status
 
-Source and diagnostics are kept separate from binary promotion.
-
-Until the QNX 6.5 ARMv7 sidecar is rebuilt and promoted, the checked-in
-`mirror_display/release/carplay-alt111-mirror-display` is an older binary and
-must **not** be treated as this direct-display V1. The release
-`BUILD_INFO.txt` intentionally says:
+The QNX 6.5 ARMv7 direct-display sidecar was rebuilt and promoted on this branch,
+and its source has not changed since that promotion. The current release
+contract is:
 
 ```text
-release_binary_status=STALE_REBUILD_REQUIRED
-vehicle_zip_status=NOT_READY_UNTIL_QNX_REBUILD_AND_PROMOTION
+release_binary_status=PRIVATE111_DIRECT_DISPLAY_V1
+vehicle_zip_status=READY_FOR_VEHICLE_TEST
 ```
 
-A successful universal hook CI build does not override that sidecar boundary.
+The universal hook is rebuilt and promoted by
+`.github/workflows/private111-direct-display-v1.yml`. The workflow also checks
+that the checked-in sidecar contains the direct-display markers and does not
+contain the retired `screen_read_window` dependency.
+
+For the first vehicle test, do **not** add standalone Qualcomm decoding,
+`screen_blit`, zero-copy or other performance work. The intended V1 path is
+the stock-OMX decoded NV12 fallback above; optimization starts only after the
+physical VC image has been confirmed.
+
+A successful STATUS result is still not a substitute for the final vehicle
+verdict. `PHYSICAL_ROUTE_READY=SOFTWARE_CHAIN_COMPLETE` proves the observable
+software stages; the VC must visibly show the private CarPlay image.
