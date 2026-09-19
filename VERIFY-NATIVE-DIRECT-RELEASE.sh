@@ -36,19 +36,32 @@ for s in "$START" "$CTRL" "$LAUNCH" "$STOP"          "$ROOT/Toolbox/carplay_alt_
     sh -n "$s" || fail "shell syntax: $s"
 done
 
-for marker in     'carplay-private111-direct-display-v1'     'PHASE=H264_SHM_ATTACHED'     'PHASE=DECODER_FIRST_FRAME'     'PHASE=NV12_CSC_READY'     'PHASE=DISPLAYABLE3_FIRST_PRESENT'     'PHASE=DIRECT111_ACTIVE'     'window58_readback=0'
-do
-    binary_strings "$BIN" | grep -Fq "$marker" ||
-        fail "sidecar marker missing: $marker"
-done
-if binary_strings "$BIN" | grep -Fq 'screen_read_window'; then
-    fail "retired Window58 readback leaked into promoted sidecar"
+SOURCE_ONLY=0
+if grep -Fq 'release_binary_status=V1_BINARY_STALE_V2_SOURCE_REBUILD_REQUIRED' "$INFO"; then
+    SOURCE_ONLY=1
+    grep -Fq 'vehicle_zip_status=NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED' "$INFO" ||
+        fail "source-only V2 must not be marked vehicle-ready"
+    for marker in         'carplay-private111-direct-display-v1'         'PHASE=H264_SHM_ATTACHED'         'PHASE=DECODER_FIRST_FRAME'         'PHASE=DISPLAYABLE3_FIRST_PRESENT'         'PHASE=DIRECT111_ACTIVE'
+    do
+        binary_strings "$BIN" | grep -Fq "$marker" ||
+            fail "stale V1 sidecar marker missing: $marker"
+    done
+elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$INFO"; then
+    grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$INFO" ||
+        fail "rebuilt V2 sidecar is not marked vehicle-ready"
+    for marker in         'carplay-private111-direct-display-v2'         'PHASE=DECODED_SHM_WAIT_SIZE'         'PHASE=SOURCE_SESSION'         'PHASE=GATE_RECOVER_CURRENT_SESSION'         'PHASE=DISPLAYABLE3_FIRST_PRESENT'         'PHASE=DIRECT111_ACTIVE'
+    do
+        binary_strings "$BIN" | grep -Fq "$marker" ||
+            fail "V2 sidecar marker missing: $marker"
+    done
+else
+    fail "unknown sidecar release state"
 fi
 
-grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V1' "$INFO" ||
-    fail "BUILD_INFO release status mismatch"
-grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$INFO" ||
-    fail "BUILD_INFO vehicle status mismatch"
+if binary_strings "$BIN" | grep -Fq 'screen_read_window'; then
+    fail "Screen readback must remain in hook, not sidecar"
+fi
+
 grep -Fq 'window58_readback=disabled' "$INFO" ||
     fail "BUILD_INFO Window58 policy mismatch"
 grep -Fq 'mirror_sink=displayable3_gles' "$INFO" ||
@@ -59,8 +72,6 @@ grep -Fq 'private111_session_end_policy=hook_DIRECT111_TAP_STOP_watchdog' "$INFO
     fail "BUILD_INFO private111 session-end policy mismatch"
 grep -Fq 'private111_session_restart=enabled_while_basevideo_demand_active' "$INFO" ||
     fail "BUILD_INFO private111 restart policy mismatch"
-grep -Fq 'lifecycle_watchdog_binary_rebuild_required=no' "$INFO" ||
-    fail "BUILD_INFO lifecycle rebuild policy mismatch"
 
 grep -Fq 'p111_frame_tap_write_window(stream, stock_window' "$NATIVE" ||
     fail "V2 Screen linearizer is not wired after stock render"
@@ -75,10 +86,13 @@ grep -Fq 'stock_window = slot->window;' "$NATIVE" ||
 if grep -Fq 'CSCREEN_WINDOW_OFF' "$NATIVE"; then
     fail "V2 must not infer Screen window via CScreenRender object offset"
 fi
-grep -Fq 'PHASE=FRAME_LINEARIZER_RAW_FALLBACK' "$NATIVE" ||
-    fail "V2 raw diagnostic fail-open path missing"
-grep -Fq 'rate_limited=1' "$NATIVE" ||
-    fail "V2 raw fallback logging is not rate limited"
+grep -Fq 'PHASE=FRAME_LINEARIZER_AUX_DROP' "$NATIVE" ||
+    fail "V2 safe auxiliary-drop path missing"
+grep -Fq 'raw_vendor_publish=0' "$NATIVE" ||
+    fail "V2 must explicitly forbid raw vendor publication"
+if grep -Fq 'p111_frame_tap_write(stream, buffer' "$NATIVE"; then
+    fail "unsafe raw vendor frame publication remains in native render hook"
+fi
 grep -A8 'static int native_route_requested' "$NATIVE" | grep -Fq 'return 0;' ||
     fail "native route is not hard-disabled for direct-display V2"
 grep -Fq 'P111_QNX_NV12_FORMAT 65548u' "$TAP" ||
@@ -97,8 +111,43 @@ grep -Fq 'valid_uniform_frame' "$TAP" ||
     fail "V2 uniform/black-frame acceptance missing"
 grep -Fq 'FREEZE_LAST_GOOD' "$TAP" ||
     fail "V2 transient-failure freeze policy missing"
+grep -Fq 'DROP_AUX_FRAME' "$TAP" ||
+    fail "V2 pre-first-frame safe drop policy missing"
+grep -Fq 'H264_TAP_SESSION_RESET' "$TAP" ||
+    fail "producer H264 session reset missing"
+grep -Fq 'FRAME_TAP_SESSION_RESET' "$TAP" ||
+    fail "producer decoded session reset missing"
+grep -Fq 'ready_published_last=1' "$TAP" ||
+    fail "producer ready/owner publication ordering missing"
+grep -Fq 'shm_publish_success=1' "$TAP" ||
+    fail "readback vs SHM publish success accounting missing"
+grep -Fq 'readback_p50_ms=' "$TAP" ||
+    fail "readback latency percentile diagnostics missing"
+grep -Fq 'ALT111_LINEARIZER_SAMPLE_NV12' "$TAP" ||
+    fail "opt-in producer NV12 sampling missing"
+if grep -Fq 'V1_RAW_FAIL_OPEN' "$TAP"; then
+    fail "retired raw fallback policy remains in linearizer"
+fi
+
+grep -Fq 'fstat(frame_fd_' "$SOURCE" ||
+    fail "decoded SHM fstat size guard missing"
+grep -Fq 'PHASE=DECODED_SHM_WAIT_SIZE' "$SOURCE" ||
+    fail "decoded SHM size wait diagnostic missing"
+grep -Fq 'PHASE=H264_SHM_WAIT_SIZE' "$SOURCE" ||
+    fail "H264 SHM size wait diagnostic missing"
+grep -Fq 'PHASE=SOURCE_SESSION' "$SOURCE" ||
+    fail "consumer writer/session identity tracking missing"
+grep -Fq 'current_session_active' "$SOURCE" ||
+    fail "same-session recovery validation missing"
+grep -Fq 'ALT111_CONSUMER_SAMPLE_NV12' "$SOURCE" ||
+    fail "opt-in consumer NV12 sampling missing"
 grep -Fq 'decoder_backend=stock-omx-tap' "$SOURCE" ||
     fail "sidecar decoded source backend mismatch"
+
+grep -Fq 'PHASE=GATE_RECOVER_CURRENT_SESSION' "$MAIN_CPP" ||
+    fail "same-session gate recovery path missing"
+grep -Fq 'carplay-private111-direct-display-v2' "$MAIN_CPP" ||
+    fail "V2 sidecar source build id missing"
 
 # ---- Reliability contract: EGL swap failure must propagate to first present ----
 grep -Fq 'bool swap();' "$BACKEND_H" ||
@@ -127,6 +176,10 @@ grep -Fq 'MIRROR_LIFECYCLE_WATCH=STARTED' "$LAUNCH" ||
     fail "launcher lifecycle watcher missing"
 grep -Fq 'LIFECYCLE_WATCH=PRIVATE111_STOP' "$LAUNCH" ||
     fail "launcher session-end action missing"
+grep -Fq 'MIRROR_ABNORMAL_RESTART=SCHEDULED' "$LAUNCH" ||
+    fail "launcher abnormal pre-first-present recovery missing"
+grep -Fq 'ALT111_RECOVER_CURRENT_SESSION=1' "$LAUNCH" ||
+    fail "launcher does not request validated same-session recovery"
 grep -Fq 'ALT111_MIRROR_RESTART_REASON=private111_session_end' "$LAUNCH" ||
     fail "launcher next-session autorestart missing"
 grep -Fq 'stop.requested' "$LAUNCH" ||
@@ -190,5 +243,11 @@ echo "hook_sha256=$hook_sha"
 echo "sidecar_window58_observer=DISABLED"
 echo "hook_exact_stock_window_linearizer=ENABLED"
 echo "context_owner=JAVA80_ONLY"
-echo "session_end_policy=HOOK_DIRECT111_TAP_STOP_WATCHDOG_RESTART"
-echo "vehicle_zip_status=READY_FOR_VEHICLE_TEST"
+echo "session_identity=writer_pid+generation+stream_cookie"
+echo "raw_vendor_fallback=DISABLED"
+echo "same_session_recovery=VALIDATED_SHM_ONLY"
+if [ "$SOURCE_ONLY" = 1 ]; then
+    echo "vehicle_zip_status=NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED"
+else
+    echo "vehicle_zip_status=READY_FOR_VEHICLE_TEST"
+fi
