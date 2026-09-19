@@ -94,8 +94,13 @@ jobs:
           linear = native.index('p111_frame_tap_write_window(stream, stock_window', stock)
           raw = native.index('p111_frame_tap_write(stream, buffer', linear)
           assert stock < linear < raw
-          assert '#define CSCREEN_WINDOW_OFF 0x08u' in native
+          assert 'screen_window_t window;' in native
+          assert 'managed_window = g_managed_config.window;' in native
+          assert 'slot->window = managed_window;' in native
+          assert 'stock_window = slot->window;' in native
+          assert 'CSCREEN_WINDOW_OFF' not in native
           assert 'FRAME_LINEARIZER_RAW_FALLBACK' in native
+          assert 'rate_limited=1' in native
           assert 'Main110 never enters this branch' in native
 
           assert 'p111_frame_tap_write_window' in header
@@ -110,13 +115,15 @@ jobs:
           assert 'action=V1_RAW_FAIL_OPEN' in tap
           assert 'linearizer_rgba_to_nv12_locked' in tap
           assert 'linearizer_picture_has_detail_locked' in tap
+          assert 'valid_uniform_frame' in tap
+          assert 'FREEZE_LAST_GOOD' in tap
           assert '(requests & 1u) == 0u' in tap
 
           # Display half stays the V1-proven sidecar.
           assert 'PHASE=DIRECT111_ACTIVE' in side
           assert 'decoder_backend=stock-omx-tap' in source
           assert 'carplay_window_source.h' not in side
-          print('DIRECT111_V2_SOURCE_CONTRACT=PASS stock_first=1 screen_linearizer=1 nv12_then_rgba=1 raw_fail_open=1 sidecar_unchanged=1')
+          print('DIRECT111_V2_SOURCE_CONTRACT=PASS stock_first=1 exact_window_handle=1 screen_linearizer=1 nv12_then_rgba=1 uniform_frame_valid=1 freeze_after_good=1 raw_fail_open=1 sidecar_unchanged=1')
           PY
 
       - name: Syntax-check unchanged display sidecar sources
