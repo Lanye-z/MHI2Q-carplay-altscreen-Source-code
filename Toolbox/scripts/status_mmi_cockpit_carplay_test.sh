@@ -77,17 +77,22 @@ done
 
 H264_SHM=0
 FRAME_SHM=0
+SHM_RECOVERED=0
+AVCC_PROPERTY=0
 AVCC_CONFIG=0
 H264_DATA=0
 H264_SPS=0
 H264_PPS=0
 H264_IDR=0
 FRAME_LAYOUT=0
+FRAME_LAYOUT_UNSUPPORTED=0
 DECODER_FRAME=0
 MAP_FAILURE=0
 if [ -n "$HOOK_LOG" ]; then
     grep -q 'PHASE=H264_TAP_SHM_READY' "$HOOK_LOG" 2>/dev/null && H264_SHM=1
     grep -q 'PHASE=FRAME_TAP_SHM_READY' "$HOOK_LOG" 2>/dev/null && FRAME_SHM=1
+    grep -q 'PHASE=H264_TAP_SHM_RECOVERED\|PHASE=FRAME_TAP_SHM_RECOVERED' "$HOOK_LOG" 2>/dev/null && SHM_RECOVERED=1
+    grep -q 'PHASE=H264_AVCC_PROPERTY' "$HOOK_LOG" 2>/dev/null && AVCC_PROPERTY=1
     grep -q 'PHASE=H264_AVCC_CONFIG' "$HOOK_LOG" 2>/dev/null && AVCC_CONFIG=1
     grep -q 'ERROR PHASE=H264_TAP_SHM_MAP\|ERROR PHASE=FRAME_TAP_SHM_MAP' "$HOOK_LOG" 2>/dev/null && MAP_FAILURE=1
     grep -q 'PHASE=H264_TAP_FIRST_DATA' "$HOOK_LOG" 2>/dev/null && H264_DATA=1
@@ -95,14 +100,15 @@ if [ -n "$HOOK_LOG" ]; then
     grep -q 'PHASE=H264_TAP_FIRST_PPS' "$HOOK_LOG" 2>/dev/null && H264_PPS=1
     grep -q 'PHASE=H264_TAP_FIRST_IDR' "$HOOK_LOG" 2>/dev/null && H264_IDR=1
     grep -q 'PHASE=FRAME_TAP_LAYOUT' "$HOOK_LOG" 2>/dev/null && FRAME_LAYOUT=1
+    grep -q 'ERROR PHASE=FRAME_TAP_UNSUPPORTED_LAYOUT' "$HOOK_LOG" 2>/dev/null && FRAME_LAYOUT_UNSUPPORTED=1
     grep -q 'PHASE=DECODER_FIRST_FRAME backend=stock-omx-tap' "$HOOK_LOG" 2>/dev/null && DECODER_FRAME=1
 
-    echo "SHM_WRITER_READY=h264:$H264_SHM decoded:$FRAME_SHM map_failure:$MAP_FAILURE"
-    echo "H264_CODEC_CONFIG=$AVCC_CONFIG"
+    echo "SHM_WRITER_READY=h264:$H264_SHM decoded:$FRAME_SHM map_failure:$MAP_FAILURE recovered:$SHM_RECOVERED"
+    echo "H264_AVCC_PROPERTY=$AVCC_PROPERTY H264_CODEC_CONFIG_EMITTED=$AVCC_CONFIG"
     echo "H264_TAP_DATA=$H264_DATA SPS=$H264_SPS PPS=$H264_PPS IDR=$H264_IDR"
-    echo "FRAME_TAP_LAYOUT=$FRAME_LAYOUT DECODER_FIRST_FRAME=$DECODER_FRAME backend=stock-omx-tap"
+    echo "FRAME_TAP_LAYOUT=$FRAME_LAYOUT unsupported:$FRAME_LAYOUT_UNSUPPORTED DECODER_FIRST_FRAME=$DECODER_FRAME backend=stock-omx-tap"
     echo "HOOK_DIRECT111_LOG_TAIL_BEGIN"
-    grep -E 'PHASE=(STREAM_111_|VIDEO_111_|H264_TAP_|H264_AVCC_|DIRECT111_TAP_|FRAME_TAP_|DECODER_)|ERROR PHASE=(H264_TAP_SHM_|FRAME_TAP_SHM_)' "$HOOK_LOG" 2>/dev/null | tail -n 80 || true
+    grep -E 'PHASE=(STREAM_111_|VIDEO_111_|H264_TAP_|H264_AVCC_|DIRECT111_TAP_|FRAME_TAP_|DECODER_)|ERROR PHASE=(H264_TAP_SHM_|FRAME_TAP_SHM_|FRAME_TAP_UNSUPPORTED_LAYOUT)' "$HOOK_LOG" 2>/dev/null | tail -n 120 || true
     echo "HOOK_DIRECT111_LOG_TAIL_END"
 else
     echo "H264_TAP_DATA=UNKNOWN hook_log_missing=1"
@@ -167,14 +173,17 @@ else
     echo "JAVA_CTX80_ACTUAL=UNKNOWN log_missing=1"
 fi
 
-if [ "$H264_DATA" = 1 ] && [ "$H264_SPS" = 1 ] &&
-   [ "$H264_PPS" = 1 ] && [ "$H264_IDR" = 1 ] &&
-   [ "$DECODER_FRAME" = 1 ] && [ "$DISPLAY3" = 1 ] &&
+# V1 vehicle display readiness is driven by the decoded fallback path.
+# H264 SPS/PPS/IDR evidence is reported independently for the future standalone
+# decoder and must not falsely mark a working displayable3/Context80 route bad.
+if [ "$DECODER_FRAME" = 1 ] && [ "$DISPLAY3" = 1 ] &&
    [ "$DEST" = 1 ] && [ "$MIRROR_RUNNING" = 1 ] &&
    [ "$CTXACT" = 1 ]; then
-    echo "PHYSICAL_ROUTE_READY=SOFTWARE_CHAIN_COMPLETE h264=1 decoder=1 displayable3=1 ctx80=1 human_vc_confirmation_required=YES"
+    echo "PHYSICAL_ROUTE_READY=SOFTWARE_CHAIN_COMPLETE decoder=1 displayable3=1 ctx80=1 human_vc_confirmation_required=YES"
+    echo "COMPRESSED_PATH_EVIDENCE=h264_data:$H264_DATA avcc_property:$AVCC_PROPERTY config:$AVCC_CONFIG sps:$H264_SPS pps:$H264_PPS idr:$H264_IDR"
 else
-    echo "PHYSICAL_ROUTE_READY=NO h264_data=$H264_DATA sps=$H264_SPS pps=$H264_PPS idr=$H264_IDR decoder=$DECODER_FRAME displayable3=$DISPLAY3 destination=$DEST sidecar=$MIRROR_RUNNING ctx80_actual=$CTXACT"
+    echo "PHYSICAL_ROUTE_READY=NO decoded_shm=$FRAME_SHM frame_layout=$FRAME_LAYOUT layout_unsupported=$FRAME_LAYOUT_UNSUPPORTED decoder=$DECODER_FRAME displayable3=$DISPLAY3 destination=$DEST sidecar=$MIRROR_RUNNING ctx80_actual=$CTXACT"
+    echo "COMPRESSED_PATH_EVIDENCE=h264_shm:$H264_SHM h264_data:$H264_DATA avcc_property:$AVCC_PROPERTY config:$AVCC_CONFIG sps:$H264_SPS pps:$H264_PPS idr:$H264_IDR"
 fi
 
 exit "$STATUS_RC"
