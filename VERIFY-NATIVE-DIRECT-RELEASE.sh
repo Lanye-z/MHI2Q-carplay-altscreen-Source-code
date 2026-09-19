@@ -64,7 +64,7 @@ elif grep -Fq 'release_binary_status=V2_BINARY_STALE_HARDENING_REBUILD_REQUIRED'
 elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$INFO"; then
     grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$INFO" ||
         fail "rebuilt V2 sidecar is not marked vehicle-ready"
-    for marker in 'carplay-private111-direct-display-v2' 'PHASE=DECODED_SHM_WAIT_SIZE' 'PHASE=SOURCE_SESSION' 'PHASE=GATE_RECOVER_CURRENT_SESSION' 'matching_identity_plus_frame_progress' 'packed_tight_required=1' 'stream111_request_or_phone_marker' 'STREAM_111_REQUESTED=YES' 'PHASE=DISPLAYABLE3_FIRST_PRESENT' 'PHASE=DIRECT111_ACTIVE'
+    for marker in 'carplay-private111-direct-display-v2' 'PHASE=DECODED_SHM_WAIT_SIZE' 'PHASE=SOURCE_SESSION' 'PHASE=GATE_RECOVER_CURRENT_SESSION' 'matching_identity_plus_frame_progress' 'packed_tight_required=1' 'stream111_request_or_phone_marker' 'STREAM_111_REQUESTED=YES' 'PHASE=PIPELINE_SOURCE_PRIMED' 'startup_frame_progress_required=2' 'PHASE=DISPLAYABLE3_FIRST_PRESENT' 'PHASE=DIRECT111_ACTIVE'
     do
         binary_strings "$BIN" | grep -Fq "$marker" ||
             fail "V2 sidecar marker missing: $marker"
@@ -142,6 +142,10 @@ grep -Fq 'PHASE=FRAME_LINEARIZER_SLOW' "$TAP" ||
     fail "slow synchronous readback diagnostic missing"
 grep -Fq 'DIRECT111_TAP_STOP_STALE' "$TAP" ||
     fail "stale-stream teardown isolation missing"
+grep -Fq 'DIRECT111_TAP_STALE_CALLBACK' "$TAP" ||
+    fail "stale callback cannot be proven unable to switch producer session"
+grep -Fq 'FRAME_LINEARIZER_STALE_CALLBACK' "$TAP" ||
+    fail "stale render callback is not rejected before Screen readback"
 grep -Fq 'ALT111_LINEARIZER_SAMPLE_NV12' "$TAP" ||
     fail "opt-in producer NV12 sampling missing"
 if grep -Fq 'V1_RAW_FAIL_OPEN' "$TAP"; then
@@ -173,6 +177,10 @@ grep -Fq 'stream111_request_or_phone_marker' "$MAIN_CPP" ||
     fail "normal reconnect gate does not accept the repeated type111 request marker"
 grep -Fq 'STREAM_111_REQUESTED=YES' "$MAIN_CPP" ||
     fail "normal reconnect gate lacks per-session type111 request evidence"
+grep -Fq 'PHASE=PIPELINE_SOURCE_PRIMED' "$MAIN_CPP" ||
+    fail "startup does not require decoded frame progress before displayable creation"
+grep -Fq 'startup_frame_progress_required=2' "$MAIN_CPP" ||
+    fail "startup fresh-frame threshold marker missing"
 grep -Fq 'carplay-private111-direct-display-v2' "$MAIN_CPP" ||
     fail "V2 sidecar source build id missing"
 
