@@ -50,3 +50,5 @@ fi
 rm -f   "$NS/pid" "$NS/lifecycle.pid" "$NS/ready" "$NS/basevideo.ready" "$NS/stop.requested"   "$FLAT.pid" "$FLAT.lifecycle.pid" "$FLAT.ready" "$FLAT.basevideo.ready" "$FLAT.stop.requested"   /tmp/mmi-mirror-basevideo.ready
 
 echo "MIRROR_DISPLAY=STOPPED lifecycle_watch=STOPPED context_writer=JAVA80 native_dmdt=DISABLED"
+
+rmdir "$RECOVERY_LOCK" 2>/dev/null || true
