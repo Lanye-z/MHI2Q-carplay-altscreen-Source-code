@@ -525,14 +525,14 @@ cmd_start(){
     for m in ARMED ARMED_MUTATE ARMED_INFO ARMED_FEATURE ARMED_CREATE111 ACTIVE FORCE_START; do
         touch "$STATE_DIR/$m" || { lock_release; return 1; }
     done
-    # Java/HMI is the sole context owner in private111 direct-display V1.
+    # Java/HMI is the sole context owner in private111 direct-display V2.
     rm -f "$STATE_DIR/FULL_CHAIN_MODE" "$STATE_DIR/NATIVE_DISPLAY_MODE"
     mount_rw "$(p /mnt/app)" || { lock_release; return 1; }; MR_APP=1
     ensure_dirs "$(dirname -- "$PROBE_MARKER")" || { finish_mounts; lock_release; return 1; }
     echo "$run_id" > "$PROBE_MARKER" || { finish_mounts; lock_release; return 1; }
     finish_mounts || { lock_release; return 1; }
     say "AUTH_PRIVATE111_CORE=UNCHANGED resolver=dynamic"
-    say "DISPLAY_PATH=PRIVATE111_DIRECT source=ScreenStreamProcessData h264_shm=/carplay111_h264 decoder_backend=stock_omx_tap_v1 decoded_shm=/carplay111_decoded sink=displayable3_gles context_owner=JAVA80 window58_readback=0"
+    say "DISPLAY_PATH=PRIVATE111_DIRECT source=ScreenStreamProcessData h264_shm=/carplay111_h264 decoder_backend=stock_omx_screen_linearized_shm decoded_shm=/carplay111_decoded sink=displayable3_gles context_owner=JAVA80 window58_readback=0"
     say "IAP2_PROFILE=observe ARMED_IAP2=ABSENT policy=owner_corrected_no_themeassets_synthesis"
     lock_release || return 1
     say "START=PASS profile=UNIVERSAL run_id=$run_id reboot_required=YES"
