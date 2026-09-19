@@ -18,6 +18,9 @@ CTRL="$ROOT/Toolbox/scripts/altscreen_chain_test_universal.sh"
 LAUNCH="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/start_vehicle.sh"
 RELEASE_STOP="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh"
 STOP="$ROOT/Toolbox/scripts/stop_mmi_cockpit_carplay_test.sh"
+INSTALL="$ROOT/Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh"
+STATUS="$ROOT/Toolbox/scripts/status_mmi_cockpit_carplay_test.sh"
+CHAIN="$ROOT/Toolbox/scripts/altscreen_chain_test.sh"
 TOP="$ROOT/SHA256SUMS.txt"
 MAP="$ROOT/PACKAGE_SOURCE_MAP.json"
 
@@ -28,7 +31,7 @@ sha256_file(){
 }
 binary_strings(){ strings "$1" 2>/dev/null || grep -a -o '[[:print:]][[:print:]]*' "$1"; }
 
-for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$MAIN_CPP" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$STOP"; do
+for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$MAIN_CPP" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$STOP" "$INSTALL" "$STATUS" "$CHAIN"; do
     [ -s "$f" ] || fail "missing/empty: $f"
 done
 
@@ -226,6 +229,22 @@ grep -Fq 'rm -f "$STATE_DIR/FULL_CHAIN_MODE" "$STATE_DIR/NATIVE_DISPLAY_MODE"' "
     fail "legacy native context route markers are not cleared"
 grep -Fq 'DISPLAY_PATH=PRIVATE111_DIRECT' "$CTRL" ||
     fail "controller does not report private111 direct path"
+grep -Fq 'decoder_backend=stock_omx_screen_linearized_shm' "$CTRL" ||
+    fail "controller still reports stale V1 decoded backend"
+grep -Fq 'PACKAGE_MODE=CARPLAY_PRIVATE111_DIRECT_DISPLAY_V2' "$INSTALL" ||
+    fail "integrated installer does not identify V2 package"
+grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$INSTALL" ||
+    fail "integrated installer does not gate on rebuilt V2 release status"
+grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$INSTALL" ||
+    fail "integrated installer does not gate on vehicle-ready release status"
+grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$CHAIN" ||
+    fail "runtime stager does not gate on rebuilt V2 release"
+grep -Fq 'mode=carplay-private111-direct-display-v2' "$CHAIN" ||
+    fail "runtime ownership marker is not V2"
+grep -Fq 'CarPlay private111 Direct Display V2' "$STATUS" ||
+    fail "STATUS still identifies the old V1 display path"
+grep -Fq 'FRAME_LINEARIZER_SLOW_EVENTS=' "$STATUS" ||
+    fail "STATUS does not surface Screen readback latency evidence"
 if grep -Fq 'DISPLAY_PATH=WINDOW58_READBACK' "$CTRL"; then
     fail "controller still advertises retired Window58 readback"
 fi
