@@ -12,6 +12,7 @@ on:
       - 'Toolbox/scripts/**'
       - 'CARPLAY-PRIVATE111-DIRECT-DISPLAY-V2.md'
       - 'READ-ME-FIRST.md'
+      - 'VERIFY-NATIVE-DIRECT-RELEASE.sh'
   workflow_dispatch:
 
 concurrency:
@@ -226,6 +227,7 @@ jobs:
               'Toolbox/carplay_alt_screen/mirror_display/release/carplay-alt111-mirror-display',
               'Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt',
               'Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt',
+              'VERIFY-NATIVE-DIRECT-RELEASE.sh',
           ]
 
           package = root / 'PACKAGE_SOURCE_MAP.json'
@@ -257,6 +259,10 @@ jobs:
           sums.write_text(''.join('%s %s\n' % (table[k], k) for k in sorted(table)))
           PY
 
+          # Validate the complete release tree after the newly-built hook and
+          # manifests are in place, but before committing/pushing them.
+          sh VERIFY-NATIVE-DIRECT-RELEASE.sh
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add \
@@ -267,7 +273,7 @@ jobs:
 
           if ! git diff --cached --quiet; then
             git commit -m "build(direct111-v2): promote Screen-linearizer runtime [skip ci]"
-            git fetch origin carplay-private111-direct-display-v2
+            git fetch origin "+refs/heads/carplay-private111-direct-display-v2:refs/remotes/origin/carplay-private111-direct-display-v2"
             git rebase origin/carplay-private111-direct-display-v2
             git push origin HEAD:carplay-private111-direct-display-v2
           fi
