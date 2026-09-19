@@ -4,11 +4,12 @@ build_id=carplay-private111-direct-display-v1-binary_stale_for_v2_source
 h264_source=private111_ScreenStreamProcessData
 h264_shm=/carplay111_h264
 
-decoder_backend_v1=stock_omx_buffer_tap
+decoder_backend=stock_omx_screen_linearized_shm
 decoded_shm=/carplay111_decoded
 
 window58_readback=disabled
-screen_read_window=disabled
+sidecar_screen_read_window=disabled
+hook_screen_read_window=enabled
 window_manager_context=disabled_in_sidecar
 
 mirror_sink=displayable3_gles
