@@ -102,7 +102,7 @@ struct native_slot {
     uint32_t state_generation;
     uint32_t posts;
     uint32_t action_generation;
-    uint32_t linearizer_raw_fallbacks;
+    uint32_t linearizer_aux_drops;
     unsigned long owner_thread;
     int monitor_started;
     int action;
@@ -1237,7 +1237,7 @@ int p1404_hook_cscreen_config(void *self, const struct p1404_screen_config *conf
                 slot->preconfig_rewritten = 1;
                 slot->config_ok = geometry_match;
                 slot->window = managed_window;
-                slot->linearizer_raw_fallbacks = 0u;
+                slot->linearizer_aux_drops = 0u;
                 slot->config_width = native_config.source_width;
                 slot->config_height = native_config.source_height;
                 slot->config_format = native_config.format;
@@ -1331,27 +1331,24 @@ int p1404_hook_cscreen_render(void *self, unsigned char *buffer) {
         if (!p111_frame_tap_write_window(stream, stock_window,
                                          config_width, config_height,
                                          config_format, config_usage)) {
-            uint32_t fallback_count = 0u;
+            uint32_t drop_count = 0u;
             /*
-             * Diagnostic fail-open only before Screen has produced a usable
-             * linearized frame. Once the linearizer has succeeded, it reports
-             * later transient read failures as handled so the sidecar freezes
-             * the last good frame instead of reintroducing V1 tiled garbage.
+             * Never publish the original vendor OMX pointer after a Screen
+             * linearization failure. Before the first good auxiliary frame we
+             * simply remain not-ready; after success the linearizer freezes the
+             * last good frame. Stock CarPlay rendering remains untouched.
              */
-            p111_frame_tap_write(stream, buffer,
-                                 config_width, config_height,
-                                 config_format, config_usage);
             native_lock();
             slot = find_renderer_locked(self);
             if (slot && slot->generation == generation &&
                 slot->stream == stream)
-                fallback_count = ++slot->linearizer_raw_fallbacks;
+                drop_count = ++slot->linearizer_aux_drops;
             native_unlock();
-            if (fallback_count == 1u || (fallback_count % 60u) == 0u) {
-                altscreen_log("WARN PHASE=FRAME_LINEARIZER_RAW_FALLBACK stream=%p renderer=%p window=%p format=%u usage=0x%x stock_render_rc=%d count=%u rate_limited=1",
+            if (drop_count == 1u || (drop_count % 60u) == 0u) {
+                altscreen_log("WARN PHASE=FRAME_LINEARIZER_AUX_DROP stream=%p renderer=%p window=%p format=%u usage=0x%x stock_render_rc=%d count=%u raw_vendor_publish=0 rate_limited=1",
                               stream, self, stock_window,
                               config_format, config_usage, rc,
-                              fallback_count);
+                              drop_count);
             }
         }
     }
