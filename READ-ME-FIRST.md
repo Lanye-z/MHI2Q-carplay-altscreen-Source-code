@@ -2,17 +2,22 @@
 
 Branch: `carplay-private111-direct-display-v2`
 
-## Vehicle use is approved — V2 QNX sidecar rebuilt and promoted
+## Final hardening applied — rebuild the QNX sidecar before vehicle use
 
-The V2 QNX 6.5 ARMv7 sidecar has been rebuilt from the V2 source and promoted
-into the release directory. The release ELF now carries the V2 SHM size guards,
-session identity and same-session recovery logic.
+The previous V2 QNX sidecar was successfully rebuilt and promoted, but a final
+static audit found additional lifecycle hardening that changes sidecar source:
+same-session abnormal recovery now requires **fresh decoded-frame progress**
+instead of trusting stale active flags, and decoded-frame metadata must match the
+packed-tight NV12 ABI before rendering.
+
+Therefore the currently checked-in release ELF is intentionally marked stale
+until one more real QNX 6.5 ARMv7 rebuild is promoted.
 
 Current expected metadata:
 
 ```text
-release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2
-vehicle_zip_status=READY_FOR_VEHICLE_TEST
+release_binary_status=V2_BINARY_STALE_HARDENING_REBUILD_REQUIRED
+vehicle_zip_status=NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED
 ```
 
 ## What is fixed in V2 source
