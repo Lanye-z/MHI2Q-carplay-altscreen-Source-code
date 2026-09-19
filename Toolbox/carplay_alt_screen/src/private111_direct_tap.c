@@ -424,7 +424,12 @@ static void reset_frame_for_generation_locked(void) {
     g_frame->drop_count = 0;
     g_frame->last_copy_bytes = 0;
     g_frame_reserve_seq = 0;
-    memset(g_frame_slot_owner, 0, sizeof(g_frame_slot_owner));
+    /*
+     * Do not clear g_frame_slot_owner here. A callback from the previous
+     * generation may still be outside the lock copying its slot. Keeping that
+     * reservation until the old callback returns prevents cross-generation
+     * writers from touching the same bytes concurrently.
+     */
     __sync_synchronize();
     g_frame->active = 1;
 }
