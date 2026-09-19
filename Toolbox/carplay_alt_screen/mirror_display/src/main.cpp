@@ -10,7 +10,7 @@
 
 static volatile sig_atomic_t g_stop = 0;
 static const unsigned kTargetFps = 30;
-static const char kBuildId[] = "carplay-private111-direct-display-v1";
+static const char kBuildId[] = "carplay-private111-direct-display-v2";
 
 static const char *volatile_path(const char *key, const char *fallback) {
     const char *v = getenv(key);
@@ -42,6 +42,14 @@ static unsigned long long now_us() {
     if (gettimeofday(&tv, 0) != 0) return 0;
     return (unsigned long long)(unsigned long)tv.tv_sec * 1000000ULL +
            (unsigned long long)(unsigned long)tv.tv_usec;
+}
+
+static bool env_truth(const char *name) {
+    const char *v = getenv(name);
+    if (!v || !*v) return false;
+    return strcmp(v, "0") != 0 &&
+           strcmp(v, "NO") != 0 && strcmp(v, "no") != 0 &&
+           strcmp(v, "false") != 0 && strcmp(v, "FALSE") != 0;
 }
 
 static void on_signal(int) {
@@ -302,21 +310,57 @@ int main(int argc, char **argv) {
     fprintf(stderr,
             "direct111: PHASE=BUILD id=%s "
             "target_pipeline=private111->H264_TAP->decoder->displayable3->Context80 "
-            "v1_decoder_backend=stock-omx-tap compatibility_parallel_to_h264_tap=1 "
+            "decoder_backend=stock-omx-tap compatibility_parallel_to_h264_tap=1 "
+            "shm_attach=fstat_size_guard session_identity=writer_pid+generation+cookie "
             "window58_readback=0 screen_manage_window_sidecar=0\n",
             kBuildId);
 
     if (sink_test_grid)
         return run_sink_grid(verbose);
 
-    if (!wait_for_phone111_gate())
-        return 0;
-
     Private111DirectSource source(verbose);
-    if (!source.init()) {
-        fprintf(stderr,
-                "direct111: ERROR PHASE=SOURCE_INIT result=FAILED\n");
-        return 2;
+    bool source_initialized = false;
+    bool recovered_current_session = false;
+
+    if (env_truth("ALT111_RECOVER_CURRENT_SESSION")) {
+        if (source.init()) {
+            source_initialized = true;
+            for (unsigned retry = 0; retry < 30u && !g_stop; ++retry) {
+                if (source.current_session_active()) {
+                    recovered_current_session = true;
+                    fprintf(stderr,
+                            "direct111: PHASE=GATE_RECOVER_CURRENT_SESSION "
+                            "validated=1 retries=%u policy=active_matching_h264_and_decoded_shm "
+                            "consumed_phone_gate_bypass=1\n",
+                            retry);
+                    break;
+                }
+                usleep(50000);
+            }
+        }
+        if (!recovered_current_session) {
+            fprintf(stderr,
+                    "direct111: PHASE=GATE_RECOVER_CURRENT_SESSION "
+                    "validated=0 action=FALLBACK_TO_PHONE_REQUEST_GATE\n");
+            if (source_initialized) {
+                source.shutdown();
+                source_initialized = false;
+            }
+        }
+    }
+
+    if (!recovered_current_session) {
+        if (!wait_for_phone111_gate())
+            return 0;
+    }
+
+    if (!source_initialized) {
+        if (!source.init()) {
+            fprintf(stderr,
+                    "direct111: ERROR PHASE=SOURCE_INIT result=FAILED\n");
+            return 2;
+        }
+        source_initialized = true;
     }
 
     VideoFrame frame;
@@ -402,9 +446,9 @@ int main(int argc, char **argv) {
     fprintf(stderr,
             "direct111: PHASE=DIRECT111_ACTIVE "
             "target_pipeline=private111->H264_TAP->decoder->displayable3->Context80 "
-            "v1_decoder_backend=stock-omx-tap h264_tap_independent=1 "
-            "window58_readback=0 target_fps=%u\n",
-            kTargetFps);
+            "decoder_backend=stock-omx-tap h264_tap_independent=1 "
+            "same_session_recovery=%d window58_readback=0 target_fps=%u\n",
+            recovered_current_session ? 1 : 0, kTargetFps);
 
     unsigned failures = 0;
     bool in_stall = false;
