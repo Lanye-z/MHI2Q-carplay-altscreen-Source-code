@@ -20,6 +20,8 @@ public:
     bool h264_ready() const { return h264_ready_; }
     bool decoded_ready() const { return decoded_ready_; }
     uint32_t generation() const { return generation_; }
+    uint32_t writer_pid() const { return writer_pid_; }
+    uint32_t stream_cookie() const { return stream_cookie_; }
     uint32_t h264_packets() const { return last_h264_packets_; }
     uint32_t h264_bytes() const { return last_h264_bytes_; }
     uint32_t decoded_frames() const { return last_frame_count_; }
