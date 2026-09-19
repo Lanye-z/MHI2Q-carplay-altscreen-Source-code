@@ -1270,8 +1270,7 @@ static screen_stream_set_property_fn real_stream_set_property;
 static screen_stream_set_property_fn stock_stream_set_property_target(void) {
     void *target = (void *)real_stream_set_property;
     if (target) return real_stream_set_property;
-    target = p1404_stock_symbol_named ?
-        p1404_stock_symbol_named("_ScreenStreamSetProperty") : NULL;
+    target = p1404_stock_symbol_named("_ScreenStreamSetProperty");
     if (target == (void *)&_ScreenStreamSetProperty) target = NULL;
     if (target) real_stream_set_property = (screen_stream_set_property_fn)target;
     return real_stream_set_property;
