@@ -951,6 +951,18 @@ static int linearizer_create_pixmap_locked(uint32_t width, uint32_t height,
     if (g_linearizer.get_buffer_iv(buffer,
             P111_SCREEN_PROPERTY_PLANAR_OFFSETS, offsets) != 0) {
         offsets[0] = offsets[1] = offsets[2] = 0;
+        if (backend == P111_LINEARIZER_NV12) {
+            altscreen_log("WARN PHASE=FRAME_LINEARIZER_PIXMAP backend=screen-nv12 planar_offsets=UNAVAILABLE action=RGBA_FALLBACK");
+            linearizer_release_pixmap_locked();
+            return 0;
+        }
+    }
+
+    if (backend == P111_LINEARIZER_NV12 && offsets[1] <= offsets[0]) {
+        altscreen_log("WARN PHASE=FRAME_LINEARIZER_PIXMAP backend=screen-nv12 planar_offsets=%d,%d,%d result=INVALID action=RGBA_FALLBACK",
+                      offsets[0], offsets[1], offsets[2]);
+        linearizer_release_pixmap_locked();
+        return 0;
     }
 
     if ((backend == P111_LINEARIZER_NV12 && stride < (int)width) ||
@@ -1045,14 +1057,7 @@ static int linearizer_copy_nv12_to_scratch_locked(uint32_t width,
     if (!g_linearizer.pixels || g_linearizer.stride < (int)width)
         return 0;
     uv_offset = g_linearizer.offsets[1];
-    if (uv_offset <= g_linearizer.offsets[0]) {
-        /*
-         * Some Screen implementations leave PLANAR_OFFSETS at zero for a
-         * standard NV12 pixmap. In that case only accept the conventional
-         * linear offset implied by its own stride and visible height.
-         */
-        uv_offset = g_linearizer.stride * (int)height;
-    }
+    if (uv_offset <= g_linearizer.offsets[0]) return 0;
 
     src_y = g_linearizer.pixels + g_linearizer.offsets[0];
     src_uv = g_linearizer.pixels + uv_offset;
