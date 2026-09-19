@@ -36,6 +36,8 @@ for marker in \
   'PHASE=DECODED_SHM_WAIT_SIZE' \
   'PHASE=SOURCE_SESSION' \
   'PHASE=GATE_RECOVER_CURRENT_SESSION' \
+  'matching_identity_plus_frame_progress' \
+  'packed_tight_required=1' \
   'PHASE=H264_STREAM_VALID' \
   'PHASE=DECODER_FIRST_FRAME' \
   'PHASE=NV12_CSC_READY' \
