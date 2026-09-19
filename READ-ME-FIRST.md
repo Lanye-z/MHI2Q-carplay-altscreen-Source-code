@@ -75,10 +75,12 @@ CTX80_OBSERVED actual=80
 PHASE=DIRECT111_ACTIVE
 ```
 
-If `PHASE=FRAME_LINEARIZER_RAW_FALLBACK` appears, Screen linearization failed
-on that frame and V2 intentionally preserved the V1 raw-pointer path so the
-CarPlay session remains fail-open. A moving garbled picture together with this
-marker is therefore useful evidence rather than a route regression.
+If `PHASE=FRAME_LINEARIZER_RAW_FALLBACK` appears before the first successful
+linearized frame, Screen linearization was unavailable and V2 preserved the V1
+raw-pointer path as diagnostic fail-open evidence. After
+`PHASE=FRAME_LINEARIZER_FIRST_FRAME`, later transient read failures use
+`FREEZE_LAST_GOOD` semantics instead of feeding tiled raw pixels again.
+Uniform/black frames are accepted as valid screenshots.
 
 ## Vehicle-test procedure
 
