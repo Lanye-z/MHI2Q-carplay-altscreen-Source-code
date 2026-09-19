@@ -219,16 +219,43 @@ if [ "$SINK_TEST_GRID_MODE" = "0" ]; then
   (
     BASELINE="$(count_tap_stops)"
 
-    # Before first physical destination present, absorb old stop records but
-    # also supervise the sidecar itself. A crash here used to make the watcher
-    # exit silently, leaving the already-consumed PHONE_REQUEST gate unusable.
+    # Before first physical destination present, ignore only stop records that
+    # already existed when this watcher started. Any NEW DIRECT111_TAP_STOP is a
+    # real teardown for the current attempt and must not be absorbed into the
+    # baseline; otherwise the sidecar can wait forever on an ended session.
     while [ ! -f "$STOP_GUARD" ] && [ ! -f "$BASE_READY" ]; do
       if ! sidecar_is_current; then
         rm -f "$WATCH_PIDFILE"
         schedule_abnormal_restart "before_first_present" || true
         exit 0
       fi
-      BASELINE="$(count_tap_stops)"
+
+      CURRENT_STOPS="$(count_tap_stops)"
+      if [ "$CURRENT_STOPS" -lt "$BASELINE" ]; then
+        BASELINE="$CURRENT_STOPS"
+      elif [ "$CURRENT_STOPS" -gt "$BASELINE" ]; then
+        echo "LIFECYCLE_WATCH=PRIVATE111_STOP detected=1 phase=before_first_present sidecar_pid=$PID stop_count=$CURRENT_STOPS action=TERM_AND_RESTART_IF_DEMAND"
+        kill -TERM "$PID" 2>/dev/null || true
+        WAIT_N=0
+        while kill -0 "$PID" 2>/dev/null && [ "$WAIT_N" -lt 10 ]; do
+          sleep 1
+          WAIT_N=$((WAIT_N + 1))
+        done
+        if kill -0 "$PID" 2>/dev/null; then
+          echo "LIFECYCLE_WATCH=SIDECAR_TERM_TIMEOUT phase=before_first_present action=KILL pid=$PID"
+          kill -KILL "$PID" 2>/dev/null || true
+        fi
+        rm -f "$PIDFILE" "$READY" "$BASE_READY" "$WATCH_PIDFILE"
+
+        if [ -f "$DEMAND" ] && [ ! -f "$STOP_GUARD" ]; then
+          echo "LIFECYCLE_WATCH=RESTART_NEXT_SESSION phase=before_first_present demand=$DEMAND gate_policy=next_PHONE_REQUEST_111"
+          ALT111_MIRROR_RESTART_REASON=private111_session_end \
+          ALT111_MIRROR_RESTART_COUNT=0 \
+          ALT111_RECOVER_CURRENT_SESSION=0 \
+            /bin/sh "$ROOT/start_vehicle.sh" >>"$AUTORESTART_LOG" 2>&1 &
+        fi
+        exit 0
+      fi
       sleep 1
     done
 
