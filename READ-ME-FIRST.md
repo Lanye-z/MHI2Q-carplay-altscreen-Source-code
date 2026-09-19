@@ -14,7 +14,7 @@ iPhone CarPlay private type111
   -> stock AirPlay control / framing
   -> ScreenStreamProcessData
   -> /carplay111_h264
-  -> stock Qualcomm/i.MX6 OMX decoder
+  -> stock Qualcomm/target MHI2Q platform OMX decoder
   -> vendor Screen format 0x0001000c
   -> stock CScreenRender post
   -> exact stock screen_window_t
@@ -51,7 +51,7 @@ but copied rows directly from the vendor pointer as if it were ordinary linear
 NV12. The moving garble proved that the pointer contains live decoded data but
 not in the assumed row-linear memory layout.
 
-V2 no longer implements a guessed i.MX6 detile formula. QNX Screen performs the
+V2 no longer implements a guessed target MHI2Q platform detile formula. QNX Screen performs the
 vendor-layout conversion by screenshotting the exact stock window into a normal
 off-screen pixmap.
 
