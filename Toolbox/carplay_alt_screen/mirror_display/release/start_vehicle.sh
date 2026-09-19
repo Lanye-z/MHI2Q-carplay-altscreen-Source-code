@@ -155,7 +155,9 @@ fi
 } >> "$LOGFILE"
 
 count_tap_stops() {
-  N="$(grep -c 'PHASE=DIRECT111_TAP_STOP' "$HOOK_LOG" 2>/dev/null || true)"
+  # Match only the authoritative current-session teardown. Do not count
+  # PHASE=DIRECT111_TAP_STOP_STALE from a late old stream.
+  N="$(grep -c 'PHASE=DIRECT111_TAP_STOP stream=' "$HOOK_LOG" 2>/dev/null || true)"
   case "$N" in
     ''|*[!0-9]*) N=0 ;;
   esac
