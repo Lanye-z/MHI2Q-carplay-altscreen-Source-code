@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 extern void altscreen_log(const char *fmt, ...);
@@ -199,6 +200,7 @@ void p111_h264_tap_note_avcc(void *stream, const void *data, size_t bytes) {
 static p111_h264_shm_t *map_h264(void) {
     int fd, err;
     void *p;
+    uint32_t old_writer = 0u, old_generation = 0u, old_active = 0u;
     const size_t bytes = sizeof(p111_h264_shm_t);
 
     if (g_h264) return g_h264;
@@ -215,6 +217,11 @@ static p111_h264_shm_t *map_h264(void) {
         return NULL;
     }
 
+    /*
+     * Producer objects are never intentionally shrunk. ftruncate() is used only
+     * to establish/retain the full ABI size before any reader can safely touch
+     * the header. Readers independently fstat() before mmap.
+     */
     errno = 0;
     if (ftruncate(fd, (off_t)bytes) != 0) {
         err = errno;
@@ -230,26 +237,40 @@ static p111_h264_shm_t *map_h264(void) {
     err = errno;
     close(fd);
     if (p == MAP_FAILED || !p) {
-        altscreen_log("ERROR PHASE=H264_TAP_SHM_MAP name=%s attempt=%u fd=%d bytes=%u prot=0x%x flags=0x%x result=%p errno=%d",
-                      P111_H264_SHM_NAME, g_h264_map_attempts, fd,
+        altscreen_log("ERROR PHASE=H264_TAP_SHM_MAP name=%s attempt=%u bytes=%u prot=0x%x flags=0x%x result=%p errno=%d",
+                      P111_H264_SHM_NAME, g_h264_map_attempts,
                       (unsigned)bytes, (unsigned)(PROT_READ | PROT_WRITE),
                       (unsigned)MAP_SHARED, p, err);
         return NULL;
     }
 
     g_h264 = (p111_h264_shm_t *)p;
-    if (g_h264->magic != P111_H264_SHM_MAGIC ||
-        g_h264->version != P111_H264_SHM_VERSION) {
+    if (g_h264->magic == P111_H264_SHM_MAGIC &&
+        g_h264->version == P111_H264_SHM_VERSION) {
+        old_writer = g_h264->writer_pid;
+        old_generation = g_h264->generation;
+        old_active = g_h264->active;
+    } else {
         memset(g_h264, 0, sizeof(*g_h264));
         g_h264->magic = P111_H264_SHM_MAGIC;
         g_h264->version = P111_H264_SHM_VERSION;
+        __sync_synchronize();
     }
-    g_h264->writer_pid = (uint32_t)getpid();
-    altscreen_log("PHASE=H264_TAP_SHM_READY name=%s bytes=%u ring=%u prot=0x%x flags=0x%x writer_pid=%u attempt=%u",
+
+    /*
+     * writer_pid doubles as the existing-ABI ready marker. Do not publish the
+     * new owner here: begin_stream_locked() first resets the complete session
+     * header, then publishes writer_pid last.
+     */
+    if (old_writer && old_writer != (uint32_t)getpid()) {
+        altscreen_log("PHASE=H264_TAP_SHM_TAKEOVER old_writer_pid=%u old_generation=%u old_active=%u new_writer_pid=%u action=RESET_ON_NEXT_SESSION",
+                      old_writer, old_generation, old_active,
+                      (unsigned)getpid());
+    }
+    altscreen_log("PHASE=H264_TAP_SHM_MAPPED name=%s bytes=%u ring=%u map=%p old_writer_pid=%u old_generation=%u old_active=%u attempt=%u",
                   P111_H264_SHM_NAME, (unsigned)sizeof(*g_h264),
-                  (unsigned)P111_H264_RING_SIZE,
-                  (unsigned)(PROT_READ | PROT_WRITE), (unsigned)MAP_SHARED,
-                  (unsigned)g_h264->writer_pid, g_h264_map_attempts);
+                  (unsigned)P111_H264_RING_SIZE, (void *)g_h264,
+                  old_writer, old_generation, old_active, g_h264_map_attempts);
     if (g_h264_map_attempts > 1u)
         altscreen_log("PHASE=H264_TAP_SHM_RECOVERED attempt=%u previous_failures=%u",
                       g_h264_map_attempts, g_h264_map_attempts - 1u);
@@ -259,6 +280,7 @@ static p111_h264_shm_t *map_h264(void) {
 static p111_frame_shm_t *map_frame(void) {
     int fd, err;
     void *p;
+    uint32_t old_writer = 0u, old_generation = 0u, old_active = 0u;
     const size_t bytes = sizeof(p111_frame_shm_t);
 
     if (g_frame) return g_frame;
@@ -290,26 +312,36 @@ static p111_frame_shm_t *map_frame(void) {
     err = errno;
     close(fd);
     if (p == MAP_FAILED || !p) {
-        altscreen_log("ERROR PHASE=FRAME_TAP_SHM_MAP name=%s attempt=%u fd=%d bytes=%u prot=0x%x flags=0x%x result=%p errno=%d",
-                      P111_FRAME_SHM_NAME, g_frame_map_attempts, fd,
+        altscreen_log("ERROR PHASE=FRAME_TAP_SHM_MAP name=%s attempt=%u bytes=%u prot=0x%x flags=0x%x result=%p errno=%d",
+                      P111_FRAME_SHM_NAME, g_frame_map_attempts,
                       (unsigned)bytes, (unsigned)(PROT_READ | PROT_WRITE),
                       (unsigned)MAP_SHARED, p, err);
         return NULL;
     }
 
     g_frame = (p111_frame_shm_t *)p;
-    if (g_frame->magic != P111_FRAME_SHM_MAGIC ||
-        g_frame->version != P111_FRAME_SHM_VERSION) {
+    if (g_frame->magic == P111_FRAME_SHM_MAGIC &&
+        g_frame->version == P111_FRAME_SHM_VERSION) {
+        old_writer = g_frame->writer_pid;
+        old_generation = g_frame->generation;
+        old_active = g_frame->active;
+    } else {
         memset(g_frame, 0, sizeof(*g_frame));
         g_frame->magic = P111_FRAME_SHM_MAGIC;
         g_frame->version = P111_FRAME_SHM_VERSION;
+        __sync_synchronize();
     }
-    g_frame->writer_pid = (uint32_t)getpid();
-    altscreen_log("PHASE=FRAME_TAP_SHM_READY name=%s bytes=%u slots=%u slot_bytes=%u prot=0x%x flags=0x%x writer_pid=%u attempt=%u",
+
+    if (old_writer && old_writer != (uint32_t)getpid()) {
+        altscreen_log("PHASE=FRAME_TAP_SHM_TAKEOVER old_writer_pid=%u old_generation=%u old_active=%u new_writer_pid=%u action=RESET_ON_NEXT_SESSION",
+                      old_writer, old_generation, old_active,
+                      (unsigned)getpid());
+    }
+    altscreen_log("PHASE=FRAME_TAP_SHM_MAPPED name=%s bytes=%u slots=%u slot_bytes=%u map=%p old_writer_pid=%u old_generation=%u old_active=%u attempt=%u",
                   P111_FRAME_SHM_NAME, (unsigned)sizeof(*g_frame),
                   (unsigned)P111_FRAME_SLOTS, (unsigned)P111_FRAME_SLOT_BYTES,
-                  (unsigned)(PROT_READ | PROT_WRITE), (unsigned)MAP_SHARED,
-                  (unsigned)g_frame->writer_pid, g_frame_map_attempts);
+                  (void *)g_frame, old_writer, old_generation, old_active,
+                  g_frame_map_attempts);
     if (g_frame_map_attempts > 1u)
         altscreen_log("PHASE=FRAME_TAP_SHM_RECOVERED attempt=%u previous_failures=%u",
                       g_frame_map_attempts, g_frame_map_attempts - 1u);
@@ -391,9 +423,24 @@ static void emit_cached_avcc_locked(void *stream) {
                   byte_or_zero(c->data,c->bytes,14), byte_or_zero(c->data,c->bytes,15));
 }
 
-static void reset_h264_for_generation_locked(void) {
-    if (!g_h264 || g_h264->generation == g_generation) return;
-    g_h264->active = 0;
+static void reset_h264_for_generation_locked(int force) {
+    uint32_t old_writer, old_generation, old_active;
+    if (!g_h264) return;
+    if (!force &&
+        g_h264->generation == g_generation &&
+        g_h264->writer_pid == (uint32_t)getpid() &&
+        g_h264->active)
+        return;
+
+    old_writer = g_h264->writer_pid;
+    old_generation = g_h264->generation;
+    old_active = g_h264->active;
+
+    /* Existing ABI ready protocol: writer_pid==0 means header transition. */
+    g_h264->writer_pid = 0u;
+    g_h264->active = 0u;
+    __sync_synchronize();
+
     g_h264->generation = g_generation;
     g_h264->stream_cookie = stream_cookie(g_stream);
     g_h264->write_pos = 0;
@@ -408,12 +455,38 @@ static void reset_h264_for_generation_locked(void) {
     g_h264->idr_count = 0;
     g_h264->annexb_count = 0;
     __sync_synchronize();
-    g_h264->active = 1;
+
+    g_h264->active = 1u;
+    __sync_synchronize();
+    g_h264->writer_pid = (uint32_t)getpid();
+    __sync_synchronize();
+
+    altscreen_log("PHASE=H264_TAP_SESSION_RESET old_writer_pid=%u old_generation=%u old_active=%u new_writer_pid=%u generation=%u cookie=0x%08x force=%d ready_published_last=1",
+                  old_writer, old_generation, old_active,
+                  (unsigned)g_h264->writer_pid, g_generation,
+                  g_h264->stream_cookie, force);
+    altscreen_log("PHASE=H264_TAP_SHM_READY name=%s writer_pid=%u generation=%u active=%u",
+                  P111_H264_SHM_NAME, (unsigned)g_h264->writer_pid,
+                  (unsigned)g_h264->generation, (unsigned)g_h264->active);
 }
 
-static void reset_frame_for_generation_locked(void) {
-    if (!g_frame || g_frame->generation == g_generation) return;
-    g_frame->active = 0;
+static void reset_frame_for_generation_locked(int force) {
+    uint32_t old_writer, old_generation, old_active;
+    if (!g_frame) return;
+    if (!force &&
+        g_frame->generation == g_generation &&
+        g_frame->writer_pid == (uint32_t)getpid() &&
+        g_frame->active)
+        return;
+
+    old_writer = g_frame->writer_pid;
+    old_generation = g_frame->generation;
+    old_active = g_frame->active;
+
+    g_frame->writer_pid = 0u;
+    g_frame->active = 0u;
+    __sync_synchronize();
+
     g_frame->generation = g_generation;
     g_frame->stream_cookie = stream_cookie(g_stream);
     g_frame->width = 0;
@@ -429,16 +502,26 @@ static void reset_frame_for_generation_locked(void) {
     g_frame_reserve_seq = 0;
     /*
      * Do not clear g_frame_slot_owner here. A callback from the previous
-     * generation may still be outside the lock copying its slot. Keeping that
-     * reservation until the old callback returns prevents cross-generation
-     * writers from touching the same bytes concurrently.
+     * process-local generation may still be outside the lock copying its slot.
      */
     __sync_synchronize();
-    g_frame->active = 1;
+
+    g_frame->active = 1u;
+    __sync_synchronize();
+    g_frame->writer_pid = (uint32_t)getpid();
+    __sync_synchronize();
+
+    altscreen_log("PHASE=FRAME_TAP_SESSION_RESET old_writer_pid=%u old_generation=%u old_active=%u new_writer_pid=%u generation=%u cookie=0x%08x force=%d ready_published_last=1",
+                  old_writer, old_generation, old_active,
+                  (unsigned)g_frame->writer_pid, g_generation,
+                  g_frame->stream_cookie, force);
+    altscreen_log("PHASE=FRAME_TAP_SHM_READY name=%s writer_pid=%u generation=%u active=%u",
+                  P111_FRAME_SHM_NAME, (unsigned)g_frame->writer_pid,
+                  (unsigned)g_frame->generation, (unsigned)g_frame->active);
 }
 
 static void begin_stream_locked(void *stream) {
-    int new_generation = 0;
+    int new_session = 0;
 
     if (g_stream != stream || !g_generation) {
         g_stream = stream;
@@ -454,23 +537,29 @@ static void begin_stream_locked(void *stream) {
         g_frame_map_attempts = 0;
         g_attach_logged_generation = 0;
         g_frame_reserve_seq = 0;
-        new_generation = 1;
+        new_session = 1;
     }
 
     if (!g_h264) (void)map_h264();
     if (env_truth("ALT111_DIRECT_FRAME_TAP", 1) && !g_frame)
         (void)map_frame();
 
-    reset_h264_for_generation_locked();
-    reset_frame_for_generation_locked();
+    /*
+     * A new stream is a new publication session even if a restarted producer
+     * happens to reuse numeric generation=1 from a persistent named SHM.
+     * Force the existing ABI headers active again and reset all counters.
+     */
+    reset_h264_for_generation_locked(new_session);
+    reset_frame_for_generation_locked(new_session);
     emit_cached_avcc_locked(stream);
 
-    if (new_generation || g_attach_logged_generation != g_generation) {
+    if (new_session || g_attach_logged_generation != g_generation) {
         g_attach_logged_generation = g_generation;
-        altscreen_log("PHASE=DIRECT111_TAP_ATTACH stream=%p generation=%u cookie=0x%08x h264=%d decoded_fallback=%d stock_forward=1 mmap_prot=0x%x",
+        altscreen_log("PHASE=DIRECT111_TAP_ATTACH stream=%p generation=%u cookie=0x%08x h264=%d decoded_fallback=%d stock_forward=1 mmap_prot=0x%x session_reset=%d writer_pid=%u",
                       stream, g_generation, stream_cookie(stream),
                       g_h264 != NULL, g_frame != NULL,
-                      (unsigned)(PROT_READ | PROT_WRITE));
+                      (unsigned)(PROT_READ | PROT_WRITE), new_session,
+                      (unsigned)getpid());
     }
 }
 
