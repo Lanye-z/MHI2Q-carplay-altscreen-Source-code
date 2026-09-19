@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -77,6 +78,13 @@ static int env_truth(const char *name, int default_value) {
         !strcmp(v, "false") || !strcmp(v, "FALSE"))
         return 0;
     return 1;
+}
+
+static uint64_t tap_now_us(void) {
+    struct timeval tv;
+    if (gettimeofday(&tv, NULL) != 0) return 0u;
+    return (uint64_t)(uint32_t)tv.tv_sec * 1000000ull +
+           (uint64_t)(uint32_t)tv.tv_usec;
 }
 
 static uint8_t byte_or_zero(const uint8_t *d, size_t n, size_t i) {
@@ -846,9 +854,15 @@ struct p111_linearizer_state {
     int stride;
     int offsets[3];
     uint32_t requests;
-    uint32_t frames;
+    uint32_t readback_success;
+    uint32_t publish_success;
+    uint32_t publish_drop;
     uint32_t failures;
     uint32_t fallback_count;
+    uint64_t readback_total_us;
+    uint64_t readback_max_us;
+    uint32_t readback_hist_ms[65];
+    uint32_t sample_count;
 
     p111_screen_create_context_fn create_context;
     p111_screen_destroy_context_fn destroy_context;
@@ -911,9 +925,16 @@ static void linearizer_shutdown_locked(void) {
     g_linearizer.get_window_iv = NULL;
     g_linearizer.read_window = NULL;
     g_linearizer.requests = 0;
-    g_linearizer.frames = 0;
+    g_linearizer.readback_success = 0;
+    g_linearizer.publish_success = 0;
+    g_linearizer.publish_drop = 0;
     g_linearizer.failures = 0;
     g_linearizer.fallback_count = 0;
+    g_linearizer.readback_total_us = 0;
+    g_linearizer.readback_max_us = 0;
+    memset(g_linearizer.readback_hist_ms, 0,
+           sizeof(g_linearizer.readback_hist_ms));
+    g_linearizer.sample_count = 0;
 }
 
 static int linearizer_open_api_locked(void) {
@@ -1258,6 +1279,63 @@ static int linearizer_picture_has_detail_locked(uint32_t width,
     return samples >= 16u && maxv > minv + 6u;
 }
 
+static void linearizer_record_readback_us_locked(uint64_t us) {
+    unsigned bucket = (unsigned)(us / 1000u);
+    if (bucket > 64u) bucket = 64u;
+    ++g_linearizer.readback_hist_ms[bucket];
+    g_linearizer.readback_total_us += us;
+    if (us > g_linearizer.readback_max_us)
+        g_linearizer.readback_max_us = us;
+}
+
+static unsigned linearizer_percentile_ms_locked(unsigned percent) {
+    uint64_t total = 0u, target, seen = 0u;
+    unsigned i;
+    for (i = 0; i < 65u; ++i) total += g_linearizer.readback_hist_ms[i];
+    if (!total) return 0u;
+    target = (total * percent + 99u) / 100u;
+    if (!target) target = 1u;
+    for (i = 0; i < 65u; ++i) {
+        seen += g_linearizer.readback_hist_ms[i];
+        if (seen >= target) return i;
+    }
+    return 64u;
+}
+
+static void linearizer_dump_sample_locked(uint32_t width, uint32_t height) {
+    FILE *fp;
+    char path[160];
+    uint32_t stride, padded_y, uv_rows, y;
+    if (!env_truth("ALT111_LINEARIZER_SAMPLE_NV12", 0) ||
+        g_linearizer.sample_count >= 3u || !g_linearizer.scratch)
+        return;
+
+    stride = align_up_u32(width, 128u);
+    padded_y = align_up_u32(height, 32u);
+    uv_rows = (height + 1u) >> 1;
+    snprintf(path, sizeof(path),
+             "/tmp/carplay111_linear_%u_%ux%u.nv12",
+             g_linearizer.sample_count + 1u, width, height);
+    fp = fopen(path, "wb");
+    if (!fp) {
+        altscreen_log("WARN PHASE=FRAME_LINEARIZER_SAMPLE path=%s result=OPEN_FAILED errno=%d",
+                      path, errno);
+        return;
+    }
+    for (y = 0; y < height; ++y)
+        (void)fwrite(g_linearizer.scratch + (size_t)y * stride, 1u, width, fp);
+    for (y = 0; y < uv_rows; ++y)
+        (void)fwrite(g_linearizer.scratch +
+                         (size_t)stride * padded_y + (size_t)y * stride,
+                     1u, width, fp);
+    if (fclose(fp) == 0) {
+        ++g_linearizer.sample_count;
+        altscreen_log("PHASE=FRAME_LINEARIZER_SAMPLE path=%s result=WRITTEN bytes=%u sample=%u opt_in=1",
+                      path, width * height + width * uv_rows,
+                      g_linearizer.sample_count);
+    }
+}
+
 int p111_frame_tap_write_window(void *stream, void *screen_window,
                                 uint32_t width, uint32_t height,
                                 uint32_t source_format,
@@ -1265,7 +1343,9 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
     int rc;
     int packed = 0;
     int backend;
+    int published;
     uint32_t requests;
+    uint64_t t0, t1, elapsed;
 
     if (!stream || !screen_window || !width || !height) return 0;
     if (!env_truth("ALT111_DIRECT_FRAME_TAP", 1)) return 1;
@@ -1275,7 +1355,7 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
 
     /*
      * Stock private111 is normally ~60 fps while the VC sink targets ~30 fps.
-     * Do the blocking Screen readback only on every other render callback.
+     * Do the synchronous Screen readback only on every other render callback.
      */
     if ((requests & 1u) == 0u) {
         linearizer_unlock();
@@ -1290,6 +1370,7 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
         return 0;
     }
 
+    t0 = tap_now_us();
     errno = 0;
     rc = g_linearizer.read_window((p111_screen_window_t)screen_window,
                                   g_linearizer.buffer, 0, NULL, 0);
@@ -1305,22 +1386,27 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
                                           g_linearizer.buffer, 0, NULL, 0);
         }
     }
+    t1 = tap_now_us();
+    elapsed = (t0 && t1 >= t0) ? (t1 - t0) : 0u;
+    linearizer_record_readback_us_locked(elapsed);
 
     if (rc != 0) {
-        int had_good = g_linearizer.frames != 0u;
+        int had_good = g_linearizer.publish_success != 0u;
         ++g_linearizer.failures;
         if (g_linearizer.failures == 1u ||
             (g_linearizer.failures % 60u) == 0u) {
-            altscreen_log("ERROR PHASE=FRAME_LINEARIZER_READ backend=%s rc=%d errno=%d failures=%u action=%s",
+            altscreen_log("ERROR PHASE=FRAME_LINEARIZER_READ backend=%s rc=%d errno=%d failures=%u readback_us=%u action=%s",
                           g_linearizer.backend == P111_LINEARIZER_NV12 ?
                               "screen-nv12" : "screen-rgba",
                           rc, errno, g_linearizer.failures,
-                          had_good ? "FREEZE_LAST_GOOD" : "V1_RAW_FAIL_OPEN");
+                          (unsigned)elapsed,
+                          had_good ? "FREEZE_LAST_GOOD" : "DROP_AUX_FRAME");
         }
         linearizer_unlock();
         return had_good ? 1 : 0;
     }
 
+    ++g_linearizer.readback_success;
     backend = g_linearizer.backend;
     if (backend == P111_LINEARIZER_NV12)
         packed = linearizer_copy_nv12_to_scratch_locked(width, height);
@@ -1328,7 +1414,7 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
         packed = linearizer_rgba_to_nv12_locked(width, height);
 
     if (!packed) {
-        int had_good = g_linearizer.frames != 0u;
+        int had_good = g_linearizer.publish_success != 0u;
         ++g_linearizer.failures;
         if (g_linearizer.failures == 1u ||
             (g_linearizer.failures % 60u) == 0u) {
@@ -1336,54 +1422,69 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
                           backend == P111_LINEARIZER_NV12 ?
                               "screen-nv12" : "screen-rgba",
                           g_linearizer.failures,
-                          had_good ? "FREEZE_LAST_GOOD" : "V1_RAW_FAIL_OPEN");
+                          had_good ? "FREEZE_LAST_GOOD" : "DROP_AUX_FRAME");
         }
         linearizer_unlock();
         return had_good ? 1 : 0;
     }
 
-    /*
-     * A uniform/black frame is legitimate during startup, route changes and
-     * map transitions.  Pixel-detail probing is diagnostic only; never reject
-     * a successful Screen screenshot solely because luma variance is low.
-     */
     if (!linearizer_picture_has_detail_locked(width, height) &&
-        (g_linearizer.frames == 0u ||
-         ((g_linearizer.frames + 1u) % 300u) == 0u)) {
+        (g_linearizer.readback_success == 1u ||
+         (g_linearizer.readback_success % 300u) == 0u)) {
         altscreen_log("PHASE=FRAME_LINEARIZER_PIXEL backend=%s detail=LOW accepted=1 reason=valid_uniform_frame",
                       backend == P111_LINEARIZER_NV12 ?
                           "screen-nv12" : "screen-rgba");
     }
 
-    ++g_linearizer.frames;
-    if (g_linearizer.frames == 1u) {
-        altscreen_log("PHASE=FRAME_LINEARIZER_FIRST_FRAME backend=%s source_format=%u source_usage=0x%x size=%ux%u output=packed-nv12-v1-shm window58_readback=exact-stock-handle",
+    linearizer_dump_sample_locked(width, height);
+
+    published = p111_frame_tap_write(stream, g_linearizer.scratch,
+                                     width, height,
+                                     P111_QNX_NV12_FORMAT_LEGACY,
+                                     source_usage);
+    if (!published) {
+        ++g_linearizer.publish_drop;
+        if (g_linearizer.publish_drop == 1u ||
+            (g_linearizer.publish_drop % 60u) == 0u) {
+            altscreen_log("WARN PHASE=FRAME_LINEARIZER_PUBLISH result=DROP readbacks=%u published=%u drops=%u generation_mismatch_or_inactive=1 action=%s",
+                          g_linearizer.readback_success,
+                          g_linearizer.publish_success,
+                          g_linearizer.publish_drop,
+                          g_linearizer.publish_success ?
+                              "FREEZE_LAST_GOOD" : "WAIT_NOT_READY");
+        }
+        linearizer_unlock();
+        return 1;
+    }
+
+    ++g_linearizer.publish_success;
+    if (g_linearizer.publish_success == 1u) {
+        altscreen_log("PHASE=FRAME_LINEARIZER_FIRST_FRAME backend=%s source_format=%u source_usage=0x%x size=%ux%u readback_us=%u readback_success=%u shm_publish_success=1 output=packed-nv12 window_readback=exact-stock-handle",
                       backend == P111_LINEARIZER_NV12 ?
                           "screen-nv12" : "screen-rgba-bt601",
-                      source_format, source_usage, width, height);
-    } else if ((g_linearizer.frames % 300u) == 0u) {
-        altscreen_log("PHASE=FRAME_LINEARIZER_PROGRESS backend=%s frames=%u requests=%u failures=%u fallbacks=%u size=%ux%u",
+                      source_format, source_usage, width, height,
+                      (unsigned)elapsed, g_linearizer.readback_success);
+    } else if ((g_linearizer.publish_success % 300u) == 0u) {
+        unsigned p50 = linearizer_percentile_ms_locked(50u);
+        unsigned p95 = linearizer_percentile_ms_locked(95u);
+        altscreen_log("PHASE=FRAME_LINEARIZER_PROGRESS backend=%s readbacks=%u published=%u publish_drops=%u requests=%u failures=%u fallbacks=%u readback_p50_ms=%u readback_p95_ms=%u readback_max_us=%u size=%ux%u",
                       backend == P111_LINEARIZER_NV12 ?
                           "screen-nv12" : "screen-rgba-bt601",
-                      g_linearizer.frames, g_linearizer.requests,
-                      g_linearizer.failures, g_linearizer.fallback_count,
+                      g_linearizer.readback_success,
+                      g_linearizer.publish_success,
+                      g_linearizer.publish_drop,
+                      g_linearizer.requests,
+                      g_linearizer.failures,
+                      g_linearizer.fallback_count,
+                      p50, p95, (unsigned)g_linearizer.readback_max_us,
                       width, height);
     }
 
-    /*
-     * Scratch is deliberately shaped like the already measured padded linear
-     * NV12 contract so the V1 publisher can keep its proven 3-slot SHM race
-     * protection. This call only packs visible rows into /carplay111_decoded.
-     */
-    p111_frame_tap_write(stream, g_linearizer.scratch,
-                         width, height,
-                         P111_QNX_NV12_FORMAT_LEGACY,
-                         source_usage);
     linearizer_unlock();
     return 1;
 }
 
-void p111_frame_tap_write(void *stream, const unsigned char *buffer,
+int p111_frame_tap_write(void *stream, const unsigned char *buffer,
                           uint32_t width, uint32_t height,
                           uint32_t format, uint32_t usage) {
     uint32_t pixels, bytes, uv_rows, slot, seq, generation;
@@ -1393,22 +1494,22 @@ void p111_frame_tap_write(void *stream, const unsigned char *buffer,
     uint32_t y;
     unsigned i, start_slot;
 
-    if (!stream || !buffer || !width || !height) return;
-    if (!env_truth("ALT111_DIRECT_FRAME_TAP", 1)) return;
+    if (!stream || !buffer || !width || !height) return 0;
+    if (!env_truth("ALT111_DIRECT_FRAME_TAP", 1)) return 0;
 
     if (width > 4096u || height > 4096u || width > 0xffffffffu / height)
-        return;
+        return 0;
     pixels = width * height;
     uv_rows = (height + 1u) >> 1;
-    if (uv_rows > 0xffffffffu / width) return;
+    if (uv_rows > 0xffffffffu / width) return 0;
     bytes = pixels + width * uv_rows;
-    if (!bytes || bytes > P111_FRAME_SLOT_BYTES) return;
+    if (!bytes || bytes > P111_FRAME_SLOT_BYTES) return 0;
 
     tap_lock();
     begin_stream_locked(stream);
     if (!g_frame || !g_frame->active) {
         tap_unlock();
-        return;
+        return 0;
     }
 
     generation = g_generation;
@@ -1435,7 +1536,7 @@ void p111_frame_tap_write(void *stream, const unsigned char *buffer,
     if (slot >= P111_FRAME_SLOTS) {
         ++g_frame->drop_count;
         tap_unlock();
-        return;
+        return 0;
     }
     g_frame_slot_owner[slot] = seq;
 
@@ -1452,7 +1553,7 @@ void p111_frame_tap_write(void *stream, const unsigned char *buffer,
                           stream, generation, buffer, format, usage, width, height);
         }
         tap_unlock();
-        return;
+        return 0;
     }
     tap_unlock();
 
@@ -1478,7 +1579,7 @@ void p111_frame_tap_write(void *stream, const unsigned char *buffer,
         if (slot < P111_FRAME_SLOTS && g_frame_slot_owner[slot] == seq)
             g_frame_slot_owner[slot] = 0u;
         tap_unlock();
-        return;
+        return 0;
     }
     /*
      * CScreenRender is normally serialized, but do not depend on that ABI
@@ -1493,7 +1594,7 @@ void p111_frame_tap_write(void *stream, const unsigned char *buffer,
         if (g_frame_slot_owner[slot] == seq)
             g_frame_slot_owner[slot] = 0u;
         tap_unlock();
-        return;
+        return 0;
     }
 
     /*
@@ -1542,6 +1643,8 @@ void p111_frame_tap_write(void *stream, const unsigned char *buffer,
     }
 
     tap_unlock();
+    return 1;
+
 }
 
 void p111_direct_tap_stream_end(void *stream) {
