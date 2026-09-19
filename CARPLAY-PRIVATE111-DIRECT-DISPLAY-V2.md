@@ -107,6 +107,27 @@ writer/session identity. Only then does it bypass the consumed gate. If the
 current session is not valid, it falls back to waiting for the next real phone
 request.
 
+## Final pre-car session hardening
+
+The final static audit found three additional reconnect/race edges:
+
+- `PHONE_REQUESTED_ALTSCREEN=YES` is process-level and may only be logged once.
+  The sidecar gate now also accepts the repeated
+  `PHASE=PHONE_REQUEST_111 STREAM_111_REQUESTED=YES` event, which is emitted
+  for each observed type111 SETUP request. This prevents a normal second
+  connection in the same `dio_manager` process from waiting forever.
+- Initial display creation now requires two fresh decoded frames from one
+  writer/generation/cookie identity. A single stale frame left in persistent
+  SHM cannot trigger displayable3/Context80.
+- Producer stream ownership is monotonic until explicit teardown. A late H264
+  or render callback from another stream is dropped and cannot switch
+  `g_stream` back to an old session. Late stale render callbacks are rejected
+  before synchronous Screen readback.
+
+The lifecycle watcher also counts only the exact current-session marker
+`PHASE=DIRECT111_TAP_STOP stream=`; the diagnostic
+`DIRECT111_TAP_STOP_STALE` marker cannot terminate the active sidecar.
+
 ## Pixel safety
 
 The V1 raw vendor-pointer fallback has been removed.
