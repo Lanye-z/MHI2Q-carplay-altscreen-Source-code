@@ -81,11 +81,12 @@ static int env_truth(const char *name, int default_value) {
     return 1;
 }
 
-static uint64_t tap_now_us(void) {
+static uint32_t tap_now_us32(void) {
     struct timeval tv;
     if (gettimeofday(&tv, NULL) != 0) return 0u;
-    return (uint64_t)(uint32_t)tv.tv_sec * 1000000ull +
-           (uint64_t)(uint32_t)tv.tv_usec;
+    /* Modular 32-bit microseconds are sufficient for sub-second readback timing
+     * and avoid pulling 64-bit divide helpers into the freestanding ARM hook. */
+    return (uint32_t)tv.tv_sec * 1000000u + (uint32_t)tv.tv_usec;
 }
 
 static uint8_t byte_or_zero(const uint8_t *d, size_t n, size_t i) {
@@ -243,7 +244,7 @@ static p111_h264_shm_t *map_h264(void) {
             close(fd);
             return NULL;
         }
-        if ((uint64_t)(uint32_t)st.st_size < (uint64_t)bytes) {
+        if ((st.st_size < 0 || (uint32_t)st.st_size < (uint32_t)bytes)) {
             errno = 0;
             if (ftruncate(fd, (off_t)bytes) != 0) {
                 err = errno;
@@ -333,7 +334,7 @@ static p111_frame_shm_t *map_frame(void) {
             close(fd);
             return NULL;
         }
-        if ((uint64_t)(uint32_t)st.st_size < (uint64_t)bytes) {
+        if ((st.st_size < 0 || (uint32_t)st.st_size < (uint32_t)bytes)) {
             errno = 0;
             if (ftruncate(fd, (off_t)bytes) != 0) {
                 err = errno;
@@ -890,8 +891,7 @@ struct p111_linearizer_state {
     uint32_t publish_drop;
     uint32_t failures;
     uint32_t fallback_count;
-    uint64_t readback_total_us;
-    uint64_t readback_max_us;
+    uint32_t readback_max_us;
     uint32_t readback_hist_ms[65];
     uint32_t sample_count;
 
@@ -961,7 +961,6 @@ static void linearizer_shutdown_locked(void) {
     g_linearizer.publish_drop = 0;
     g_linearizer.failures = 0;
     g_linearizer.fallback_count = 0;
-    g_linearizer.readback_total_us = 0;
     g_linearizer.readback_max_us = 0;
     memset(g_linearizer.readback_hist_ms, 0,
            sizeof(g_linearizer.readback_hist_ms));
@@ -1310,17 +1309,16 @@ static int linearizer_picture_has_detail_locked(uint32_t width,
     return samples >= 16u && maxv > minv + 6u;
 }
 
-static void linearizer_record_readback_us_locked(uint64_t us) {
+static void linearizer_record_readback_us_locked(uint32_t us) {
     unsigned bucket = (unsigned)(us / 1000u);
     if (bucket > 64u) bucket = 64u;
     ++g_linearizer.readback_hist_ms[bucket];
-    g_linearizer.readback_total_us += us;
     if (us > g_linearizer.readback_max_us)
         g_linearizer.readback_max_us = us;
 }
 
 static unsigned linearizer_percentile_ms_locked(unsigned percent) {
-    uint64_t total = 0u, target, seen = 0u;
+    uint32_t total = 0u, target, seen = 0u;
     unsigned i;
     for (i = 0; i < 65u; ++i) total += g_linearizer.readback_hist_ms[i];
     if (!total) return 0u;
@@ -1376,7 +1374,7 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
     int backend;
     int published;
     uint32_t requests;
-    uint64_t t0, t1, elapsed;
+    uint32_t t0, t1, elapsed;
 
     if (!stream || !screen_window || !width || !height) return 0;
     if (!env_truth("ALT111_DIRECT_FRAME_TAP", 1)) return 1;
@@ -1401,7 +1399,7 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
         return 0;
     }
 
-    t0 = tap_now_us();
+    t0 = tap_now_us32();
     errno = 0;
     rc = g_linearizer.read_window((p111_screen_window_t)screen_window,
                                   g_linearizer.buffer, 0, NULL, 0);
@@ -1417,8 +1415,8 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
                                           g_linearizer.buffer, 0, NULL, 0);
         }
     }
-    t1 = tap_now_us();
-    elapsed = (t0 && t1 >= t0) ? (t1 - t0) : 0u;
+    t1 = tap_now_us32();
+    elapsed = t1 - t0;
     linearizer_record_readback_us_locked(elapsed);
 
     if (rc != 0) {
