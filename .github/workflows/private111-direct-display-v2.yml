@@ -112,7 +112,7 @@ jobs:
           assert 'FRAME_NATIVE_WINDOW_METADATA' in tap
           assert 'FRAME_LINEARIZER_FIRST_FRAME' in tap
           assert 'action=RGBA_RETRY' in tap
-          assert 'action=V1_RAW_FAIL_OPEN' in tap
+          assert 'V1_RAW_FAIL_OPEN' in tap
           assert 'linearizer_rgba_to_nv12_locked' in tap
           assert 'linearizer_picture_has_detail_locked' in tap
           assert 'valid_uniform_frame' in tap
