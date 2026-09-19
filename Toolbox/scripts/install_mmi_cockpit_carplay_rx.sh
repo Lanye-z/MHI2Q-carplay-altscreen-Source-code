@@ -1,5 +1,5 @@
 #!/bin/sh
-# CarPlay private111 Direct Display V1 INSTALL.
+# CarPlay private111 Direct Display V2 INSTALL.
 # Installs the type111 control/data plane, H264/decoded SHM bridge,
 # displayable3 GLES sidecar, and Java80 HMI control plane.
 # Window58 readback and RGI98 native renderer are not used by the sidecar.
@@ -27,6 +27,8 @@ fi
 
 [ -n "$VOLUME" ] || { echo "FAIL: no Toolbox SD card discovered"; exit 1; }
 CONTROLLER="$VOLUME/Toolbox/scripts/altscreen_chain_test.sh"
+MIRROR_RELEASE="$VOLUME/Toolbox/carplay_alt_screen/mirror_display/release"
+MIRROR_INFO="$MIRROR_RELEASE/BUILD_INFO.txt"
 JAR_SOURCE="$VOLUME/Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar"
 JAR_TARGET="$DEVICE_ROOT/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar"
 JAR_TARGET_DIR=$(dirname -- "$JAR_TARGET")
@@ -37,6 +39,14 @@ EXPECTED_CKSUM=1515795662
 
 [ -f "$CONTROLLER" ] || { echo "FAIL: chain controller missing: $CONTROLLER"; exit 127; }
 [ -s "$JAR_SOURCE" ] || { echo "FAIL: Java80 HMI JAR missing: $JAR_SOURCE"; exit 1; }
+[ -s "$MIRROR_INFO" ] || { echo "FAIL: V2 Mirror BUILD_INFO missing: $MIRROR_INFO"; exit 1; }
+grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$MIRROR_INFO" 2>/dev/null &&
+grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$MIRROR_INFO" 2>/dev/null || {
+    echo "FAIL: this package is not an approved rebuilt V2 vehicle release"
+    grep -E '^(release_binary_status|vehicle_zip_status)=' "$MIRROR_INFO" 2>/dev/null || true
+    echo "ACTION=REBUILD_QNX_SIDECAR_AND_PROMOTE_BEFORE_INSTALL"
+    exit 1
+}
 
 file_size(){
     n=$(wc -c < "$1" 2>/dev/null) || { echo 0; return; }
@@ -130,10 +140,10 @@ jar_valid "$JAR_SOURCE" || {
     exit 1
 }
 
-echo "PACKAGE_MODE=CARPLAY_PRIVATE111_DIRECT_DISPLAY_V1"
+echo "PACKAGE_MODE=CARPLAY_PRIVATE111_DIRECT_DISPLAY_V2"
 echo "NATIVE_SOURCE=private111_ScreenStreamProcessData h264_shm=/carplay111_h264"
-echo "DECODER_BACKEND=stock_omx_buffer_tap_v1 decoded_shm=/carplay111_decoded"
-echo "PIXEL_BRIDGE=NV12_to_existing_MMI_GLES"
+echo "DECODER_BACKEND=stock_omx_screen_linearized_shm decoded_shm=/carplay111_decoded"
+echo "PIXEL_BRIDGE=Screen_linearized_NV12_to_existing_MMI_GLES"
 echo "PIXEL_TARGET=displayable3"
 echo "HMI_CONTEXT=ctx80"
 echo "WINDOW58_READBACK=DISABLED"
