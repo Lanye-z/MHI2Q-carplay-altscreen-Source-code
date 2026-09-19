@@ -92,6 +92,10 @@ jobs:
           side = Path('Toolbox/carplay_alt_screen/mirror_display/src/main.cpp').read_text()
           source = Path('Toolbox/carplay_alt_screen/mirror_display/src/private111_direct_source.cpp').read_text()
           launch = Path('Toolbox/carplay_alt_screen/mirror_display/release/start_vehicle.sh').read_text()
+          release_stop = Path('Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh').read_text()
+          install = Path('Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh').read_text()
+          chain = Path('Toolbox/scripts/altscreen_chain_test.sh').read_text()
+          status = Path('Toolbox/scripts/status_mmi_cockpit_carplay_test.sh').read_text()
 
           render_start = native.index('int p1404_hook_cscreen_render(void *self, unsigned char *buffer) {')
           stock = native.index('rc = g_real_render(self, buffer);', render_start)
@@ -141,6 +145,14 @@ jobs:
           assert 'ALT111_RECOVER_CURRENT_SESSION=1' in launch
           assert 'MAX_ABNORMAL_RESTARTS' in launch
           assert 'phase=before_first_present' in launch
+          assert 'RECOVERY_LOCK=' in release_stop
+          assert 'stop_guard=RETAINED' in release_stop
+          assert 'PACKAGE_MODE=CARPLAY_PRIVATE111_DIRECT_DISPLAY_V2' in install
+          assert 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' in install
+          assert 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' in install
+          assert 'mode=carplay-private111-direct-display-v2' in chain
+          assert 'CarPlay private111 Direct Display V2' in status
+          assert 'FRAME_LINEARIZER_SLOW_EVENTS=' in status
 
           print('DIRECT111_V2_SOURCE_CONTRACT=PASS stock_first=1 exact_window_handle=1 no_raw_vendor_fallback=1 producer_session_reset=1 shm_fstat_guard=1 consumer_identity=1 same_session_recovery=1 readback_publish_accounting=1')
           PY
