@@ -64,7 +64,7 @@ elif grep -Fq 'release_binary_status=V2_BINARY_STALE_HARDENING_REBUILD_REQUIRED'
 elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$INFO"; then
     grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$INFO" ||
         fail "rebuilt V2 sidecar is not marked vehicle-ready"
-    for marker in 'carplay-private111-direct-display-v2' 'PHASE=DECODED_SHM_WAIT_SIZE' 'PHASE=SOURCE_SESSION' 'PHASE=GATE_RECOVER_CURRENT_SESSION' 'matching_identity_plus_frame_progress' 'packed_tight_required=1' 'PHASE=DISPLAYABLE3_FIRST_PRESENT' 'PHASE=DIRECT111_ACTIVE'
+    for marker in 'carplay-private111-direct-display-v2' 'PHASE=DECODED_SHM_WAIT_SIZE' 'PHASE=SOURCE_SESSION' 'PHASE=GATE_RECOVER_CURRENT_SESSION' 'matching_identity_plus_frame_progress' 'packed_tight_required=1' 'stream111_request_or_phone_marker' 'STREAM_111_REQUESTED=YES' 'PHASE=DISPLAYABLE3_FIRST_PRESENT' 'PHASE=DIRECT111_ACTIVE'
     do
         binary_strings "$BIN" | grep -Fq "$marker" ||
             fail "V2 sidecar marker missing: $marker"
@@ -169,6 +169,10 @@ grep -Fq 'PHASE=GATE_RECOVER_CURRENT_SESSION' "$MAIN_CPP" ||
     fail "same-session gate recovery path missing"
 grep -Fq 'matching_identity_plus_frame_progress' "$MAIN_CPP" ||
     fail "same-session recovery does not require fresh frame progress"
+grep -Fq 'stream111_request_or_phone_marker' "$MAIN_CPP" ||
+    fail "normal reconnect gate does not accept the repeated type111 request marker"
+grep -Fq 'STREAM_111_REQUESTED=YES' "$MAIN_CPP" ||
+    fail "normal reconnect gate lacks per-session type111 request evidence"
 grep -Fq 'carplay-private111-direct-display-v2' "$MAIN_CPP" ||
     fail "V2 sidecar source build id missing"
 
