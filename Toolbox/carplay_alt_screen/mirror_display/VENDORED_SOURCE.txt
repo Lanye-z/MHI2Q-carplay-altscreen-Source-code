@@ -15,5 +15,5 @@ window_manager_context=NOT_USED_BY_SIDECAR
 mirror_sink=displayable3_gles
 context_owner=Java_Context80
 context_composite=98,101,102,3
-release_status=SOURCE_READY_QNX_ARMV7_BINARY_REBUILD_REQUIRED
-note=The checked-in release ELF still predates this branch until QNX ARMv7 rebuild/promotion. Do not treat the GitHub ZIP as a vehicle-ready direct-display binary until BUILD_INFO and SHA256 manifests are promoted.
+release_status=QNX_ARMV7_BINARY_PROMOTED_VEHICLE_CANDIDATE
+note=The checked-in release ELF is the promoted private111 direct-display V1 candidate. Its source has not changed since promotion. Any future sidecar source edit requires a fresh QNX 6.5 ARMv7 rebuild and synchronized BUILD_INFO/SHA256 promotion before vehicle use.
