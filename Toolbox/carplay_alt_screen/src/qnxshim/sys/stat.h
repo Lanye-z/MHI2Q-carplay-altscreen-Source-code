@@ -43,6 +43,7 @@ QSHIM_STAT_ASSERT(mode_t_32, sizeof(mode_t) == 4u);
 #undef QSHIM_STAT_ASSERT
 
 extern int stat(const char *path, struct stat *buf);
+extern int fstat(int fd, struct stat *buf);
 extern int lstat(const char *path, struct stat *buf);
 /* QNX 6.x libc mkdir ABI is the POSIX two-argument form. Keep the declaration
  * here because the freestanding cross-build deliberately uses -nostdinc. */
