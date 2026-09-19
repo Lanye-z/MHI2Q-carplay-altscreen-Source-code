@@ -208,6 +208,8 @@ jobs:
             strings "$bin" | grep -Fq 'PHASE=DECODED_SHM_WAIT_SIZE'
             strings "$bin" | grep -Fq 'PHASE=SOURCE_SESSION'
             strings "$bin" | grep -Fq 'PHASE=GATE_RECOVER_CURRENT_SESSION'
+            strings "$bin" | grep -Fq 'matching_identity_plus_frame_progress'
+            strings "$bin" | grep -Fq 'packed_tight_required=1'
             strings "$bin" | grep -Fq 'PHASE=DISPLAYABLE3_FIRST_PRESENT'
             strings "$bin" | grep -Fq 'PHASE=DIRECT111_ACTIVE'
             if strings "$bin" | grep -Fq 'screen_read_window'; then
