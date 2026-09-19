@@ -37,13 +37,13 @@ EXPECTED_CKSUM=1515795662
 file_size(){ n=$(wc -c < "$1" 2>/dev/null) || { echo 0; return; }; set -- $n; echo "${1:-0}"; }
 file_cksum(){ if command -v cksum >/dev/null 2>&1; then cksum < "$1" 2>/dev/null | awk '{print $1}'; else echo unavailable; fi; }
 
-echo "=== CarPlay private111 Direct Display V1 ==="
+echo "=== CarPlay private111 Direct Display V2 ==="
 echo "SOURCE_PATH=private111_ScreenStreamProcessData"
 echo "H264_TAP=/carplay111_h264"
-echo "DECODER_BACKEND=stock_omx_buffer_tap_v1 decoded_shm=/carplay111_decoded"
+echo "DECODER_BACKEND=stock_omx_screen_linearized_shm decoded_shm=/carplay111_decoded"
 echo "DESTINATION=displayable3_gles"
 echo "CONTEXT_POLICY=JAVA_ONLY context=80 composite=98,101,102,3 native_dmdt=0"
-echo "WINDOW58_READBACK=DISABLED sidecar_screen_read_window=0"
+echo "WINDOW58_ENUMERATION=DISABLED sidecar_screen_read_window=0 hook_exact_stock_window_readback=1"
 
 if [ -s "$JAR" ]; then
     SIZE=$(file_size "$JAR"); SUM=$(file_cksum "$JAR")
@@ -106,9 +106,14 @@ if [ -n "$HOOK_LOG" ]; then
     echo "SHM_WRITER_READY=h264:$H264_SHM decoded:$FRAME_SHM map_failure:$MAP_FAILURE recovered:$SHM_RECOVERED"
     echo "H264_AVCC_PROPERTY=$AVCC_PROPERTY H264_CODEC_CONFIG_EMITTED=$AVCC_CONFIG"
     echo "H264_TAP_DATA=$H264_DATA SPS=$H264_SPS PPS=$H264_PPS IDR=$H264_IDR"
-    echo "FRAME_TAP_LAYOUT=$FRAME_LAYOUT unsupported:$FRAME_LAYOUT_UNSUPPORTED DECODER_FIRST_FRAME=$DECODER_FRAME backend=stock-omx-tap"
+    echo "FRAME_TAP_LAYOUT=$FRAME_LAYOUT unsupported:$FRAME_LAYOUT_UNSUPPORTED DECODER_FIRST_FRAME=$DECODER_FRAME backend=stock-omx-screen-linearized-shm"
+    LINEARIZER_LAST="$(grep 'PHASE=FRAME_LINEARIZER_PROGRESS' "$HOOK_LOG" 2>/dev/null | tail -n 1 || true)"
+    [ -z "$LINEARIZER_LAST" ] || echo "FRAME_LINEARIZER_LAST='$LINEARIZER_LAST'"
+    SLOW_READBACKS="$(grep -c 'PHASE=FRAME_LINEARIZER_SLOW' "$HOOK_LOG" 2>/dev/null || true)"
+    case "$SLOW_READBACKS" in ''|*[!0-9]*) SLOW_READBACKS=0 ;; esac
+    echo "FRAME_LINEARIZER_SLOW_EVENTS=$SLOW_READBACKS threshold_us=20000"
     echo "HOOK_DIRECT111_LOG_TAIL_BEGIN"
-    grep -E 'PHASE=(STREAM_111_|VIDEO_111_|H264_TAP_|H264_AVCC_|DIRECT111_TAP_|FRAME_TAP_|DECODER_)|ERROR PHASE=(H264_TAP_SHM_|FRAME_TAP_SHM_|FRAME_TAP_UNSUPPORTED_LAYOUT)' "$HOOK_LOG" 2>/dev/null | tail -n 120 || true
+    grep -E 'PHASE=(STREAM_111_|VIDEO_111_|H264_TAP_|H264_AVCC_|DIRECT111_TAP_|FRAME_TAP_|FRAME_LINEARIZER_|DECODER_)|ERROR PHASE=(H264_TAP_SHM_|FRAME_TAP_SHM_|FRAME_TAP_UNSUPPORTED_LAYOUT|FRAME_LINEARIZER_)' "$HOOK_LOG" 2>/dev/null | tail -n 120 || true
     echo "HOOK_DIRECT111_LOG_TAIL_END"
 else
     echo "H264_TAP_DATA=UNKNOWN hook_log_missing=1"
@@ -173,7 +178,7 @@ else
     echo "JAVA_CTX80_ACTUAL=UNKNOWN log_missing=1"
 fi
 
-# V1 vehicle display readiness is driven by the decoded fallback path.
+# V2 vehicle display readiness is driven by the Screen-linearized decoded path.
 # H264 SPS/PPS/IDR evidence is reported independently for the future standalone
 # decoder and must not falsely mark a working displayable3/Context80 route bad.
 if [ "$DECODER_FRAME" = 1 ] && [ "$DISPLAY3" = 1 ] &&
