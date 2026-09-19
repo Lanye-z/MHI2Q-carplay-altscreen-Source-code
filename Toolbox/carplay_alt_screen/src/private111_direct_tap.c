@@ -1,6 +1,7 @@
 #include "private111_direct_tap.h"
 #include "private111_direct_shm.h"
 
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
@@ -687,6 +688,577 @@ static int qnx_nv12_padded_layout(uint32_t width, uint32_t height,
     return 1;
 }
 
+
+/*
+ * Direct-display V2: the stock i.MX6 OMX decoder exposes Screen format
+ * 0x0001000c (65548).  V1 proved the stride/plane offsets but incorrectly
+ * treated the CPU pointer as a linear raster.  The resulting picture moved
+ * with CarPlay but was visibly tiled/garbled.
+ *
+ * V2 deliberately does not guess the vendor tiling formula.  After stock
+ * CScreenRender posts the frame, Screen is asked to read that exact window
+ * into an off-screen pixmap.  Screen therefore owns the vendor-layout ->
+ * ordinary-raster conversion.  We first request standard NV12 (format 12);
+ * if this target is unsupported on the vehicle, RGBA8888 is used and converted
+ * to packed NV12 in software.  The existing /carplay111_decoded ABI and the
+ * proven displayable3/Context80 sidecar remain unchanged.
+ */
+#define P111_SCREEN_APPLICATION_CONTEXT 0
+#define P111_SCREEN_PROPERTY_BUFFER_SIZE 5
+#define P111_SCREEN_PROPERTY_FORMAT 14
+#define P111_SCREEN_PROPERTY_PLANAR_OFFSETS 33
+#define P111_SCREEN_PROPERTY_POINTER 34
+#define P111_SCREEN_PROPERTY_RENDER_BUFFERS 37
+#define P111_SCREEN_PROPERTY_SIZE 40
+#define P111_SCREEN_PROPERTY_STRIDE 44
+#define P111_SCREEN_PROPERTY_USAGE 48
+#define P111_SCREEN_FORMAT_RGBA8888 8
+#define P111_SCREEN_FORMAT_NV12 12
+#define P111_SCREEN_USAGE_READ (1u << 1)
+#define P111_SCREEN_USAGE_NATIVE (1u << 3)
+#define P111_LINEARIZER_NV12 1
+#define P111_LINEARIZER_RGBA 2
+
+typedef void *p111_screen_context_t;
+typedef void *p111_screen_pixmap_t;
+typedef void *p111_screen_buffer_t;
+typedef void *p111_screen_window_t;
+typedef int (*p111_screen_create_context_fn)(p111_screen_context_t *, int);
+typedef int (*p111_screen_destroy_context_fn)(p111_screen_context_t);
+typedef int (*p111_screen_create_pixmap_fn)(p111_screen_pixmap_t *,
+                                             p111_screen_context_t);
+typedef int (*p111_screen_destroy_pixmap_fn)(p111_screen_pixmap_t);
+typedef int (*p111_screen_set_pixmap_iv_fn)(p111_screen_pixmap_t, int,
+                                             const int *);
+typedef int (*p111_screen_create_pixmap_buffer_fn)(p111_screen_pixmap_t);
+typedef int (*p111_screen_get_pixmap_pv_fn)(p111_screen_pixmap_t, int, void **);
+typedef int (*p111_screen_get_buffer_pv_fn)(p111_screen_buffer_t, int, void **);
+typedef int (*p111_screen_get_buffer_iv_fn)(p111_screen_buffer_t, int, int *);
+typedef int (*p111_screen_get_window_iv_fn)(p111_screen_window_t, int, int *);
+typedef int (*p111_screen_read_window_fn)(p111_screen_window_t,
+                                           p111_screen_buffer_t,
+                                           int, const int *, int);
+
+struct p111_linearizer_state {
+    void *lib;
+    p111_screen_context_t context;
+    p111_screen_pixmap_t pixmap;
+    p111_screen_buffer_t buffer;
+    unsigned char *pixels;
+    unsigned char *scratch;
+    size_t scratch_bytes;
+    uint32_t width;
+    uint32_t height;
+    uint32_t source_format;
+    uint32_t source_usage;
+    int backend;
+    int stride;
+    int offsets[3];
+    uint32_t requests;
+    uint32_t frames;
+    uint32_t failures;
+    uint32_t fallback_count;
+
+    p111_screen_create_context_fn create_context;
+    p111_screen_destroy_context_fn destroy_context;
+    p111_screen_create_pixmap_fn create_pixmap;
+    p111_screen_destroy_pixmap_fn destroy_pixmap;
+    p111_screen_set_pixmap_iv_fn set_pixmap_iv;
+    p111_screen_create_pixmap_buffer_fn create_pixmap_buffer;
+    p111_screen_get_pixmap_pv_fn get_pixmap_pv;
+    p111_screen_get_buffer_pv_fn get_buffer_pv;
+    p111_screen_get_buffer_iv_fn get_buffer_iv;
+    p111_screen_get_window_iv_fn get_window_iv;
+    p111_screen_read_window_fn read_window;
+};
+
+static struct p111_linearizer_state g_linearizer;
+static volatile unsigned g_linearizer_lock;
+
+static void linearizer_lock(void) {
+    while (__sync_lock_test_and_set(&g_linearizer_lock, 1u) != 0u) { }
+}
+
+static void linearizer_unlock(void) {
+    __sync_lock_release(&g_linearizer_lock);
+}
+
+static void linearizer_release_pixmap_locked(void) {
+    if (g_linearizer.pixmap && g_linearizer.destroy_pixmap)
+        (void)g_linearizer.destroy_pixmap(g_linearizer.pixmap);
+    g_linearizer.pixmap = NULL;
+    g_linearizer.buffer = NULL;
+    g_linearizer.pixels = NULL;
+    g_linearizer.width = 0;
+    g_linearizer.height = 0;
+    g_linearizer.backend = 0;
+    g_linearizer.stride = 0;
+    g_linearizer.offsets[0] = 0;
+    g_linearizer.offsets[1] = 0;
+    g_linearizer.offsets[2] = 0;
+}
+
+static void linearizer_shutdown_locked(void) {
+    linearizer_release_pixmap_locked();
+    if (g_linearizer.context && g_linearizer.destroy_context)
+        (void)g_linearizer.destroy_context(g_linearizer.context);
+    g_linearizer.context = NULL;
+    if (g_linearizer.lib) dlclose(g_linearizer.lib);
+    g_linearizer.lib = NULL;
+    if (g_linearizer.scratch) free(g_linearizer.scratch);
+    g_linearizer.scratch = NULL;
+    g_linearizer.scratch_bytes = 0;
+    g_linearizer.create_context = NULL;
+    g_linearizer.destroy_context = NULL;
+    g_linearizer.create_pixmap = NULL;
+    g_linearizer.destroy_pixmap = NULL;
+    g_linearizer.set_pixmap_iv = NULL;
+    g_linearizer.create_pixmap_buffer = NULL;
+    g_linearizer.get_pixmap_pv = NULL;
+    g_linearizer.get_buffer_pv = NULL;
+    g_linearizer.get_buffer_iv = NULL;
+    g_linearizer.get_window_iv = NULL;
+    g_linearizer.read_window = NULL;
+    g_linearizer.requests = 0;
+    g_linearizer.frames = 0;
+    g_linearizer.failures = 0;
+    g_linearizer.fallback_count = 0;
+}
+
+static int linearizer_open_api_locked(void) {
+    void *lib;
+    if (g_linearizer.lib) return 1;
+
+    lib = dlopen("libscreen.so.1", RTLD_LAZY);
+    if (!lib) lib = dlopen("libscreen.so", RTLD_LAZY);
+    if (!lib) {
+        altscreen_log("ERROR PHASE=FRAME_LINEARIZER_API backend=screen-read-window dlopen=FAILED");
+        return 0;
+    }
+
+    g_linearizer.create_context =
+        (p111_screen_create_context_fn)dlsym(lib, "screen_create_context");
+    g_linearizer.destroy_context =
+        (p111_screen_destroy_context_fn)dlsym(lib, "screen_destroy_context");
+    g_linearizer.create_pixmap =
+        (p111_screen_create_pixmap_fn)dlsym(lib, "screen_create_pixmap");
+    g_linearizer.destroy_pixmap =
+        (p111_screen_destroy_pixmap_fn)dlsym(lib, "screen_destroy_pixmap");
+    g_linearizer.set_pixmap_iv =
+        (p111_screen_set_pixmap_iv_fn)dlsym(lib, "screen_set_pixmap_property_iv");
+    g_linearizer.create_pixmap_buffer =
+        (p111_screen_create_pixmap_buffer_fn)dlsym(lib, "screen_create_pixmap_buffer");
+    g_linearizer.get_pixmap_pv =
+        (p111_screen_get_pixmap_pv_fn)dlsym(lib, "screen_get_pixmap_property_pv");
+    g_linearizer.get_buffer_pv =
+        (p111_screen_get_buffer_pv_fn)dlsym(lib, "screen_get_buffer_property_pv");
+    g_linearizer.get_buffer_iv =
+        (p111_screen_get_buffer_iv_fn)dlsym(lib, "screen_get_buffer_property_iv");
+    g_linearizer.get_window_iv =
+        (p111_screen_get_window_iv_fn)dlsym(lib, "screen_get_window_property_iv");
+    g_linearizer.read_window =
+        (p111_screen_read_window_fn)dlsym(lib, "screen_read_window");
+
+    if (!g_linearizer.create_context || !g_linearizer.destroy_context ||
+        !g_linearizer.create_pixmap || !g_linearizer.destroy_pixmap ||
+        !g_linearizer.set_pixmap_iv || !g_linearizer.create_pixmap_buffer ||
+        !g_linearizer.get_pixmap_pv || !g_linearizer.get_buffer_pv ||
+        !g_linearizer.get_buffer_iv || !g_linearizer.read_window) {
+        altscreen_log("ERROR PHASE=FRAME_LINEARIZER_API backend=screen-read-window symbols=INCOMPLETE create_ctx=%d pixmap=%d pixbuf=%d buffer_iv=%d read_window=%d",
+                      g_linearizer.create_context != NULL,
+                      g_linearizer.create_pixmap != NULL,
+                      g_linearizer.create_pixmap_buffer != NULL,
+                      g_linearizer.get_buffer_iv != NULL,
+                      g_linearizer.read_window != NULL);
+        dlclose(lib);
+        memset(&g_linearizer, 0, sizeof(g_linearizer));
+        return 0;
+    }
+
+    g_linearizer.lib = lib;
+    errno = 0;
+    if (g_linearizer.create_context(&g_linearizer.context,
+                                    P111_SCREEN_APPLICATION_CONTEXT) != 0 ||
+        !g_linearizer.context) {
+        int err = errno;
+        altscreen_log("ERROR PHASE=FRAME_LINEARIZER_CONTEXT type=APPLICATION rc=FAILED errno=%d", err);
+        linearizer_shutdown_locked();
+        return 0;
+    }
+
+    altscreen_log("PHASE=FRAME_LINEARIZER_API backend=screen-read-window context=APPLICATION result=READY");
+    return 1;
+}
+
+static int linearizer_ensure_scratch_locked(uint32_t width, uint32_t height) {
+    uint32_t stride = align_up_u32(width, 128u);
+    uint32_t padded_y = align_up_u32(height, 32u);
+    uint32_t uv_rows = (height + 1u) >> 1;
+    size_t need;
+    unsigned char *next;
+
+    if (!stride || !padded_y || stride > 8192u || padded_y > 8192u)
+        return 0;
+    need = (size_t)stride * padded_y + (size_t)stride * uv_rows;
+    if (g_linearizer.scratch && g_linearizer.scratch_bytes >= need)
+        return 1;
+    next = (unsigned char *)realloc(g_linearizer.scratch, need);
+    if (!next) return 0;
+    g_linearizer.scratch = next;
+    g_linearizer.scratch_bytes = need;
+    return 1;
+}
+
+static int linearizer_create_pixmap_locked(uint32_t width, uint32_t height,
+                                            int format, int backend) {
+    int usage = (int)(P111_SCREEN_USAGE_READ | P111_SCREEN_USAGE_NATIVE);
+    int size[2];
+    int offsets[3] = {0, 0, 0};
+    int stride = 0;
+    void *buffer = NULL;
+    unsigned char *pixels = NULL;
+
+    linearizer_release_pixmap_locked();
+    size[0] = (int)width;
+    size[1] = (int)height;
+
+    if (g_linearizer.create_pixmap(&g_linearizer.pixmap,
+                                   g_linearizer.context) != 0 ||
+        !g_linearizer.pixmap ||
+        g_linearizer.set_pixmap_iv(g_linearizer.pixmap,
+            P111_SCREEN_PROPERTY_USAGE, &usage) != 0 ||
+        g_linearizer.set_pixmap_iv(g_linearizer.pixmap,
+            P111_SCREEN_PROPERTY_FORMAT, &format) != 0 ||
+        g_linearizer.set_pixmap_iv(g_linearizer.pixmap,
+            P111_SCREEN_PROPERTY_BUFFER_SIZE, size) != 0 ||
+        g_linearizer.create_pixmap_buffer(g_linearizer.pixmap) != 0 ||
+        g_linearizer.get_pixmap_pv(g_linearizer.pixmap,
+            P111_SCREEN_PROPERTY_RENDER_BUFFERS, &buffer) != 0 ||
+        !buffer ||
+        g_linearizer.get_buffer_pv(buffer,
+            P111_SCREEN_PROPERTY_POINTER, (void **)&pixels) != 0 ||
+        !pixels ||
+        g_linearizer.get_buffer_iv(buffer,
+            P111_SCREEN_PROPERTY_STRIDE, &stride) != 0 ||
+        stride <= 0) {
+        altscreen_log("WARN PHASE=FRAME_LINEARIZER_PIXMAP backend=%s format=%d size=%ux%u result=FAILED errno=%d",
+                      backend == P111_LINEARIZER_NV12 ? "screen-nv12" : "screen-rgba",
+                      format, width, height, errno);
+        linearizer_release_pixmap_locked();
+        return 0;
+    }
+
+    if (g_linearizer.get_buffer_iv(buffer,
+            P111_SCREEN_PROPERTY_PLANAR_OFFSETS, offsets) != 0) {
+        offsets[0] = offsets[1] = offsets[2] = 0;
+    }
+
+    if ((backend == P111_LINEARIZER_NV12 && stride < (int)width) ||
+        (backend == P111_LINEARIZER_RGBA && stride < (int)(width * 4u))) {
+        altscreen_log("WARN PHASE=FRAME_LINEARIZER_PIXMAP backend=%s stride=%d size=%ux%u result=INVALID_STRIDE",
+                      backend == P111_LINEARIZER_NV12 ? "screen-nv12" : "screen-rgba",
+                      stride, width, height);
+        linearizer_release_pixmap_locked();
+        return 0;
+    }
+
+    g_linearizer.buffer = buffer;
+    g_linearizer.pixels = pixels;
+    g_linearizer.width = width;
+    g_linearizer.height = height;
+    g_linearizer.backend = backend;
+    g_linearizer.stride = stride;
+    g_linearizer.offsets[0] = offsets[0];
+    g_linearizer.offsets[1] = offsets[1];
+    g_linearizer.offsets[2] = offsets[2];
+
+    altscreen_log("PHASE=FRAME_LINEARIZER_PIXMAP backend=%s format=%d size=%ux%u stride=%d offsets=%d,%d,%d usage=0x%x result=READY",
+                  backend == P111_LINEARIZER_NV12 ? "screen-nv12" : "screen-rgba",
+                  format, width, height, stride,
+                  offsets[0], offsets[1], offsets[2], usage);
+    return 1;
+}
+
+static int linearizer_configure_locked(p111_screen_window_t window,
+                                       uint32_t width, uint32_t height,
+                                       uint32_t source_format,
+                                       uint32_t source_usage) {
+    int win_format = -1, win_usage = -1;
+    int win_size[2] = {0, 0};
+
+    if (!window || !width || !height) return 0;
+    if (!linearizer_open_api_locked()) return 0;
+    if (!linearizer_ensure_scratch_locked(width, height)) {
+        altscreen_log("ERROR PHASE=FRAME_LINEARIZER_SCRATCH size=%ux%u result=OOM", width, height);
+        return 0;
+    }
+
+    if (g_linearizer.pixmap &&
+        g_linearizer.width == width &&
+        g_linearizer.height == height)
+        return 1;
+
+    if (g_linearizer.get_window_iv) {
+        (void)g_linearizer.get_window_iv(window, P111_SCREEN_PROPERTY_FORMAT,
+                                         &win_format);
+        (void)g_linearizer.get_window_iv(window, P111_SCREEN_PROPERTY_USAGE,
+                                         &win_usage);
+        (void)g_linearizer.get_window_iv(window, P111_SCREEN_PROPERTY_SIZE,
+                                         win_size);
+    }
+    altscreen_log("PHASE=FRAME_NATIVE_WINDOW_METADATA window=%p config_format=%u config_usage=0x%x screen_format=%d screen_usage=0x%x screen_size=%dx%d measured_vendor_format=0x0001000c",
+                  window, source_format, source_usage,
+                  win_format, win_usage, win_size[0], win_size[1]);
+
+    g_linearizer.source_format = source_format;
+    g_linearizer.source_usage = source_usage;
+
+    if (linearizer_create_pixmap_locked(width, height,
+                                        P111_SCREEN_FORMAT_NV12,
+                                        P111_LINEARIZER_NV12))
+        return 1;
+
+    ++g_linearizer.fallback_count;
+    altscreen_log("PHASE=FRAME_LINEARIZER_FALLBACK from=screen-nv12 to=screen-rgba reason=NV12_PIXMAP_UNAVAILABLE count=%u",
+                  g_linearizer.fallback_count);
+    return linearizer_create_pixmap_locked(width, height,
+                                           P111_SCREEN_FORMAT_RGBA8888,
+                                           P111_LINEARIZER_RGBA);
+}
+
+static unsigned char linearizer_clamp_u8(int v) {
+    if (v < 0) return 0u;
+    if (v > 255) return 255u;
+    return (unsigned char)v;
+}
+
+static int linearizer_copy_nv12_to_scratch_locked(uint32_t width,
+                                                   uint32_t height) {
+    uint32_t dst_stride = align_up_u32(width, 128u);
+    uint32_t dst_padded_y = align_up_u32(height, 32u);
+    uint32_t uv_rows = (height + 1u) >> 1;
+    const unsigned char *src_y;
+    const unsigned char *src_uv;
+    uint32_t y;
+    int uv_offset;
+
+    if (!g_linearizer.pixels || g_linearizer.stride < (int)width)
+        return 0;
+    uv_offset = g_linearizer.offsets[1];
+    if (uv_offset <= g_linearizer.offsets[0]) {
+        /*
+         * Some Screen implementations leave PLANAR_OFFSETS at zero for a
+         * standard NV12 pixmap. In that case only accept the conventional
+         * linear offset implied by its own stride and visible height.
+         */
+        uv_offset = g_linearizer.stride * (int)height;
+    }
+
+    src_y = g_linearizer.pixels + g_linearizer.offsets[0];
+    src_uv = g_linearizer.pixels + uv_offset;
+    for (y = 0; y < height; ++y)
+        memcpy(g_linearizer.scratch + (size_t)y * dst_stride,
+               src_y + (size_t)y * g_linearizer.stride, width);
+    for (y = 0; y < uv_rows; ++y)
+        memcpy(g_linearizer.scratch +
+                   (size_t)dst_stride * dst_padded_y +
+                   (size_t)y * dst_stride,
+               src_uv + (size_t)y * g_linearizer.stride, width);
+    return 1;
+}
+
+static int linearizer_rgba_to_nv12_locked(uint32_t width, uint32_t height) {
+    uint32_t dst_stride = align_up_u32(width, 128u);
+    uint32_t dst_padded_y = align_up_u32(height, 32u);
+    unsigned char *dst_y;
+    unsigned char *dst_uv;
+    uint32_t x, y;
+
+    if (!g_linearizer.pixels ||
+        g_linearizer.stride < (int)(width * 4u))
+        return 0;
+
+    dst_y = g_linearizer.scratch;
+    dst_uv = g_linearizer.scratch + (size_t)dst_stride * dst_padded_y;
+
+    /*
+     * On the vehicle-tested MHI2Q Screen stack, SCREEN_FORMAT_RGBA8888 is
+     * CPU-visible as BGRA byte order. Convert to limited-range BT.601 NV12.
+     */
+    for (y = 0; y < height; ++y) {
+        const unsigned char *src =
+            g_linearizer.pixels + g_linearizer.offsets[0] +
+            (size_t)y * g_linearizer.stride;
+        unsigned char *dy = dst_y + (size_t)y * dst_stride;
+        for (x = 0; x < width; ++x) {
+            int b = src[(size_t)x * 4u + 0u];
+            int g = src[(size_t)x * 4u + 1u];
+            int r = src[(size_t)x * 4u + 2u];
+            dy[x] = linearizer_clamp_u8(
+                ((66 * r + 129 * g + 25 * b + 128) >> 8) + 16);
+        }
+    }
+
+    for (y = 0; y < height; y += 2u) {
+        const unsigned char *r0 =
+            g_linearizer.pixels + g_linearizer.offsets[0] +
+            (size_t)y * g_linearizer.stride;
+        const unsigned char *r1 =
+            g_linearizer.pixels + g_linearizer.offsets[0] +
+            (size_t)((y + 1u < height) ? y + 1u : y) * g_linearizer.stride;
+        unsigned char *duv = dst_uv + (size_t)(y >> 1) * dst_stride;
+
+        for (x = 0; x < width; x += 2u) {
+            uint32_t x1 = (x + 1u < width) ? x + 1u : x;
+            int b = (r0[(size_t)x * 4u + 0u] +
+                     r0[(size_t)x1 * 4u + 0u] +
+                     r1[(size_t)x * 4u + 0u] +
+                     r1[(size_t)x1 * 4u + 0u] + 2) >> 2;
+            int g = (r0[(size_t)x * 4u + 1u] +
+                     r0[(size_t)x1 * 4u + 1u] +
+                     r1[(size_t)x * 4u + 1u] +
+                     r1[(size_t)x1 * 4u + 1u] + 2) >> 2;
+            int r = (r0[(size_t)x * 4u + 2u] +
+                     r0[(size_t)x1 * 4u + 2u] +
+                     r1[(size_t)x * 4u + 2u] +
+                     r1[(size_t)x1 * 4u + 2u] + 2) >> 2;
+            duv[x] = linearizer_clamp_u8(
+                ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128);
+            if (x + 1u < width)
+                duv[x + 1u] = linearizer_clamp_u8(
+                    ((112 * r - 94 * g - 18 * b + 128) >> 8) + 128);
+        }
+    }
+    return 1;
+}
+
+static int linearizer_picture_has_detail_locked(uint32_t width,
+                                                 uint32_t height) {
+    unsigned minv = 255u, maxv = 0u, samples = 0u;
+    uint32_t x, y;
+
+    if (!g_linearizer.scratch || !width || !height) return 0;
+    for (y = 0; y < height; y += 16u) {
+        const unsigned char *row =
+            g_linearizer.scratch + (size_t)y * align_up_u32(width, 128u);
+        for (x = 0; x < width; x += 16u) {
+            unsigned v = row[x];
+            if (v < minv) minv = v;
+            if (v > maxv) maxv = v;
+            ++samples;
+        }
+    }
+    return samples >= 16u && maxv > minv + 6u;
+}
+
+int p111_frame_tap_write_window(void *stream, void *screen_window,
+                                uint32_t width, uint32_t height,
+                                uint32_t source_format,
+                                uint32_t source_usage) {
+    int rc;
+    int packed = 0;
+    int backend;
+    uint32_t requests;
+
+    if (!stream || !screen_window || !width || !height) return 0;
+    if (!env_truth("ALT111_DIRECT_FRAME_TAP", 1)) return 1;
+
+    linearizer_lock();
+    requests = ++g_linearizer.requests;
+
+    /*
+     * Stock private111 is normally ~60 fps while the VC sink targets ~30 fps.
+     * Do the blocking Screen readback only on every other render callback.
+     */
+    if ((requests & 1u) == 0u) {
+        linearizer_unlock();
+        return 1;
+    }
+
+    if (!linearizer_configure_locked((p111_screen_window_t)screen_window,
+                                     width, height,
+                                     source_format, source_usage)) {
+        ++g_linearizer.failures;
+        linearizer_unlock();
+        return 0;
+    }
+
+    errno = 0;
+    rc = g_linearizer.read_window((p111_screen_window_t)screen_window,
+                                  g_linearizer.buffer, 0, NULL, 0);
+    if (rc != 0 && g_linearizer.backend == P111_LINEARIZER_NV12) {
+        ++g_linearizer.fallback_count;
+        altscreen_log("WARN PHASE=FRAME_LINEARIZER_READ backend=screen-nv12 rc=%d errno=%d action=RGBA_RETRY count=%u",
+                      rc, errno, g_linearizer.fallback_count);
+        if (linearizer_create_pixmap_locked(width, height,
+                                            P111_SCREEN_FORMAT_RGBA8888,
+                                            P111_LINEARIZER_RGBA)) {
+            errno = 0;
+            rc = g_linearizer.read_window((p111_screen_window_t)screen_window,
+                                          g_linearizer.buffer, 0, NULL, 0);
+        }
+    }
+
+    if (rc != 0) {
+        ++g_linearizer.failures;
+        if (g_linearizer.failures == 1u ||
+            (g_linearizer.failures % 60u) == 0u) {
+            altscreen_log("ERROR PHASE=FRAME_LINEARIZER_READ backend=%s rc=%d errno=%d failures=%u action=V1_RAW_FAIL_OPEN",
+                          g_linearizer.backend == P111_LINEARIZER_NV12 ?
+                              "screen-nv12" : "screen-rgba",
+                          rc, errno, g_linearizer.failures);
+        }
+        linearizer_unlock();
+        return 0;
+    }
+
+    backend = g_linearizer.backend;
+    if (backend == P111_LINEARIZER_NV12)
+        packed = linearizer_copy_nv12_to_scratch_locked(width, height);
+    else if (backend == P111_LINEARIZER_RGBA)
+        packed = linearizer_rgba_to_nv12_locked(width, height);
+
+    if (!packed || !linearizer_picture_has_detail_locked(width, height)) {
+        ++g_linearizer.failures;
+        if (g_linearizer.failures == 1u ||
+            (g_linearizer.failures % 60u) == 0u) {
+            altscreen_log("WARN PHASE=FRAME_LINEARIZER_PIXEL backend=%s packed=%d detail=INVALID failures=%u action=V1_RAW_FAIL_OPEN",
+                          backend == P111_LINEARIZER_NV12 ?
+                              "screen-nv12" : "screen-rgba",
+                          packed, g_linearizer.failures);
+        }
+        linearizer_unlock();
+        return 0;
+    }
+
+    ++g_linearizer.frames;
+    if (g_linearizer.frames == 1u) {
+        altscreen_log("PHASE=FRAME_LINEARIZER_FIRST_FRAME backend=%s source_format=%u source_usage=0x%x size=%ux%u output=packed-nv12-v1-shm window58_readback=exact-stock-handle",
+                      backend == P111_LINEARIZER_NV12 ?
+                          "screen-nv12" : "screen-rgba-bt601",
+                      source_format, source_usage, width, height);
+    } else if ((g_linearizer.frames % 300u) == 0u) {
+        altscreen_log("PHASE=FRAME_LINEARIZER_PROGRESS backend=%s frames=%u requests=%u failures=%u fallbacks=%u size=%ux%u",
+                      backend == P111_LINEARIZER_NV12 ?
+                          "screen-nv12" : "screen-rgba-bt601",
+                      g_linearizer.frames, g_linearizer.requests,
+                      g_linearizer.failures, g_linearizer.fallback_count,
+                      width, height);
+    }
+
+    /*
+     * Scratch is deliberately shaped like the already measured padded linear
+     * NV12 contract so the V1 publisher can keep its proven 3-slot SHM race
+     * protection. This call only packs visible rows into /carplay111_decoded.
+     */
+    p111_frame_tap_write(stream, g_linearizer.scratch,
+                         width, height,
+                         P111_QNX_NV12_FORMAT_LEGACY,
+                         source_usage);
+    linearizer_unlock();
+    return 1;
+}
+
 void p111_frame_tap_write(void *stream, const unsigned char *buffer,
                           uint32_t width, uint32_t height,
                           uint32_t format, uint32_t usage) {
@@ -873,4 +1445,9 @@ void p111_direct_tap_stream_end(void *stream) {
         }
     }
     tap_unlock();
+
+    /* Screen pixmap/context belong to this private session's linearizer. */
+    linearizer_lock();
+    linearizer_shutdown_locked();
+    linearizer_unlock();
 }
