@@ -45,6 +45,7 @@ static int g_seen_frame;
 static int g_seen_sps;
 static int g_seen_pps;
 static int g_seen_idr;
+static uint32_t g_layout_error_logged_generation;
 static struct p111_avcc_cache g_avcc[P111_AVCC_CACHE_SLOTS];
 static unsigned g_avcc_recycle;
 
@@ -434,6 +435,7 @@ static void begin_stream_locked(void *stream) {
         g_seen_sps = 0;
         g_seen_pps = 0;
         g_seen_idr = 0;
+        g_layout_error_logged_generation = 0u;
         g_h264_map_attempts = 0;
         g_frame_map_attempts = 0;
         g_attach_logged_generation = 0;
@@ -710,8 +712,11 @@ void p111_frame_tap_write(void *stream, const unsigned char *buffer,
                                     &src_stride, &uv_offset);
     if (!padded) {
         ++g_frame->drop_count;
-        altscreen_log("ERROR PHASE=FRAME_TAP_UNSUPPORTED_LAYOUT stream=%p generation=%u buffer=%p config_format=%u config_usage=0x%x visible=%ux%u action=DROP_STOCK_FORWARD_UNCHANGED",
-                      stream, generation, buffer, format, usage, width, height);
+        if (g_layout_error_logged_generation != generation) {
+            g_layout_error_logged_generation = generation;
+            altscreen_log("ERROR PHASE=FRAME_TAP_UNSUPPORTED_LAYOUT stream=%p generation=%u buffer=%p config_format=%u config_usage=0x%x visible=%ux%u action=DROP_STOCK_FORWARD_UNCHANGED log_once_per_generation=1",
+                          stream, generation, buffer, format, usage, width, height);
+        }
         tap_unlock();
         return;
     }
