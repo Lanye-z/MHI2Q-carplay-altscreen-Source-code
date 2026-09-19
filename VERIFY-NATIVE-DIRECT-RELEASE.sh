@@ -53,8 +53,8 @@ grep -Fq 'context=80_java_only' "$INFO" ||
 
 grep -Fq 'p111_frame_tap_write(stream, buffer' "$NATIVE" ||
     fail "decoded NV12 tap is not wired before stock render"
-grep -Fq 'return 0;' "$NATIVE" ||
-    fail "native-route disable evidence missing"
+grep -A8 'static int native_route_requested' "$NATIVE" | grep -Fq 'return 0;' ||
+    fail "native route is not hard-disabled for direct-display V1"
 grep -Fq 'P111_QNX_NV12_FORMAT 65548u' "$TAP" ||
     fail "measured QNX NV12 format support missing"
 grep -Fq 'qnx_nv12_128x32' "$TAP" ||
