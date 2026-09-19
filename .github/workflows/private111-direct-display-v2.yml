@@ -239,6 +239,25 @@ jobs:
               text += 'decoded_linearizer=screen_read_window_nv12_then_rgba\n'
           info.write_text(text)
 
+          relsum = root / 'Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS'
+          reltable = {}
+          for line in relsum.read_text().splitlines():
+              parts = line.split(None, 1)
+              if len(parts) == 2:
+                  reltable[parts[1].strip()] = parts[0].lower()
+          for name in list(reltable):
+              p = relsum.parent / name
+              if p.is_file():
+                  reltable[name] = hashlib.sha256(p.read_bytes()).hexdigest()
+          for name in ['BUILD_INFO.txt', 'carplay-alt111-mirror-display',
+                       'start_vehicle.sh', 'stop_vehicle.sh',
+                       'libscreen_id_bridge.so']:
+              p = relsum.parent / name
+              if p.is_file():
+                  reltable[name] = hashlib.sha256(p.read_bytes()).hexdigest()
+          relsum.write_text(''.join('%s  %s\n' % (reltable[k], k)
+                                    for k in sorted(reltable)))
+
           additions = [
               hook_rel,
               'CARPLAY-PRIVATE111-DIRECT-DISPLAY-V2.md',
@@ -300,6 +319,7 @@ jobs:
           git add \
             "$dst" \
             Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt \
+            Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS \
             PACKAGE_SOURCE_MAP.json \
             SHA256SUMS.txt
 
