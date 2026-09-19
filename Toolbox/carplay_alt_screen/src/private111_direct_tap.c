@@ -891,6 +891,7 @@ struct p111_linearizer_state {
     uint32_t publish_drop;
     uint32_t failures;
     uint32_t fallback_count;
+    uint32_t slow_readback_count;
     uint32_t readback_max_us;
     uint32_t readback_hist_ms[65];
     uint32_t sample_count;
@@ -961,6 +962,7 @@ static void linearizer_shutdown_locked(void) {
     g_linearizer.publish_drop = 0;
     g_linearizer.failures = 0;
     g_linearizer.fallback_count = 0;
+    g_linearizer.slow_readback_count = 0;
     g_linearizer.readback_max_us = 0;
     memset(g_linearizer.readback_hist_ms, 0,
            sizeof(g_linearizer.readback_hist_ms));
@@ -1418,6 +1420,18 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
     t1 = tap_now_us32();
     elapsed = t1 - t0;
     linearizer_record_readback_us_locked(elapsed);
+    if (elapsed >= 20000u) {
+        ++g_linearizer.slow_readback_count;
+        if (g_linearizer.slow_readback_count == 1u ||
+            (g_linearizer.slow_readback_count % 60u) == 0u) {
+            altscreen_log("WARN PHASE=FRAME_LINEARIZER_SLOW readback_us=%u threshold_us=20000 backend=%s slow_count=%u requests=%u",
+                          (unsigned)elapsed,
+                          g_linearizer.backend == P111_LINEARIZER_NV12 ?
+                              "screen-nv12" : "screen-rgba",
+                          g_linearizer.slow_readback_count,
+                          g_linearizer.requests);
+        }
+    }
 
     if (rc != 0) {
         int had_good = g_linearizer.publish_success != 0u;
@@ -1496,7 +1510,7 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
     } else if ((g_linearizer.publish_success % 300u) == 0u) {
         unsigned p50 = linearizer_percentile_ms_locked(50u);
         unsigned p95 = linearizer_percentile_ms_locked(95u);
-        altscreen_log("PHASE=FRAME_LINEARIZER_PROGRESS backend=%s readbacks=%u published=%u publish_drops=%u requests=%u failures=%u fallbacks=%u readback_p50_ms=%u readback_p95_ms=%u readback_max_us=%u size=%ux%u",
+        altscreen_log("PHASE=FRAME_LINEARIZER_PROGRESS backend=%s readbacks=%u published=%u publish_drops=%u requests=%u failures=%u fallbacks=%u slow_readbacks=%u readback_p50_ms=%u readback_p95_ms=%u readback_max_us=%u size=%ux%u",
                       backend == P111_LINEARIZER_NV12 ?
                           "screen-nv12" : "screen-rgba-bt601",
                       g_linearizer.readback_success,
@@ -1505,6 +1519,7 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
                       g_linearizer.requests,
                       g_linearizer.failures,
                       g_linearizer.fallback_count,
+                      g_linearizer.slow_readback_count,
                       p50, p95, (unsigned)g_linearizer.readback_max_us,
                       width, height);
     }
@@ -1678,8 +1693,11 @@ int p111_frame_tap_write(void *stream, const unsigned char *buffer,
 
 void p111_direct_tap_stream_end(void *stream) {
     unsigned i;
+    int ended_current = 0;
+
     tap_lock();
     if (!stream || g_stream == stream) {
+        ended_current = 1;
         if (g_h264) {
             __sync_synchronize();
             g_h264->active = 0;
@@ -1693,6 +1711,9 @@ void p111_direct_tap_stream_end(void *stream) {
                       g_h264 ? g_h264->packet_count : 0u,
                       g_frame ? g_frame->frame_count : 0u);
         g_stream = NULL;
+    } else {
+        altscreen_log("PHASE=DIRECT111_TAP_STOP_STALE stream=%p current_stream=%p generation=%u action=IGNORE_LINEARIZER_TEARDOWN",
+                      stream, g_stream, g_generation);
     }
     if (stream) {
         for (i = 0; i < P111_AVCC_CACHE_SLOTS; ++i) {
@@ -1702,8 +1723,13 @@ void p111_direct_tap_stream_end(void *stream) {
     }
     tap_unlock();
 
-    /* Screen pixmap/context belong to this private session's linearizer. */
-    linearizer_lock();
-    linearizer_shutdown_locked();
-    linearizer_unlock();
+    /*
+     * A late teardown from an older stream must never destroy the Screen
+     * context/pixmap currently serving a newer private111 session.
+     */
+    if (ended_current) {
+        linearizer_lock();
+        linearizer_shutdown_locked();
+        linearizer_unlock();
+    }
 }
