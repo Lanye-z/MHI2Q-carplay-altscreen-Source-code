@@ -111,6 +111,8 @@ struct native_slot {
     int first_real_frame_posted;
     uint32_t config_width;
     uint32_t config_height;
+    uint32_t config_format;
+    uint32_t config_usage;
     uint64_t ui_event_at;
     uint64_t keyframe_event_at;
     int ui_event_state;       /* 0=needed, 1=inflight, 2=accepted, 3=timed-out */
@@ -1211,7 +1213,7 @@ int p1404_hook_cscreen_config(void *self, const struct p1404_screen_config *conf
         (void)p1404_cockpit_native_get_geometry(&target_width, &target_height);
         geometry_match = native_config.source_width == target_width &&
                          native_config.source_height == target_height;
-        altscreen_log("PHASE=NATIVE_111_CONFIG_RETURN receiver=%p stream=%p renderer=%p rc=%d input=%ux%u_source_%ux%u output=%ux%u_source_%ux%u target=%ux%u geometry_match=%d displayable=58 scaling=0 fixed_geometry=0 dm_managed=%d",
+        altscreen_log("PHASE=NATIVE_111_CONFIG_RETURN receiver=%p stream=%p renderer=%p rc=%d input=%ux%u_source_%ux%u output=%ux%u_source_%ux%u target=%ux%u geometry_match=%d displayable=58 format=%u usage=0x%x scaling=0 fixed_geometry=0 dm_managed=%d",
                       receiver, stream, self, rc,
                       config ? config->window_width : 0u,
                       config ? config->window_height : 0u,
@@ -1219,7 +1221,8 @@ int p1404_hook_cscreen_config(void *self, const struct p1404_screen_config *conf
                       config ? config->source_height : 0u,
                       native_config.window_width, native_config.window_height,
                       native_config.source_width, native_config.source_height,
-                      target_width, target_height, geometry_match, managed_ok);
+                      target_width, target_height, geometry_match,
+                      native_config.format, native_config.usage, managed_ok);
         if (rc == 0) {
             native_lock();
             slot = find_renderer_locked(self);
@@ -1229,6 +1232,8 @@ int p1404_hook_cscreen_config(void *self, const struct p1404_screen_config *conf
                 slot->config_ok = geometry_match;
                 slot->config_width = native_config.source_width;
                 slot->config_height = native_config.source_height;
+                slot->config_format = native_config.format;
+                slot->config_usage = native_config.usage;
                 slot->first_real_frame_posted = 0;
                 if (slot->keyframe_event_state == 2)
                     slot->keyframe_event_state = 0;
@@ -1262,6 +1267,8 @@ int p1404_hook_cscreen_render(void *self, unsigned char *buffer) {
     uint32_t state_generation = 0;
     uint32_t config_width = 0;
     uint32_t config_height = 0;
+    uint32_t config_format = 0;
+    uint32_t config_usage = 0;
     int config_ok = 0;
     int owned_private = 0;
     int first_real_post = 0;
@@ -1289,6 +1296,8 @@ int p1404_hook_cscreen_render(void *self, unsigned char *buffer) {
         config_ok = slot->config_ok;
         config_width = slot->config_width;
         config_height = slot->config_height;
+        config_format = slot->config_format;
+        config_usage = slot->config_usage;
     }
     native_unlock();
 
@@ -1300,7 +1309,8 @@ int p1404_hook_cscreen_render(void *self, unsigned char *buffer) {
      */
     if (owned_private && config_ok && stream && buffer &&
         config_width && config_height) {
-        p111_frame_tap_write(stream, buffer, config_width, config_height);
+        p111_frame_tap_write(stream, buffer, config_width, config_height,
+                             config_format, config_usage);
     }
 
     /* Keep the stock call fail-open during V1 so a tap/display failure cannot
