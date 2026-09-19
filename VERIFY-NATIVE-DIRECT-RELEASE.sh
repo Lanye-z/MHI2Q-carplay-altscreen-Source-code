@@ -64,10 +64,21 @@ grep -Fq 'lifecycle_watchdog_binary_rebuild_required=no' "$INFO" ||
 
 grep -Fq 'p111_frame_tap_write_window(stream, stock_window' "$NATIVE" ||
     fail "V2 Screen linearizer is not wired after stock render"
-grep -Fq '#define CSCREEN_WINDOW_OFF 0x08u' "$NATIVE" ||
-    fail "V2 exact stock window offset contract missing"
+grep -Fq 'screen_window_t window;' "$NATIVE" ||
+    fail "V2 native slot does not retain exact Screen window handle"
+grep -Fq 'managed_window = g_managed_config.window;' "$NATIVE" ||
+    fail "V2 config does not capture exact Screen window handle"
+grep -Fq 'slot->window = managed_window;' "$NATIVE" ||
+    fail "V2 exact Screen window handle is not persisted"
+grep -Fq 'stock_window = slot->window;' "$NATIVE" ||
+    fail "V2 render does not consume persisted Screen window handle"
+if grep -Fq 'CSCREEN_WINDOW_OFF' "$NATIVE"; then
+    fail "V2 must not infer Screen window via CScreenRender object offset"
+fi
 grep -Fq 'PHASE=FRAME_LINEARIZER_RAW_FALLBACK' "$NATIVE" ||
     fail "V2 raw diagnostic fail-open path missing"
+grep -Fq 'rate_limited=1' "$NATIVE" ||
+    fail "V2 raw fallback logging is not rate limited"
 grep -A8 'static int native_route_requested' "$NATIVE" | grep -Fq 'return 0;' ||
     fail "native route is not hard-disabled for direct-display V2"
 grep -Fq 'P111_QNX_NV12_FORMAT 65548u' "$TAP" ||
@@ -82,6 +93,10 @@ grep -Fq 'screen_read_window' "$TAP" ||
     fail "V2 Screen window linearizer missing"
 grep -Fq 'PHASE=FRAME_LINEARIZER_FIRST_FRAME' "$TAP" ||
     fail "V2 first linearized frame diagnostic missing"
+grep -Fq 'valid_uniform_frame' "$TAP" ||
+    fail "V2 uniform/black-frame acceptance missing"
+grep -Fq 'FREEZE_LAST_GOOD' "$TAP" ||
+    fail "V2 transient-failure freeze policy missing"
 grep -Fq 'decoder_backend=stock-omx-tap' "$SOURCE" ||
     fail "sidecar decoded source backend mismatch"
 
