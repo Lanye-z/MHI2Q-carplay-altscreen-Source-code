@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <unistd.h>
 
@@ -230,14 +231,29 @@ static p111_h264_shm_t *map_h264(void) {
      * to establish/retain the full ABI size before any reader can safely touch
      * the header. Readers independently fstat() before mmap.
      */
-    errno = 0;
-    if (ftruncate(fd, (off_t)bytes) != 0) {
-        err = errno;
-        altscreen_log("ERROR PHASE=H264_TAP_SHM_SIZE name=%s attempt=%u fd=%d bytes=%u errno=%d result=FAILED",
-                      P111_H264_SHM_NAME, g_h264_map_attempts, fd,
-                      (unsigned)bytes, err);
-        close(fd);
-        return NULL;
+    {
+        struct stat st;
+        memset(&st, 0, sizeof(st));
+        errno = 0;
+        if (fstat(fd, &st) != 0) {
+            err = errno;
+            altscreen_log("ERROR PHASE=H264_TAP_SHM_STAT name=%s attempt=%u fd=%d expected=%u errno=%d result=FAILED",
+                          P111_H264_SHM_NAME, g_h264_map_attempts, fd,
+                          (unsigned)bytes, err);
+            close(fd);
+            return NULL;
+        }
+        if ((uint64_t)(uint32_t)st.st_size < (uint64_t)bytes) {
+            errno = 0;
+            if (ftruncate(fd, (off_t)bytes) != 0) {
+                err = errno;
+                altscreen_log("ERROR PHASE=H264_TAP_SHM_SIZE name=%s attempt=%u fd=%d old_bytes=%u target_bytes=%u errno=%d result=FAILED",
+                              P111_H264_SHM_NAME, g_h264_map_attempts, fd,
+                              (unsigned)st.st_size, (unsigned)bytes, err);
+                close(fd);
+                return NULL;
+            }
+        }
     }
 
     errno = 0;
@@ -305,14 +321,29 @@ static p111_frame_shm_t *map_frame(void) {
         return NULL;
     }
 
-    errno = 0;
-    if (ftruncate(fd, (off_t)bytes) != 0) {
-        err = errno;
-        altscreen_log("ERROR PHASE=FRAME_TAP_SHM_SIZE name=%s attempt=%u fd=%d bytes=%u errno=%d result=FAILED",
-                      P111_FRAME_SHM_NAME, g_frame_map_attempts, fd,
-                      (unsigned)bytes, err);
-        close(fd);
-        return NULL;
+    {
+        struct stat st;
+        memset(&st, 0, sizeof(st));
+        errno = 0;
+        if (fstat(fd, &st) != 0) {
+            err = errno;
+            altscreen_log("ERROR PHASE=FRAME_TAP_SHM_STAT name=%s attempt=%u fd=%d expected=%u errno=%d result=FAILED",
+                          P111_FRAME_SHM_NAME, g_frame_map_attempts, fd,
+                          (unsigned)bytes, err);
+            close(fd);
+            return NULL;
+        }
+        if ((uint64_t)(uint32_t)st.st_size < (uint64_t)bytes) {
+            errno = 0;
+            if (ftruncate(fd, (off_t)bytes) != 0) {
+                err = errno;
+                altscreen_log("ERROR PHASE=FRAME_TAP_SHM_SIZE name=%s attempt=%u fd=%d old_bytes=%u target_bytes=%u errno=%d result=FAILED",
+                              P111_FRAME_SHM_NAME, g_frame_map_attempts, fd,
+                              (unsigned)st.st_size, (unsigned)bytes, err);
+                close(fd);
+                return NULL;
+            }
+        }
     }
 
     errno = 0;
