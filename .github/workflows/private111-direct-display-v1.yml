@@ -41,30 +41,29 @@ jobs:
           sh Toolbox/carplay_alt_screen/build_source_snapshot.sh universal "$out"
           test -s "$out/libcarplay_altscreen.so"
 
-          strings "$out/libcarplay_altscreen.so" | grep -Fq 'PHASE=H264_TAP_SHM_READY'
-          strings "$out/libcarplay_altscreen.so" | grep -Fq 'PHASE=H264_TAP_FIRST_DATA'
-          strings "$out/libcarplay_altscreen.so" | grep -Fq 'PHASE=H264_TAP_FIRST_SPS'
-          strings "$out/libcarplay_altscreen.so" | grep -Fq 'PHASE=H264_TAP_FIRST_PPS'
-          strings "$out/libcarplay_altscreen.so" | grep -Fq 'PHASE=H264_TAP_FIRST_IDR'
-          strings "$out/libcarplay_altscreen.so" | grep -Fq 'PHASE=DECODER_FIRST_FRAME backend=stock-omx-tap'
-          strings "$out/libcarplay_altscreen.so" | grep -Fq '/carplay111_h264'
-          strings "$out/libcarplay_altscreen.so" | grep -Fq '/carplay111_decoded'
+          for marker in             'PHASE=H264_TAP_SHM_READY'             'PHASE=H264_TAP_FIRST_DATA'             'PHASE=H264_TAP_FIRST_SPS'             'PHASE=H264_TAP_FIRST_PPS'             'PHASE=H264_TAP_FIRST_IDR'             'PHASE=H264_AVCC_CONFIG'             'PHASE=FRAME_TAP_LAYOUT'             'PHASE=DECODER_FIRST_FRAME backend=stock-omx-tap'             '/carplay111_h264'             '/carplay111_decoded'
+          do
+            strings "$out/libcarplay_altscreen.so" | grep -Fq "$marker"
+          done
 
           arm-linux-gnueabihf-readelf -d "$out/libcarplay_altscreen.so" | grep -q 'libc.so.3'
           arm-linux-gnueabihf-readelf -d "$out/libcarplay_altscreen.so" | grep -q 'libm.so.2'
+          arm-linux-gnueabihf-readelf --dyn-syms -W "$out/libcarplay_altscreen.so" | grep -Fq '_ScreenStreamSetProperty'
+
+          grep -Fq '#define PROT_READ   0x00000100' Toolbox/carplay_alt_screen/src/qnxshim/sys/mman.h
+          grep -Fq '#define PROT_WRITE  0x00000200' Toolbox/carplay_alt_screen/src/qnxshim/sys/mman.h
+
+          UNDEFINED="$(arm-linux-gnueabihf-readelf --dyn-syms -W "$out/libcarplay_altscreen.so" | grep UND | awk '{print $8}' | sort -u)"
+          BAD="$(printf '%s\n' "$UNDEFINED" | grep -E '^(__atomic|__sync|__aeabi|__gnu|__tls|__cxa|_Unwind)' || true)"
+          test -z "$BAD" || { echo "$BAD" >&2; exit 1; }
 
           echo "DIRECT111_HOOK_BUILD=PASS"
 
       - name: Syntax-check direct SHM source and NV12 renderer
         run: |
           set -euo pipefail
-          g++ -std=c++98 -Wall -Wextra -Werror -fsyntax-only \
-            -IToolbox/carplay_alt_screen/mirror_display/src \
-            -IToolbox/carplay_alt_screen/src \
-            Toolbox/carplay_alt_screen/mirror_display/src/private111_direct_source.cpp
-          g++ -std=c++98 -Wall -Wextra -Werror -fsyntax-only \
-            -IToolbox/carplay_alt_screen/mirror_display/src \
-            Toolbox/carplay_alt_screen/mirror_display/src/gl_renderer.cpp
+          g++ -std=c++98 -Wall -Wextra -Werror -fsyntax-only             -IToolbox/carplay_alt_screen/mirror_display/src             -IToolbox/carplay_alt_screen/src             Toolbox/carplay_alt_screen/mirror_display/src/private111_direct_source.cpp
+          g++ -std=c++98 -Wall -Wextra -Werror -fsyntax-only             -IToolbox/carplay_alt_screen/mirror_display/src             Toolbox/carplay_alt_screen/mirror_display/src/gl_renderer.cpp
           echo "DIRECT111_CPP_SYNTAX=PASS"
 
       - name: Prove private-only fail-open tap placement
@@ -75,17 +74,25 @@ jobs:
 
           air = Path('Toolbox/carplay_alt_screen/src/p1404_airplay.c').read_text()
           native = Path('Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c').read_text()
+          tap = Path('Toolbox/carplay_alt_screen/src/private111_direct_tap.c').read_text()
           side = Path('Toolbox/carplay_alt_screen/mirror_display/src/main.cpp').read_text()
           make = Path('Toolbox/carplay_alt_screen/mirror_display/Makefile').read_text()
 
           assert 'const int private_video = alt_state_feed_private_video' in air
           assert 'if (private_video) p111_h264_tap_write' in air
           assert air.index('alt_state_feed_private_video') < air.index('p111_h264_tap_write')
+          assert 'p111_h264_tap_note_avcc' in air
+          assert '_ScreenStreamSetProperty' in air
 
-          tap = native.index('p111_frame_tap_write(stream, buffer')
-          stock = native.index('rc = g_real_render(self, buffer);', tap)
-          assert tap < stock
+          tap_pos = native.index('p111_frame_tap_write(stream, buffer')
+          stock_pos = native.index('rc = g_real_render(self, buffer);', tap_pos)
+          assert tap_pos < stock_pos
           assert 'Keep the stock call fail-open during V1' in native
+
+          assert 'PROT_READ | PROT_WRITE' in tap
+          assert 'PHASE=H264_AVCC_CONFIG' in tap
+          assert 'source_layout=%s' in tap
+          assert 'qnx_nv12_128x32' in tap
 
           assert '#include "private111_direct_source.h"' in side
           assert 'carplay_window_source.h' not in side
@@ -95,7 +102,7 @@ jobs:
 
           assert 'private111_direct_source.cpp' in make
           assert 'carplay_window_source.cpp' not in make
-          print('DIRECT111_SOURCE_CONTRACT=PASS private_only_tap=1 stock_forward=1 window58_readback=0')
+          print('DIRECT111_SOURCE_CONTRACT=PASS private_only=1 avcc_config=1 stock_forward=1 window58_readback=0')
           PY
 
       - name: Shell syntax
@@ -107,12 +114,23 @@ jobs:
           done
           echo "DIRECT111_SHELL_SYNTAX=PASS"
 
-      - name: Enforce release honesty
+      - name: Enforce direct-display sidecar release
         run: |
           set -euo pipefail
-          grep -Fq 'release_binary_status=STALE_REBUILD_REQUIRED' Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt
-          grep -Fq 'vehicle_zip_status=NOT_READY_UNTIL_QNX_REBUILD_AND_PROMOTION' Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt
-          echo "DIRECT111_RELEASE_STATUS=SOURCE_READY_BINARY_PENDING"
+          info=Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt
+          bin=Toolbox/carplay_alt_screen/mirror_display/release/carplay-alt111-mirror-display
+
+          grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V1' "$info"
+          grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$info"
+          test -s "$bin"
+          strings "$bin" | grep -Fq 'carplay-private111-direct-display-v1'
+          strings "$bin" | grep -Fq 'PHASE=DISPLAYABLE3_FIRST_PRESENT'
+          strings "$bin" | grep -Fq 'PHASE=DIRECT111_ACTIVE'
+          if strings "$bin" | grep -Fq 'screen_read_window'; then
+            echo "DIRECT111_RELEASE_FAIL stale Window58 readback symbol present" >&2
+            exit 1
+          fi
+          echo "DIRECT111_RELEASE_STATUS=VEHICLE_SIDECAR_READY"
 
       - name: Promote validated universal hook
         if: github.ref == 'refs/heads/carplay-private111-direct-display-v1'
@@ -125,19 +143,27 @@ jobs:
           export HOOK_SHA
 
           python3 <<'PY'
-          import hashlib, json, os, pathlib, re
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import re
+
           root = pathlib.Path('.')
           hook_rel = 'Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so'
           hook_sha = os.environ['HOOK_SHA']
 
-          info = root/'Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt'
+          info = root / 'Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt'
           text = info.read_text()
-          if re.search(r'^universal_runtime_sha256=.*, text, flags=re.M):
-              text = re.sub(r'^universal_runtime_sha256=.*,
-                            'universal_runtime_sha256='+hook_sha,
-                            text, flags=re.M)
+          if re.search(r'^universal_runtime_sha256=.*$', text, flags=re.M):
+              text = re.sub(
+                  r'^universal_runtime_sha256=.*$',
+                  'universal_runtime_sha256=' + hook_sha,
+                  text,
+                  flags=re.M,
+              )
           else:
-              text += 'universal_runtime_sha256='+hook_sha+'\n'
+              text += 'universal_runtime_sha256=' + hook_sha + '\n'
           info.write_text(text)
 
           additions = [
@@ -147,7 +173,14 @@ jobs:
               'Toolbox/carplay_alt_screen/src/private111_direct_shm.h',
               'Toolbox/carplay_alt_screen/src/private111_direct_tap.h',
               'Toolbox/carplay_alt_screen/src/private111_direct_tap.c',
+              'Toolbox/carplay_alt_screen/src/p1404_airplay.c',
+              'Toolbox/carplay_alt_screen/src/p1404_airplay.h',
+              'Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c',
+              'Toolbox/carplay_alt_screen/src/aug22_dynamic_reloc.c',
+              'Toolbox/carplay_alt_screen/src/libcarplay_altscreen.map',
+              'Toolbox/carplay_alt_screen/src/build_qnx_arm.sh',
               'Toolbox/carplay_alt_screen/src/qnxshim/sys/mman.h',
+              'Toolbox/carplay_alt_screen/src/qnxshim/errno.h',
               'Toolbox/carplay_alt_screen/mirror_display/src/private111_direct_source.h',
               'Toolbox/carplay_alt_screen/mirror_display/src/private111_direct_source.cpp',
               'Toolbox/carplay_alt_screen/mirror_display/src/main.cpp',
@@ -158,32 +191,33 @@ jobs:
               'Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt',
               'Toolbox/carplay_alt_screen/mirror_display/release/start_vehicle.sh',
               'Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt',
+              'Toolbox/scripts/status_mmi_cockpit_carplay_test.sh',
           ]
 
-          package = root/'PACKAGE_SOURCE_MAP.json'
+          package = root / 'PACKAGE_SOURCE_MAP.json'
           data = json.loads(package.read_text())
           for rel in list(data):
-              p = root/rel
+              p = root / rel
               if p.is_file():
                   data[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
           for rel in additions:
-              p = root/rel
+              p = root / rel
               if p.is_file():
                   data[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
-          package.write_text(json.dumps(data, indent=2, ensure_ascii=False)+'\n')
+          package.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n')
 
-          sums = root/'SHA256SUMS.txt'
+          sums = root / 'SHA256SUMS.txt'
           table = {}
           for line in sums.read_text().splitlines():
               parts = line.split(None, 1)
               if len(parts) == 2:
                   table[parts[1].strip()] = parts[0].lower()
           for rel in list(table):
-              p = root/rel
+              p = root / rel
               if p.is_file():
                   table[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
           for rel in additions + ['PACKAGE_SOURCE_MAP.json']:
-              p = root/rel
+              p = root / rel
               if p.is_file():
                   table[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
           sums.write_text(''.join('%s %s\n' % (table[k], k) for k in sorted(table)))
@@ -191,11 +225,13 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "$dst"             Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt             PACKAGE_SOURCE_MAP.json SHA256SUMS.txt
+          git add             "$dst"             Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt             PACKAGE_SOURCE_MAP.json             SHA256SUMS.txt
+
           if ! git diff --cached --quiet; then
-            git commit -m "build(direct111): promote validated H264 tap runtime [skip ci]"
+            git commit -m "build(direct111): promote fixed mmap AVCC runtime [skip ci]"
             git fetch origin carplay-private111-direct-display-v1
             git rebase origin/carplay-private111-direct-display-v1
             git push origin HEAD:carplay-private111-direct-display-v1
           fi
+
           echo "DIRECT111_HOOK_PROMOTED_SHA256=$HOOK_SHA"
