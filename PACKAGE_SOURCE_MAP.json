@@ -14,7 +14,7 @@
   "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java": "89d5eb2871d3cb09a2e0fb00d90d6eb7809173816012074767e5368d504c8818",
   "Toolbox/carplay_alt_screen/hmi/stubs/de/audi/atip/base/IFrameworkAccess.java": "e093d6e7ed0c0e641311a35aaa7ef6b04228808ae001eff29d821229023dfba6",
   "Toolbox/carplay_alt_screen/mirror_display/Makefile": "b4d34c47d2ae45c88d9de448c0ec13cedcc527225b9f792660b06e8f663e0369",
-  "Toolbox/carplay_alt_screen/mirror_display/VENDORED_SOURCE.txt": "f5f7cc2b8f7ccc36753219cf1234221e7dac19f8825d5d623006b96c086b305b",
+  "Toolbox/carplay_alt_screen/mirror_display/VENDORED_SOURCE.txt": "2e2f0bcb2f69e995df3e53959d043307dc441da7f218999fb3d94a19efcbe532",
   "Toolbox/carplay_alt_screen/mirror_display/build_qnx.sh": "3c2caf35ecb183e7234cb5147a11ef9d82540b2135f214ac8f10749ffd1cde50",
   "Toolbox/carplay_alt_screen/mirror_display/build_screen_id_bridge.sh": "667d861e12a7963e13eaf22d65429376ffb752a2b89c4378cc118f89427d69c7",
   "Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt": "428123ccb3a975b360ff3f6cf0a2e21fada04170e7ec03a80dba45d3ed88b9bc",
