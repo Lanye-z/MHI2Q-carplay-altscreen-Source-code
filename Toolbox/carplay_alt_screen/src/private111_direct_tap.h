@@ -16,10 +16,11 @@ void p111_h264_tap_note_avcc(void *stream, const void *data, size_t bytes);
 
 void p111_h264_tap_write(void *stream, const void *data, size_t bytes);
 
-/* V1 raw-pointer fallback. Kept fail-open for diagnostics only in V2. */
-void p111_frame_tap_write(void *stream, const unsigned char *buffer,
-                          uint32_t width, uint32_t height,
-                          uint32_t format, uint32_t usage);
+/* Publish a known-linear NV12 frame into /carplay111_decoded.
+ * Returns non-zero only when a new SHM frame was actually committed. */
+int p111_frame_tap_write(void *stream, const unsigned char *buffer,
+                         uint32_t width, uint32_t height,
+                         uint32_t format, uint32_t usage);
 
 /*
  * V2 preferred path. Call this only after stock CScreenRender::render() has
@@ -27,9 +28,11 @@ void p111_frame_tap_write(void *stream, const unsigned char *buffer,
  * stock window into a normal pixmap, which lets the platform linearize the
  * vendor 0x0001000c layout before the existing packed-NV12 SHM contract.
  *
- * Returns non-zero when the frame was published or deliberately frame-paced.
- * Returns zero when Screen linearization failed; callers may use the V1 raw
- * pointer path as a diagnostic fail-open fallback.
+ * Returns non-zero when the frame was published, deliberately frame-paced,
+ * or a post-success transient failure is handled by freezing the last good
+ * auxiliary frame. Returns zero only before the first good auxiliary frame
+ * when Screen linearization cannot provide a safe pixel source. Raw vendor
+ * buffers are never published as a fallback.
  */
 int p111_frame_tap_write_window(void *stream, void *screen_window,
                                 uint32_t width, uint32_t height,
