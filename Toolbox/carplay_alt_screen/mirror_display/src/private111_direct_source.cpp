@@ -370,17 +370,34 @@ bool Private111DirectSource::read_frame(VideoFrame *frame) {
     }
 
     if (seq1 == last_sequence_) return false;
+
+    /*
+     * /carplay111_decoded is a packed-tight NV12 ABI. Reject inconsistent
+     * metadata before memcpy/render so a stale or torn header can never make
+     * the GLES CSC walk beyond local_frame_.
+     */
+    const size_t expected_bytes =
+        (width && height && stride == width && width <= 4096u &&
+         height <= 4096u && !(width & 1u) && !(height & 1u))
+            ? (size_t)stride * (size_t)height +
+              (size_t)stride * (size_t)(height >> 1)
+            : 0u;
+
     if (slot >= P111_FRAME_SLOTS || !width || !height || !stride ||
-        format != P111_FRAME_FORMAT_NV12 || !bytes ||
+        format != P111_FRAME_FORMAT_NV12 || stride != width ||
+        (width & 1u) || (height & 1u) ||
+        width > 4096u || height > 4096u ||
+        !bytes || !expected_bytes || bytes != expected_bytes ||
         bytes > P111_FRAME_SLOT_BYTES || bytes > local_capacity_) {
         fprintf(stderr,
                 "direct111: ERROR PHASE=DECODED_FRAME_METADATA writer_pid=%u "
                 "seq=%u gen=%u cookie=0x%08x slot=%u size=%ux%u stride=%u "
-                "format=%u bytes=%u\n",
+                "format=%u bytes=%u expected_bytes=%lu packed_tight_required=1\n",
                 (unsigned)writer1, (unsigned)seq1, (unsigned)gen,
                 (unsigned)cookie, (unsigned)slot,
                 (unsigned)width, (unsigned)height, (unsigned)stride,
-                (unsigned)format, (unsigned)bytes);
+                (unsigned)format, (unsigned)bytes,
+                (unsigned long)expected_bytes);
         return false;
     }
 
@@ -424,7 +441,13 @@ bool Private111DirectSource::read_frame(VideoFrame *frame) {
     frame->format = PIXEL_FORMAT_NV12;
     frame->timestamp_us = now_us();
 
-    if (getenv("ALT111_CONSUMER_SAMPLE_NV12") &&
+    const char *sample_env = getenv("ALT111_CONSUMER_SAMPLE_NV12");
+    if (sample_env && *sample_env &&
+        strcmp(sample_env, "0") != 0 &&
+        strcmp(sample_env, "NO") != 0 &&
+        strcmp(sample_env, "no") != 0 &&
+        strcmp(sample_env, "false") != 0 &&
+        strcmp(sample_env, "FALSE") != 0 &&
         sample_count_ < 3u) {
         char sample_path[160];
         FILE *sample;
