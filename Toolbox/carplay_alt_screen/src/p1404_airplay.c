@@ -1263,6 +1263,8 @@ void *alt_bootstrap_server_create(void) {
 
 typedef int (*screen_stream_set_property_fn)(
     const void *, unsigned, void *, const void *, const void *);
+int _ScreenStreamSetProperty(const void *stream, unsigned flags, void *property,
+                             const void *qualifier, const void *value);
 static screen_stream_set_property_fn real_stream_set_property;
 
 static screen_stream_set_property_fn stock_stream_set_property_target(void) {
