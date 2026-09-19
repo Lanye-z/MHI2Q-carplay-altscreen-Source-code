@@ -41,11 +41,23 @@ if grep -Fq 'release_binary_status=V1_BINARY_STALE_V2_SOURCE_REBUILD_REQUIRED' "
     SOURCE_ONLY=1
     grep -Fq 'vehicle_zip_status=NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED' "$INFO" ||
         fail "source-only V2 must not be marked vehicle-ready"
-    for marker in         'carplay-private111-direct-display-v1'         'PHASE=H264_SHM_ATTACHED'         'PHASE=DECODER_FIRST_FRAME'         'PHASE=DISPLAYABLE3_FIRST_PRESENT'         'PHASE=DIRECT111_ACTIVE'
+    for marker in 'carplay-private111-direct-display-v1' 'PHASE=H264_SHM_ATTACHED' 'PHASE=DECODER_FIRST_FRAME' 'PHASE=DISPLAYABLE3_FIRST_PRESENT' 'PHASE=DIRECT111_ACTIVE'
     do
         binary_strings "$BIN" | grep -Fq "$marker" ||
             fail "stale V1 sidecar marker missing: $marker"
     done
+elif grep -Fq 'release_binary_status=V2_BINARY_STALE_HARDENING_REBUILD_REQUIRED' "$INFO"; then
+    SOURCE_ONLY=1
+    grep -Fq 'vehicle_zip_status=NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED' "$INFO" ||
+        fail "hardened V2 source must not be marked vehicle-ready before rebuild"
+    for marker in 'carplay-private111-direct-display-v2' 'PHASE=DECODED_SHM_WAIT_SIZE' 'PHASE=SOURCE_SESSION' 'PHASE=GATE_RECOVER_CURRENT_SESSION' 'PHASE=DISPLAYABLE3_FIRST_PRESENT' 'PHASE=DIRECT111_ACTIVE'
+    do
+        binary_strings "$BIN" | grep -Fq "$marker" ||
+            fail "previous V2 sidecar marker missing while awaiting hardening rebuild: $marker"
+    done
+    if binary_strings "$BIN" | grep -Fq 'matching_identity_plus_frame_progress'; then
+        fail "BUILD_INFO says hardening rebuild required but binary already contains final recovery marker"
+    fi
 elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$INFO"; then
     grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$INFO" ||
         fail "rebuilt V2 sidecar is not marked vehicle-ready"
@@ -123,6 +135,10 @@ grep -Fq 'shm_publish_success=1' "$TAP" ||
     fail "readback vs SHM publish success accounting missing"
 grep -Fq 'readback_p50_ms=' "$TAP" ||
     fail "readback latency percentile diagnostics missing"
+grep -Fq 'PHASE=FRAME_LINEARIZER_SLOW' "$TAP" ||
+    fail "slow synchronous readback diagnostic missing"
+grep -Fq 'DIRECT111_TAP_STOP_STALE' "$TAP" ||
+    fail "stale-stream teardown isolation missing"
 grep -Fq 'ALT111_LINEARIZER_SAMPLE_NV12' "$TAP" ||
     fail "opt-in producer NV12 sampling missing"
 if grep -Fq 'V1_RAW_FAIL_OPEN' "$TAP"; then
@@ -139,6 +155,8 @@ grep -Fq 'PHASE=SOURCE_SESSION' "$SOURCE" ||
     fail "consumer writer/session identity tracking missing"
 grep -Fq 'current_session_active' "$SOURCE" ||
     fail "same-session recovery validation missing"
+grep -Fq 'packed_tight_required=1' "$SOURCE" ||
+    fail "packed NV12 metadata guard missing"
 grep -Fq 'ALT111_CONSUMER_SAMPLE_NV12' "$SOURCE" ||
     fail "opt-in consumer NV12 sampling missing"
 grep -Fq 'decoder_backend=stock-omx-tap' "$SOURCE" ||
@@ -146,6 +164,8 @@ grep -Fq 'decoder_backend=stock-omx-tap' "$SOURCE" ||
 
 grep -Fq 'PHASE=GATE_RECOVER_CURRENT_SESSION' "$MAIN_CPP" ||
     fail "same-session gate recovery path missing"
+grep -Fq 'matching_identity_plus_frame_progress' "$MAIN_CPP" ||
+    fail "same-session recovery does not require fresh frame progress"
 grep -Fq 'carplay-private111-direct-display-v2' "$MAIN_CPP" ||
     fail "V2 sidecar source build id missing"
 
@@ -180,6 +200,8 @@ grep -Fq 'MIRROR_ABNORMAL_RESTART=SCHEDULED' "$LAUNCH" ||
     fail "launcher abnormal pre-first-present recovery missing"
 grep -Fq 'ALT111_RECOVER_CURRENT_SESSION=1' "$LAUNCH" ||
     fail "launcher does not request validated same-session recovery"
+grep -Fq 'phase=before_first_present' "$LAUNCH" ||
+    fail "launcher does not honor private111 teardown before first present"
 grep -Fq 'ALT111_MIRROR_RESTART_REASON=private111_session_end' "$LAUNCH" ||
     fail "launcher next-session autorestart missing"
 grep -Fq 'stop.requested' "$LAUNCH" ||
@@ -188,6 +210,13 @@ grep -Fq 'lifecycle.pid' "$RELEASE_STOP" ||
     fail "release stop does not terminate lifecycle watcher"
 grep -Fq ': > "$STOP_GUARD"' "$RELEASE_STOP" ||
     fail "release stop does not publish stop guard before teardown"
+grep -Fq 'RECOVERY_LOCK=' "$RELEASE_STOP" ||
+    fail "release stop recovery lock path missing"
+if grep -Fq '"$NS/stop.requested"' "$RELEASE_STOP" | grep -Fq 'rm -f'; then
+    fail "release stop must retain stop guard to suppress delayed restart"
+fi
+grep -Fq 'stop_guard=RETAINED' "$RELEASE_STOP" ||
+    fail "release stop does not advertise retained stop guard"
 
 grep -Fq 'echo observe > "$STATE_DIR/IAP2_PROFILE"' "$CTRL" ||
     fail "corrected iAP2 observe policy missing"
