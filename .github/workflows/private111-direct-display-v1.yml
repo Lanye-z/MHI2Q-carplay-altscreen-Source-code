@@ -41,7 +41,7 @@ jobs:
           sh Toolbox/carplay_alt_screen/build_source_snapshot.sh universal "$out"
           test -s "$out/libcarplay_altscreen.so"
 
-          for marker in             'PHASE=H264_TAP_SHM_READY'             'PHASE=H264_TAP_FIRST_DATA'             'PHASE=H264_TAP_FIRST_SPS'             'PHASE=H264_TAP_FIRST_PPS'             'PHASE=H264_TAP_FIRST_IDR'             'PHASE=H264_AVCC_CONFIG'             'PHASE=FRAME_TAP_LAYOUT'             'PHASE=DECODER_FIRST_FRAME backend=stock-omx-tap'             '/carplay111_h264'             '/carplay111_decoded'
+          for marker in             'PHASE=H264_TAP_SHM_READY'             'PHASE=H264_TAP_FIRST_DATA'             'PHASE=H264_TAP_FIRST_SPS'             'PHASE=H264_TAP_FIRST_PPS'             'PHASE=H264_TAP_FIRST_IDR'             'PHASE=H264_AVCC_PROPERTY'             'PHASE=H264_AVCC_CONFIG'             'PHASE=H264_TAP_SHM_RECOVERED'             'PHASE=FRAME_TAP_SHM_RECOVERED'             'PHASE=FRAME_TAP_LAYOUT'             'PHASE=FRAME_TAP_UNSUPPORTED_LAYOUT'             'PHASE=DECODER_FIRST_FRAME backend=stock-omx-tap'             '/carplay111_h264'             '/carplay111_decoded'
           do
             strings "$out/libcarplay_altscreen.so" | grep -Fq "$marker"
           done
@@ -90,9 +90,14 @@ jobs:
           assert 'Keep the stock call fail-open during V1' in native
 
           assert 'PROT_READ | PROT_WRITE' in tap
+          assert 'PHASE=H264_AVCC_PROPERTY' in tap
           assert 'PHASE=H264_AVCC_CONFIG' in tap
+          assert 'PHASE=H264_TAP_SHM_RECOVERED' in tap
+          assert 'PHASE=FRAME_TAP_SHM_RECOVERED' in tap
+          assert 'PHASE=FRAME_TAP_UNSUPPORTED_LAYOUT' in tap
           assert 'source_layout=%s' in tap
           assert 'qnx_nv12_128x32' in tap
+          assert '"tight_fallback"' not in tap
 
           assert '#include "private111_direct_source.h"' in side
           assert 'carplay_window_source.h' not in side
