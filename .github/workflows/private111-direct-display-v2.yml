@@ -1,0 +1,275 @@
+name: CarPlay private111 Direct Display V2
+
+on:
+  push:
+    branches:
+      - carplay-private111-direct-display-v2
+    paths:
+      - '.github/workflows/private111-direct-display-v2.yml'
+      - 'Toolbox/carplay_alt_screen/src/**'
+      - 'Toolbox/carplay_alt_screen/mirror_display/**'
+      - 'Toolbox/carplay_alt_screen/hmi/**'
+      - 'Toolbox/scripts/**'
+      - 'CARPLAY-PRIVATE111-DIRECT-DISPLAY-V2.md'
+      - 'READ-ME-FIRST.md'
+  workflow_dispatch:
+
+concurrency:
+  group: private111-direct-display-v2
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  validate-direct111-v2:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: carplay-private111-direct-display-v2
+          fetch-depth: 0
+
+      - name: Install ARM inspection tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang lld g++ binutils-arm-linux-gnueabihf python3-pyelftools libgles2-mesa-dev
+
+      - name: Build universal private111 V2 hook
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/private111-direct-v2-hook"
+          sh Toolbox/carplay_alt_screen/build_source_snapshot.sh universal "$out"
+          test -s "$out/libcarplay_altscreen.so"
+
+          for marker in \
+            'PHASE=H264_TAP_SHM_READY' \
+            'PHASE=H264_TAP_FIRST_DATA' \
+            'PHASE=H264_TAP_FIRST_IDR' \
+            'PHASE=FRAME_NATIVE_WINDOW_METADATA' \
+            'PHASE=FRAME_LINEARIZER_API' \
+            'PHASE=FRAME_LINEARIZER_PIXMAP' \
+            'PHASE=FRAME_LINEARIZER_FALLBACK' \
+            'PHASE=FRAME_LINEARIZER_FIRST_FRAME' \
+            'PHASE=FRAME_LINEARIZER_RAW_FALLBACK' \
+            'screen_read_window' \
+            '/carplay111_h264' \
+            '/carplay111_decoded'
+          do
+            strings "$out/libcarplay_altscreen.so" | grep -Fq "$marker"
+          done
+
+          arm-linux-gnueabihf-readelf -d "$out/libcarplay_altscreen.so" | grep -q 'libc.so.3'
+          arm-linux-gnueabihf-readelf -d "$out/libcarplay_altscreen.so" | grep -q 'libm.so.2'
+          arm-linux-gnueabihf-readelf --dyn-syms -W "$out/libcarplay_altscreen.so" | grep -Fq '_ScreenStreamSetProperty'
+
+          # Screen APIs are runtime-resolved by dlsym; V2 must not add a hard libscreen dependency.
+          if arm-linux-gnueabihf-readelf --dyn-syms -W "$out/libcarplay_altscreen.so" |
+             grep ' UND ' | grep -Eq 'screen_read_window|screen_create_pixmap|screen_create_context'; then
+            echo "DIRECT111_V2_FAIL hard Screen symbol dependency" >&2
+            exit 1
+          fi
+
+          UNDEFINED="$(arm-linux-gnueabihf-readelf --dyn-syms -W "$out/libcarplay_altscreen.so" | grep UND | awk '{print $8}' | sort -u)"
+          BAD="$(printf '%s\n' "$UNDEFINED" | grep -E '^(__atomic|__sync|__aeabi|__gnu|__tls|__cxa|_Unwind)' || true)"
+          test -z "$BAD" || { echo "$BAD" >&2; exit 1; }
+
+          echo "DIRECT111_V2_HOOK_BUILD=PASS"
+
+      - name: Prove V2 linearizer placement and fail-open contract
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          native = Path('Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c').read_text()
+          tap = Path('Toolbox/carplay_alt_screen/src/private111_direct_tap.c').read_text()
+          header = Path('Toolbox/carplay_alt_screen/src/private111_direct_tap.h').read_text()
+          side = Path('Toolbox/carplay_alt_screen/mirror_display/src/main.cpp').read_text()
+          source = Path('Toolbox/carplay_alt_screen/mirror_display/src/private111_direct_source.cpp').read_text()
+
+          render_start = native.index('int p1404_hook_cscreen_render(void *self, unsigned char *buffer) {')
+          stock = native.index('rc = g_real_render(self, buffer);', render_start)
+          linear = native.index('p111_frame_tap_write_window(stream, stock_window', stock)
+          raw = native.index('p111_frame_tap_write(stream, buffer', linear)
+          assert stock < linear < raw
+          assert '#define CSCREEN_WINDOW_OFF 0x08u' in native
+          assert 'FRAME_LINEARIZER_RAW_FALLBACK' in native
+          assert 'Main110 never enters this branch' in native
+
+          assert 'p111_frame_tap_write_window' in header
+          assert 'P111_QNX_NV12_FORMAT 65548u' in tap
+          assert 'P111_SCREEN_FORMAT_NV12 12' in tap
+          assert 'P111_SCREEN_FORMAT_RGBA8888 8' in tap
+          assert 'P111_SCREEN_PROPERTY_PLANAR_OFFSETS 33' in tap
+          assert 'screen_read_window' in tap
+          assert 'FRAME_NATIVE_WINDOW_METADATA' in tap
+          assert 'FRAME_LINEARIZER_FIRST_FRAME' in tap
+          assert 'action=RGBA_RETRY' in tap
+          assert 'action=V1_RAW_FAIL_OPEN' in tap
+          assert 'linearizer_rgba_to_nv12_locked' in tap
+          assert 'linearizer_picture_has_detail_locked' in tap
+          assert '(requests & 1u) == 0u' in tap
+
+          # Display half stays the V1-proven sidecar.
+          assert 'PHASE=DIRECT111_ACTIVE' in side
+          assert 'decoder_backend=stock-omx-tap' in source
+          assert 'carplay_window_source.h' not in side
+          print('DIRECT111_V2_SOURCE_CONTRACT=PASS stock_first=1 screen_linearizer=1 nv12_then_rgba=1 raw_fail_open=1 sidecar_unchanged=1')
+          PY
+
+      - name: Syntax-check unchanged display sidecar sources
+        run: |
+          set -euo pipefail
+          g++ -std=c++98 -Wall -Wextra -Werror -fsyntax-only \
+            -IToolbox/carplay_alt_screen/mirror_display/src \
+            -IToolbox/carplay_alt_screen/src \
+            Toolbox/carplay_alt_screen/mirror_display/src/private111_direct_source.cpp
+          g++ -std=c++98 -Wall -Wextra -Werror -fsyntax-only \
+            -IToolbox/carplay_alt_screen/mirror_display/src \
+            Toolbox/carplay_alt_screen/mirror_display/src/gl_renderer.cpp
+          echo "DIRECT111_V2_SIDECAR_SOURCE=PASS"
+
+      - name: Check vehicle scripts
+        run: |
+          set -euo pipefail
+          for f in \
+            Toolbox/carplay_alt_screen/mirror_display/release/start_vehicle.sh \
+            Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh \
+            Toolbox/scripts/altscreen_chain_test.sh \
+            Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh \
+            Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh \
+            Toolbox/scripts/status_mmi_cockpit_carplay_test.sh \
+            Toolbox/scripts/stop_mmi_cockpit_carplay_test.sh
+          do
+            sh -n "$f"
+          done
+          echo "DIRECT111_V2_SHELL=PASS"
+
+      - name: Verify V1-proven display binary is intentionally reused
+        run: |
+          set -euo pipefail
+          info=Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt
+          bin=Toolbox/carplay_alt_screen/mirror_display/release/carplay-alt111-mirror-display
+          test -s "$bin"
+          grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V1' "$info"
+          grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$info"
+          strings "$bin" | grep -Fq 'PHASE=DISPLAYABLE3_FIRST_PRESENT'
+          strings "$bin" | grep -Fq 'PHASE=DIRECT111_ACTIVE'
+          if strings "$bin" | grep -Fq 'screen_read_window'; then
+            echo "DIRECT111_V2_FAIL sidecar unexpectedly contains Window58 reader" >&2
+            exit 1
+          fi
+          echo "DIRECT111_V2_DISPLAY_BINARY=V1_PROVEN_UNCHANGED"
+
+      - name: Promote validated V2 universal hook
+        if: github.ref == 'refs/heads/carplay-private111-direct-display-v2'
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/private111-direct-v2-hook"
+          dst="Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so"
+          cp "$out/libcarplay_altscreen.so" "$dst"
+          HOOK_SHA="$(sha256sum "$dst" | awk '{print tolower($1)}')"
+          export HOOK_SHA
+
+          python3 <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import re
+
+          root = pathlib.Path('.')
+          hook_rel = 'Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so'
+          hook_sha = os.environ['HOOK_SHA']
+
+          info = root / 'Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt'
+          text = info.read_text()
+          if re.search(r'^universal_runtime_sha256=.*$', text, flags=re.M):
+              text = re.sub(
+                  r'^universal_runtime_sha256=.*$',
+                  'universal_runtime_sha256=' + hook_sha,
+                  text,
+                  flags=re.M,
+              )
+          else:
+              text += 'universal_runtime_sha256=' + hook_sha + '\n'
+          if re.search(r'^direct_display_revision=.*$', text, flags=re.M):
+              text = re.sub(
+                  r'^direct_display_revision=.*$',
+                  'direct_display_revision=carplay-private111-direct-display-v2',
+                  text,
+                  flags=re.M,
+              )
+          else:
+              text += 'direct_display_revision=carplay-private111-direct-display-v2\n'
+          if re.search(r'^decoded_linearizer=.*$', text, flags=re.M):
+              text = re.sub(
+                  r'^decoded_linearizer=.*$',
+                  'decoded_linearizer=screen_read_window_nv12_then_rgba',
+                  text,
+                  flags=re.M,
+              )
+          else:
+              text += 'decoded_linearizer=screen_read_window_nv12_then_rgba\n'
+          info.write_text(text)
+
+          additions = [
+              hook_rel,
+              'CARPLAY-PRIVATE111-DIRECT-DISPLAY-V2.md',
+              'READ-ME-FIRST.md',
+              '.github/workflows/private111-direct-display-v2.yml',
+              'Toolbox/carplay_alt_screen/src/private111_direct_shm.h',
+              'Toolbox/carplay_alt_screen/src/private111_direct_tap.h',
+              'Toolbox/carplay_alt_screen/src/private111_direct_tap.c',
+              'Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c',
+              'Toolbox/carplay_alt_screen/mirror_display/release/carplay-alt111-mirror-display',
+              'Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt',
+              'Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt',
+          ]
+
+          package = root / 'PACKAGE_SOURCE_MAP.json'
+          data = json.loads(package.read_text())
+          for rel in list(data):
+              p = root / rel
+              if p.is_file():
+                  data[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
+          for rel in additions:
+              p = root / rel
+              if p.is_file():
+                  data[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
+          package.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n')
+
+          sums = root / 'SHA256SUMS.txt'
+          table = {}
+          for line in sums.read_text().splitlines():
+              parts = line.split(None, 1)
+              if len(parts) == 2:
+                  table[parts[1].strip()] = parts[0].lower()
+          for rel in list(table):
+              p = root / rel
+              if p.is_file():
+                  table[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
+          for rel in additions + ['PACKAGE_SOURCE_MAP.json']:
+              p = root / rel
+              if p.is_file():
+                  table[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
+          sums.write_text(''.join('%s %s\n' % (table[k], k) for k in sorted(table)))
+          PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            "$dst" \
+            Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt \
+            PACKAGE_SOURCE_MAP.json \
+            SHA256SUMS.txt
+
+          if ! git diff --cached --quiet; then
+            git commit -m "build(direct111-v2): promote Screen-linearizer runtime [skip ci]"
+            git fetch origin carplay-private111-direct-display-v2
+            git rebase origin/carplay-private111-direct-display-v2
+            git push origin HEAD:carplay-private111-direct-display-v2
+          fi
+
+          echo "DIRECT111_V2_HOOK_PROMOTED_SHA256=$HOOK_SHA"
