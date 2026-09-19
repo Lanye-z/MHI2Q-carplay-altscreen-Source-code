@@ -5,11 +5,20 @@
 #include <stdint.h>
 #include <unistd.h>
 
-#define PROT_NONE  0x0
-#define PROT_READ  0x1
-#define PROT_WRITE 0x2
+/*
+ * QNX Neutrino 6.x mmap protection bits are NOT the Linux 0x1/0x2 values.
+ * P1404 vehicle evidence showed both direct111 SHM writers reaching mmap()
+ * and failing before any pixels/codec bytes reached the sidecar.  Keep these
+ * exact QNX values in the freestanding universal-hook shim.
+ */
+#define PROT_NONE   0x00000000
+#define PROT_READ   0x00000100
+#define PROT_WRITE  0x00000200
+#define PROT_EXEC   0x00000400
+#define PROT_NOCACHE 0x00000800
 
-#define MAP_SHARED 0x0001
+#define MAP_SHARED  0x00000001
+#define MAP_PRIVATE 0x00000002
 #define MAP_FAILED ((void *)-1)
 
 extern int shm_open(const char *name, int oflag, unsigned int mode);
