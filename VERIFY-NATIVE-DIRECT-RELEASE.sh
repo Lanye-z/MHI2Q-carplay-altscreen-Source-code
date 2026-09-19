@@ -217,6 +217,8 @@ grep -Fq 'ALT111_RECOVER_CURRENT_SESSION=1' "$LAUNCH" ||
     fail "launcher does not request validated same-session recovery"
 grep -Fq 'phase=before_first_present' "$LAUNCH" ||
     fail "launcher does not honor private111 teardown before first present"
+grep -Fq "grep -c 'PHASE=DIRECT111_TAP_STOP stream='" "$LAUNCH" ||
+    fail "launcher teardown counter can be polluted by stale teardown markers"
 grep -Fq 'ALT111_MIRROR_RESTART_REASON=private111_session_end' "$LAUNCH" ||
     fail "launcher next-session autorestart missing"
 grep -Fq 'stop.requested' "$LAUNCH" ||
