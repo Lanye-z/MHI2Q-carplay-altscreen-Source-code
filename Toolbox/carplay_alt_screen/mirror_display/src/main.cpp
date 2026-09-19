@@ -106,6 +106,7 @@ static bool wait_for_phone111_gate() {
     static const char kFlatHookLog[] = "/tmp/altscreen_hook.log";
     char consumed[1024];
     char candidate[1024];
+    char candidate_source[48];
     char line[1024];
     bool have_hook_init = false;
     bool reported_waiting = false;
@@ -115,6 +116,7 @@ static bool wait_for_phone111_gate() {
 
     load_consumed_gate(consumed, sizeof(consumed));
     candidate[0] = 0;
+    candidate_source[0] = 0;
 
     while (!g_stop) {
         if (!f) {
@@ -154,14 +156,30 @@ static bool wait_for_phone111_gate() {
             if (strstr(line, "PHASE=HOOK_INIT")) {
                 have_hook_init = true;
                 candidate[0] = 0;
+                candidate_source[0] = 0;
                 reported_consumed = false;
                 continue;
             }
 
+            /*
+             * PHONE_REQUESTED_ALTSCREEN=YES is a process-level state marker and
+             * may only be emitted once for the lifetime of dio_manager.
+             * STREAM_111_REQUESTED=YES is emitted for every actual type111
+             * setup request. Accept either, preferring the repeated request
+             * marker as the per-session gate so normal disconnect/reconnect in
+             * one dio_manager process cannot strand the sidecar.
+             */
             if (have_hook_init &&
-                strstr(line, "PHASE=PHONE_REQUEST_111") &&
-                strstr(line, "PHONE_REQUESTED_ALTSCREEN=YES")) {
-                copy_line(candidate, sizeof(candidate), line);
+                strstr(line, "PHASE=PHONE_REQUEST_111")) {
+                if (strstr(line, "STREAM_111_REQUESTED=YES")) {
+                    copy_line(candidate, sizeof(candidate), line);
+                    copy_line(candidate_source, sizeof(candidate_source),
+                              "stream111-request");
+                } else if (strstr(line, "PHONE_REQUESTED_ALTSCREEN=YES")) {
+                    copy_line(candidate, sizeof(candidate), line);
+                    copy_line(candidate_source, sizeof(candidate_source),
+                              "phone-marker");
+                }
             }
         }
 
@@ -170,7 +188,8 @@ static bool wait_for_phone111_gate() {
                 if (!reported_consumed) {
                     fprintf(stderr,
                             "direct111: PHASE=GATE_CONSUMED "
-                            "waiting_for_next_private111_session=1\n");
+                            "source=%s waiting_for_next_private111_session=1\n",
+                            candidate_source[0] ? candidate_source : "unknown");
                     reported_consumed = true;
                 }
             } else {
@@ -187,7 +206,9 @@ static bool wait_for_phone111_gate() {
                 }
                 fprintf(stderr,
                         "direct111: PHASE=GATE_PASS trigger=PHONE_REQUEST_111 "
-                        "next=H264_TAP_AND_DECODER_SHM\n");
+                        "gate_source=%s policy=stream111_request_or_phone_marker "
+                        "next=H264_TAP_AND_DECODER_SHM\n",
+                        candidate_source[0] ? candidate_source : "unknown");
                 return true;
             }
         }
