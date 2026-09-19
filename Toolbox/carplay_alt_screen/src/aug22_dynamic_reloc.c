@@ -113,6 +113,7 @@ extern void ScreenCopyMain(void);
 extern void ScreenStreamStart(void);
 extern void ScreenStreamCreate(void);
 extern void ScreenStreamProcessData(void);
+extern void _ScreenStreamSetProperty(void);
 extern void screen_create_window_group(void);
 extern void screen_create_window_buffers(void);
 extern void aug22_cscreen_config(void)
@@ -390,6 +391,7 @@ static int try_install(void) {
         { "_ZN3dio13CScreenRender6renderEPh", (uintptr_t)&aug22_cscreen_render, 0u },
         { "ScreenCopyMain", (uintptr_t)&ScreenCopyMain, 0u },
         { "ScreenStreamProcessData", (uintptr_t)&ScreenStreamProcessData, 0u },
+        { "_ScreenStreamSetProperty", (uintptr_t)&_ScreenStreamSetProperty, 0u },
         { "AirPlayReceiverSessionScreen_CopyDisplaysInfo", (uintptr_t)&AirPlayReceiverSessionScreen_CopyDisplaysInfo, 0u },
         { "ScreenStreamCreate", (uintptr_t)&ScreenStreamCreate, 0u },
         { "_ZN3dio13CScreenRender6configERKNS_16st_screen_configE", (uintptr_t)&aug22_cscreen_config, 0u },
@@ -424,8 +426,17 @@ static int try_install(void) {
                            targets, target_count, slots, &slot_count))
         goto structural_refuse;
     if (!slot_count) goto structural_refuse;
-    for (i = 0; i < target_count; ++i)
-        if (targets[i].found == 0u) goto structural_refuse;
+    for (i = 0; i < target_count; ++i) {
+        /*
+         * _ScreenStreamSetProperty is present on the measured P1404/K1004
+         * stock images and is required for complete codec-config evidence.
+         * Keep it optional on unknown AUG22 siblings so lack of one internal
+         * relocation never disables the already-proven private111 chain.
+         */
+        if (targets[i].found == 0u &&
+            strcmp(targets[i].name, "_ScreenStreamSetProperty") != 0)
+            goto structural_refuse;
+    }
 
     /* Complete validation above, first mutation below. */
     for (i = 0; i < slot_count; ++i) *slots[i].slot = slots[i].target;
