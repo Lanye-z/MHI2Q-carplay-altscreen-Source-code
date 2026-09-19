@@ -15,6 +15,8 @@ extern void altscreen_log(const char *fmt, ...);
 #define P111_AVCC_CACHE_SLOTS 8u
 #define P111_AVCC_CACHE_MAX   512u
 #define P111_MAP_MAX_ATTEMPTS 3u
+/* QNX Neutrino dlopen flag; same ABI value already used by the P1404 hook. */
+#define P111_RTLD_NOW 2
 
 /* QNX Screen/WFD NV12 format observed on the 1440x542 private111 buffers. */
 #define P111_QNX_NV12_FORMAT 65548u
@@ -829,8 +831,8 @@ static int linearizer_open_api_locked(void) {
     void *lib;
     if (g_linearizer.lib) return 1;
 
-    lib = dlopen("libscreen.so.1", RTLD_LAZY);
-    if (!lib) lib = dlopen("libscreen.so", RTLD_LAZY);
+    lib = dlopen("libscreen.so.1", P111_RTLD_NOW);
+    if (!lib) lib = dlopen("libscreen.so", P111_RTLD_NOW);
     if (!lib) {
         altscreen_log("ERROR PHASE=FRAME_LINEARIZER_API backend=screen-read-window dlopen=FAILED");
         return 0;
