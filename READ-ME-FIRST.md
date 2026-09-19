@@ -1,116 +1,108 @@
-# CarPlay private111 Direct Display V1 — first vehicle test
+# CarPlay private111 Direct Display V2 — vehicle test
 
-Branch: `carplay-private111-direct-display-v1`
+Branch: `carplay-private111-direct-display-v2`
 
-This branch is intentionally frozen at the **prove-the-picture-first** stage.
-Do not add `screen_blit`, zero-copy or a standalone Qualcomm decoder before the
-first vehicle run.
+V1 has now answered the large architectural question: the CarPlay private
+type111 stream can reach the Audi Virtual Cockpit through stock OMX,
+displayable3 and Java-owned Context80. The V1 vehicle showed a continuously
+moving but garbled map, so V2 changes **only the decoded pixel-layout boundary**.
 
-## Actual V1 pipeline
+## Actual V2 pipeline
 
 ```text
 iPhone CarPlay private type111
   -> stock AirPlay control / framing
   -> ScreenStreamProcessData
-  -> /carplay111_h264 (independent compressed-stream evidence)
-  -> stock Qualcomm OMX decoder
-  -> private CScreenRender decoded NV12
-  -> /carplay111_decoded (3-slot decoded fallback)
+  -> /carplay111_h264
+  -> stock Qualcomm/i.MX6 OMX decoder
+  -> vendor Screen format 0x0001000c
+  -> stock CScreenRender post
+  -> exact stock screen_window_t
+  -> QNX screen_read_window linearizer
+       -> standard NV12 pixmap when supported
+       -> otherwise RGBA8888 -> CPU BT.601 -> NV12
+  -> /carplay111_decoded (unchanged V1 ABI)
+  -> existing V1 QNX sidecar
   -> CPU BT.601 NV12 -> RGBA
   -> GLES / libdisplayinit
-  -> displayable3 (1440x455)
+  -> displayable3
   -> Java/HMI Context80 = {98,101,102,3}
   -> Virtual Cockpit
 ```
 
-The sidecar does **not** call `screen_read_window()`, does not consume Window58
-pixels, and does not write terminal/context state. Java/HMI is the sole Context80
-owner. Main110 remains on the stock path.
+The sidecar itself still does not enumerate/read Window58. V2 obtains the exact
+stock private renderer window inside the hook after the stock render call; this
+avoids the old WindowManager identity/visibility guessing path.
 
-The current iAP2 policy is deliberately `observe` with `ARMED_IAP2` absent.
-Do not re-enable the retired ThemeAssets 21/17 mutation for this test. The
-private type111 path is armed through the info/feature/create111 controls.
+Main110 remains stock. Java/HMI remains the sole Context80 owner.
 
-## Release identity
+## What changed from V1
 
-The checked-in QNX ARMv7 sidecar is the promoted direct-display V1 candidate:
+V1 used the correct measured metadata:
 
 ```text
-release_binary_status=PRIVATE111_DIRECT_DISPLAY_V1
-vehicle_zip_status=READY_FOR_VEHICLE_TEST
-window58_readback=disabled
-mirror_sink=displayable3_gles
-context=80_java_only
+1440x542
+Screen format 65548 / 0x0001000c
+stride 1536
+UV offset 0xCC000
 ```
 
-The universal hook is rebuilt/promoted by the branch CI. Source changes to the
-sidecar itself require a real QNX 6.5 ARMv7 rebuild before they may be treated as
-vehicle-ready.
+but copied rows directly from the vendor pointer as if it were ordinary linear
+NV12. The moving garble proved that the pointer contains live decoded data but
+not in the assumed row-linear memory layout.
 
-## Recommended first-car sequence
+V2 no longer implements a guessed i.MX6 detile formula. QNX Screen performs the
+vendor-layout conversion by screenshotting the exact stock window into a normal
+off-screen pixmap.
 
-1. If an older AltScreen/MMI-Cockpit-Carplay experiment is still installed,
-   restore that package to stock first and perform a complete MMI reboot.
-2. Use a clean ZIP of **this branch**. Keep this vehicle's own backup/log
-   directories; do not import backups from another vehicle.
-3. Keep the iPhone disconnected while installing.
-4. Run **INSTALL**, confirm it reports PASS, then perform a complete MMI reboot.
-5. Run **START**, confirm it reports PASS, then perform a second complete MMI
-   reboot. This ensures the preload, Java80 controller and boot sidecar all start
-   from the same armed state.
-6. Connect the iPhone only after the second reboot. Open a navigation route that
-   normally supplies the instrument-cluster second screen.
-7. Leave the session connected while collecting **STATUS / logs**.
+## Expected V2 evidence
 
-If the sidecar has already consumed a `PHONE_REQUEST_111` gate and is manually
-restarted during the same phone session, reconnect CarPlay before judging the
-retry. A new session produces a new gate token.
-
-## Expected evidence order
-
-The useful progression for one run is:
+The new markers to watch are:
 
 ```text
-PHASE=PHONE_REQUEST_111 ... PHONE_REQUESTED_ALTSCREEN=YES
-PHASE=STREAM_111_ACCEPT_RETURN
-PHASE=VIDEO_111_FIRST_PAYLOAD
+PHASE=FRAME_NATIVE_WINDOW_METADATA
+PHASE=FRAME_LINEARIZER_API ... result=READY
+PHASE=FRAME_LINEARIZER_PIXMAP backend=screen-nv12 ... result=READY
+# OR automatic fallback:
+PHASE=FRAME_LINEARIZER_FALLBACK ... to=screen-rgba
+PHASE=FRAME_LINEARIZER_PIXMAP backend=screen-rgba ... result=READY
 
-PHASE=H264_TAP_SHM_READY
-PHASE=H264_TAP_FIRST_DATA
-PHASE=H264_AVCC_PROPERTY / PHASE=H264_AVCC_CONFIG
-PHASE=H264_TAP_FIRST_IDR
-
-PHASE=FRAME_TAP_SHM_READY
-PHASE=FRAME_TAP_LAYOUT ... qnx_nv12_128x32
+PHASE=FRAME_LINEARIZER_FIRST_FRAME
 PHASE=DECODER_FIRST_FRAME backend=stock-omx-tap
-
-direct111: PHASE=GATE_PASS
-direct111: PHASE=DECODED_SHM_ATTACHED
-direct111: PHASE=DECODER_FIRST_FRAME
-renderer: PHASE=NV12_CSC_READY backend=cpu-bt601
-direct111: PHASE=DISPLAYABLE3_FIRST_PRESENT result=OK
+renderer: PHASE=NV12_CSC_READY
+PHASE=DISPLAYABLE3_FIRST_PRESENT
 CTX80_OBSERVED actual=80
-direct111: PHASE=DIRECT111_ACTIVE
+PHASE=DIRECT111_ACTIVE
 ```
 
-STATUS should then converge to:
+If `PHASE=FRAME_LINEARIZER_RAW_FALLBACK` appears, Screen linearization failed
+on that frame and V2 intentionally preserved the V1 raw-pointer path so the
+CarPlay session remains fail-open. A moving garbled picture together with this
+marker is therefore useful evidence rather than a route regression.
 
-```text
-PHYSICAL_ROUTE_READY=SOFTWARE_CHAIN_COMPLETE
-```
+## Vehicle-test procedure
 
-That line means the observable software chain is complete. The final success
-criterion is still **a visible CarPlay second-screen image on the VC**.
+Use the same clean install/start sequence as V1:
 
-## First-run interpretation
+1. Keep the iPhone disconnected during install.
+2. Install the branch package and complete a real MMI reboot.
+3. Run START and complete the requested second real MMI reboot.
+4. Connect the iPhone, open a CarPlay navigation route, and leave the session
+   connected long enough to collect STATUS/logs.
+5. Record whether the VC is correct, black, frozen, or still moving/garbled.
+6. Save the full log bundle before restoring or changing branches.
 
-If H264 evidence is present but there is no decoded frame, stay on the
-stock-OMX/tap boundary. If decoded NV12 exists but displayable3 fails, stay on
-the sidecar/GLES boundary. If displayable3 first-present succeeds but Context80
-is not observed, stay on Java/HMI ownership. Do not change multiple layers at
-once.
+## Deliberately not mixed into V2
 
-The current sidecar intentionally keeps the proven CPU NV12-to-RGBA path for
-this first run. Hardware CSC / `screen_blit`, direct NV12 composition and
-standalone Qualcomm decoding are follow-up optimizations after physical
-visibility is confirmed.
+Do not add these until the pixel result is known:
+
+- FFmpeg stream-player;
+- standalone H.264 decoder;
+- `screen_blit`;
+- zero-copy/native-image import;
+- a new displayable;
+- a new Context;
+- a different CarPlay type111 state machine.
+
+The checked-in display sidecar is intentionally the V1-proven binary. V2 CI
+rebuilds/promotes the universal hook that contains the new Screen linearizer.
