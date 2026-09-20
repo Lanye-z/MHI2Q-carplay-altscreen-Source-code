@@ -52,7 +52,15 @@ count=$(cat "$CARD"/MMI-Cockpit-Carplay/logs/mirror.log* "$FALLBACK" 2>/dev/null
 }
 
 # Busy SD lock and absent card both fall back without an error exit.
-mkdir "$CARD/MMI-Cockpit-Carplay/logs/.mirror.lock"
+if [ -e "$CARD/MMI-Cockpit-Carplay/logs/.mirror.lock" ]; then
+    echo "LOG_RING_HOST_TEST=FAIL stage=producer_lock_leaked_before_busy_fixture" >&2
+    ls -ld "$CARD/MMI-Cockpit-Carplay/logs/.mirror.lock" >&2 || true
+    exit 1
+fi
+mkdir "$CARD/MMI-Cockpit-Carplay/logs/.mirror.lock" || {
+    echo "LOG_RING_HOST_TEST=FAIL stage=busy_fixture_lock_create" >&2
+    exit 1
+}
 printf 'BUSY_FALLBACK\n' | sh "$SCRIPT" pipe mirror "$FALLBACK"
 grep -Fq BUSY_FALLBACK "$FALLBACK" || {
     echo "LOG_RING_HOST_TEST=FAIL stage=busy_lock_fallback_missing" >&2
