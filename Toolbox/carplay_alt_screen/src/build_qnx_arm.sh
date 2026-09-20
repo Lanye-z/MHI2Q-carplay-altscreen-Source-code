@@ -186,8 +186,11 @@ echo "QNX_ELF_INVARIANTS=PASS"
 
 for marker in \
   'rate_policy=uncapped_source_callbacks' \
-  'ALTAREA_LAYOUT_SAFE_V1' \
+  'ALTAREA_LAYOUT_SAFE_V2' \
   '/tmp/mmi-mirror-hmi.state' \
+  'safe_source=' \
+  'safe_physical=' \
+  'renderer_offset=' \
   'renderer_scale=0'
 do
   grep -a -Fq "$marker" "$SO" || {
