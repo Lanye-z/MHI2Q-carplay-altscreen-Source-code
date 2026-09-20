@@ -11,9 +11,8 @@
 static volatile sig_atomic_t g_stop = 0;
 static const unsigned kNoFramePollUs = 5000u;
 static const unsigned kDecodedStallReportUs = 120000u;
-static const unsigned kOemLayoutProbeUs = 250000u;
 static const char kBuildId[] =
-    "carplay-private111-direct-display-v2-source-driven-layout-v2";
+    "carplay-private111-direct-display-v2-source-driven-v2";
 
 static const char *volatile_path(const char *key, const char *fallback) {
     const char *v = getenv(key);
@@ -43,11 +42,6 @@ static const char *hook_log_path() {
 static const char *displayable_state_path() {
     return volatile_path("ALT111_DISPLAYABLE_STATE_FILE",
                          "/tmp/mmi-mirror-displayable3.state");
-}
-
-static const char *oem_geometry_state_path() {
-    return volatile_path("ALT111_OEM_GEOMETRY_STATE_FILE",
-                         "/tmp/carplay-oem-geometry.state");
 }
 
 static unsigned long long now_us() {
@@ -245,172 +239,6 @@ static void copy_line(char *dst, size_t cap, const char *src) {
     strncpy(dst, src, cap - 1u);
     dst[cap - 1u] = 0;
     strip_eol(dst);
-}
-
-
-struct OemLayoutState {
-    bool valid;
-    unsigned long revision;
-    int x;
-    int y;
-    int width;
-    int height;
-    int map_width;
-    int map_height;
-    int carplay_session;
-    char view[16];
-    char layout_class[128];
-    char layout_name[32];
-};
-
-static bool parse_state_long(const char *line, const char *key, long *value) {
-    if (!line || !key || !value) return false;
-    const size_t n = strlen(key);
-    if (strncmp(line, key, n) != 0 || line[n] != '=') return false;
-    char *end = 0;
-    const long parsed = strtol(line + n + 1u, &end, 10);
-    if (end == line + n + 1u) return false;
-    *value = parsed;
-    return true;
-}
-
-static bool parse_state_text(const char *line, const char *key,
-                             char *out, size_t cap) {
-    if (!line || !key || !out || !cap) return false;
-    const size_t n = strlen(key);
-    if (strncmp(line, key, n) != 0 || line[n] != '=') return false;
-    strncpy(out, line + n + 1u, cap - 1u);
-    out[cap - 1u] = 0;
-    strip_eol(out);
-    return true;
-}
-
-static bool load_oem_layout_state(OemLayoutState *state,
-                                  int output_width,
-                                  int output_height) {
-    if (!state) return false;
-    memset(state, 0, sizeof(*state));
-    state->x = -1;
-    state->y = -1;
-    state->width = -1;
-    state->height = -1;
-    state->map_width = -1;
-    state->map_height = -1;
-    state->carplay_session = -1;
-
-    FILE *f = fopen(oem_geometry_state_path(), "r");
-    if (!f) return false;
-
-    bool observer_ok = false;
-    char line[512];
-    while (fgets(line, sizeof(line), f)) {
-        strip_eol(line);
-        long value = 0;
-        char text[160];
-
-        if (parse_state_text(line, "observer", text, sizeof(text))) {
-            observer_ok = strcmp(text, "OEM_LAYOUT_OBSERVER_V1") == 0;
-        } else if (parse_state_long(line, "valid", &value)) {
-            state->valid = value == 1;
-        } else if (parse_state_long(line, "revision", &value)) {
-            state->revision = value > 0 ? (unsigned long)value : 0ul;
-        } else if (parse_state_long(line, "visible_active_x", &value)) {
-            state->x = (int)value;
-        } else if (parse_state_long(line, "visible_active_y", &value)) {
-            state->y = (int)value;
-        } else if (parse_state_long(line, "visible_active_w", &value)) {
-            state->width = (int)value;
-        } else if (parse_state_long(line, "visible_active_h", &value)) {
-            state->height = (int)value;
-        } else if (parse_state_long(line, "map_width_effective", &value)) {
-            state->map_width = (int)value;
-        } else if (parse_state_long(line, "map_height_effective", &value)) {
-            state->map_height = (int)value;
-        } else if (parse_state_long(line, "carplay_session", &value)) {
-            state->carplay_session = (int)value;
-        } else if (parse_state_text(line, "view",
-                                    state->view, sizeof(state->view))) {
-        } else if (parse_state_text(line, "layout_class",
-                                    state->layout_class,
-                                    sizeof(state->layout_class))) {
-        }
-    }
-    fclose(f);
-
-    if (!observer_ok || !state->valid || !state->revision)
-        return false;
-    if (state->carplay_session == 0)
-        return false;
-    if (state->map_width != output_width ||
-        state->map_height != output_height)
-        return false;
-    if (state->x < 0 || state->y < 0 ||
-        state->width <= 0 || state->height <= 0 ||
-        state->x + state->width > output_width ||
-        state->y + state->height > output_height)
-        return false;
-
-    const bool sport = strstr(state->layout_class, "Sport") != 0;
-    const bool small = strcmp(state->view, "SMALL") == 0;
-    snprintf(state->layout_name, sizeof(state->layout_name),
-             "%s_%s",
-             sport ? "SPORT" : "CLASSIC",
-             small ? "SMALL" : "FULL");
-    return true;
-}
-
-static void maybe_apply_oem_layout(ClusterVideoDisplay &display,
-                                   unsigned long *last_revision,
-                                   int *last_x, int *last_y,
-                                   int *last_w, int *last_h,
-                                   char *last_layout,
-                                   size_t last_layout_cap) {
-    OemLayoutState state;
-    if (!load_oem_layout_state(&state, 1440, 455))
-        return;
-
-    if (last_revision && last_x && last_y && last_w && last_h &&
-        last_layout &&
-        *last_revision == state.revision &&
-        *last_x == state.x && *last_y == state.y &&
-        *last_w == state.width && *last_h == state.height &&
-        strcmp(last_layout, state.layout_name) == 0) {
-        return;
-    }
-
-    if (!display.set_destination_rect(
-            state.x, state.y, state.width, state.height)) {
-        fprintf(stderr,
-                "direct111: ERROR PHASE=OEM_LAYOUT_APPLY "
-                "revision=%lu layout=%s rect=%d,%d,%dx%d "
-                "reason=destination_rect_rejected fallback=retain_previous\n",
-                state.revision, state.layout_name,
-                state.x, state.y, state.width, state.height);
-        return;
-    }
-
-    if (last_revision) *last_revision = state.revision;
-    if (last_x) *last_x = state.x;
-    if (last_y) *last_y = state.y;
-    if (last_w) *last_w = state.width;
-    if (last_h) *last_h = state.height;
-    if (last_layout && last_layout_cap) {
-        strncpy(last_layout, state.layout_name, last_layout_cap - 1u);
-        last_layout[last_layout_cap - 1u] = 0;
-    }
-
-    fprintf(stderr,
-            "direct111: PHASE=OEM_LAYOUT_APPLY "
-            "controller=OEM_LAYOUT_ADAPTIVE_SINK_V2 "
-            "revision=%lu layout=%s view=%s layout_class='%s' "
-            "rect=%d,%d,%dx%d map=%dx%d "
-            "policy=visible_active_rect source=OEM_LAYOUT_OBSERVER_V1 "
-            "carplay_session=%d\n",
-            state.revision, state.layout_name, state.view,
-            state.layout_class,
-            state.x, state.y, state.width, state.height,
-            state.map_width, state.map_height,
-            state.carplay_session);
 }
 
 static void load_consumed_gate(char *out, size_t cap) {
@@ -866,9 +694,9 @@ int main(int argc, char **argv) {
             "decoder_backend=stock-omx-tap h264_tap_independent=1 "
             "same_session_recovery=%d window58_readback=0 "
             "present_policy=source-driven no_success_sleep=1 "
-            "no_new_frame_poll_us=%u "
-            "layout_controller=OEM_LAYOUT_ADAPTIVE_SINK_V2\n",
-            recovered_current_session ? 1 : 0, kNoFramePollUs);
+            "no_new_frame_poll_us=%u stall_report_after_ms=%u\n",
+            recovered_current_session ? 1 : 0,
+            kNoFramePollUs, kDecodedStallReportUs / 1000u);
 
     unsigned failures = 0;
     bool in_stall = false;
@@ -877,20 +705,6 @@ int main(int argc, char **argv) {
     unsigned long stats_presented_base = display.frame_count();
     unsigned long long stats_start = now_us();
     unsigned long long next_ownership_probe_us = now_us() + 500000ULL;
-    unsigned long long next_oem_layout_probe_us = 0;
-    unsigned long last_oem_layout_revision = 0;
-    int last_oem_x = 0;
-    int last_oem_y = 0;
-    int last_oem_w = 1440;
-    int last_oem_h = 455;
-    char last_oem_layout[32];
-    strcpy(last_oem_layout, "FULLSCREEN_BOOTSTRAP");
-
-    maybe_apply_oem_layout(display,
-                           &last_oem_layout_revision,
-                           &last_oem_x, &last_oem_y,
-                           &last_oem_w, &last_oem_h,
-                           last_oem_layout, sizeof(last_oem_layout));
 
     while (!g_stop) {
         const unsigned long long frame_start = now_us();
@@ -898,18 +712,6 @@ int main(int argc, char **argv) {
             (frame_start && frame_start >= next_ownership_probe_us)) {
             publish_displayable_state(display, &source, "periodic");
             next_ownership_probe_us = frame_start + 500000ULL;
-        }
-
-        if (!next_oem_layout_probe_us ||
-            (frame_start && frame_start >= next_oem_layout_probe_us)) {
-            maybe_apply_oem_layout(display,
-                                   &last_oem_layout_revision,
-                                   &last_oem_x, &last_oem_y,
-                                   &last_oem_w, &last_oem_h,
-                                   last_oem_layout,
-                                   sizeof(last_oem_layout));
-            next_oem_layout_probe_us =
-                frame_start + (unsigned long long)kOemLayoutProbeUs;
         }
 
         if (source.read_frame(&frame)) {
@@ -947,11 +749,9 @@ int main(int argc, char **argv) {
                     ? idle_now - stall_start_us : 0;
 
             /*
-             * Source-driven polling normally observes several "no new
-             * sequence yet" iterations between ~30 fps producer frames.
-             * Do not misclassify those expected gaps as decoder stalls.
-             * A stall is reported only after the decoded sequence has failed
-             * to advance for a materially longer interval.
+             * Source-driven polling normally sees several "no new sequence"
+             * iterations between ~30 fps producer frames.  Treat those as
+             * expected idle time, not decoder stalls.
              */
             if (!in_stall && idle_us >= kDecodedStallReportUs) {
                 in_stall = true;
@@ -1001,28 +801,23 @@ int main(int argc, char **argv) {
                     "decoded_frames=%u source_frames=%lu "
                     "presented_frames=%lu present_fps=%lu.%02lu "
                     "displayable=3 context=80 window58_readback=0 "
-                    "present_policy=source-driven no_success_sleep=1 "
-                    "layout=%s layout_revision=%lu rect=%d,%d,%dx%d\n",
+                    "present_policy=source-driven no_success_sleep=1\n",
                     (unsigned)source.generation(),
                     source.h264_ready() ? 1 : 0,
                     (unsigned)source.h264_packets(),
                     (unsigned)source.h264_bytes(),
                     (unsigned)source.decoded_frames(),
                     source_frames, total_presented,
-                    fps100 / 100, fps100 % 100,
-                    last_oem_layout, last_oem_layout_revision,
-                    last_oem_x, last_oem_y,
-                    last_oem_w, last_oem_h);
+                    fps100 / 100, fps100 % 100);
 
             stats_presented_base = total_presented;
             stats_start = now;
         }
 
         /*
-         * Source-driven presentation: do not add a second relative 33 ms
-         * limiter after a successful swap.  The producer already publishes
-         * only fresh decoded sequences; a short poll delay is used only when
-         * no new sequence is available.
+         * Source-driven presentation: successful fresh frames are presented
+         * immediately.  The only software delay is the short no-new-frame poll
+         * above, so a second relative 33 ms limiter cannot halve the sink rate.
          */
     }
 

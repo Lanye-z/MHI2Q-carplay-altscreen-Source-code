@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <dlfcn.h>
 
 /* Optional outside the exact K1004 direct overlay (not linked by some host
@@ -371,11 +372,213 @@ static cf_obj rect_dict(uint32_t w, uint32_t h, uint32_t x, uint32_t y) {
     return d;
 }
 
-static cf_obj make_view_areas(uint32_t w, uint32_t h) {
+struct alt_safe_rect {
+    uint32_t x;
+    uint32_t y;
+    uint32_t w;
+    uint32_t h;
+    char view[16];
+    char layout[128];
+    char source[32];
+};
+
+static void alt_trim_line(char *s) {
+    size_t n;
+    if (!s) return;
+    n = strlen(s);
+    while (n && (s[n - 1] == '\n' || s[n - 1] == '\r' ||
+                 s[n - 1] == ' ' || s[n - 1] == '\t'))
+        s[--n] = 0;
+}
+
+static int alt_kv_text(const char *line, const char *key,
+                       char *out, size_t cap) {
+    size_t n;
+    if (!line || !key || !out || !cap) return 0;
+    n = strlen(key);
+    if (strncmp(line, key, n) || line[n] != '=') return 0;
+    strncpy(out, line + n + 1u, cap - 1u);
+    out[cap - 1u] = 0;
+    alt_trim_line(out);
+    return 1;
+}
+
+static int alt_kv_u32(const char *line, const char *key, uint32_t *out) {
+    char *end = NULL;
+    unsigned long value;
+    size_t n;
+    if (!line || !key || !out) return 0;
+    n = strlen(key);
+    if (strncmp(line, key, n) || line[n] != '=') return 0;
+    value = strtoul(line + n + 1u, &end, 10);
+    if (end == line + n + 1u) return 0;
+    *out = (uint32_t)value;
+    return 1;
+}
+
+static int alt_safe_rect_valid(const struct alt_safe_rect *r,
+                               uint32_t w, uint32_t h) {
+    if (!r || !r->w || !r->h) return 0;
+    if (r->x > w || r->y > h) return 0;
+    if (r->w > w - r->x || r->h > h - r->y) return 0;
+    return 1;
+}
+
+static int alt_load_hmi_layout(char *view, size_t view_cap,
+                               char *layout, size_t layout_cap) {
+    FILE *f;
+    char line[256];
+    int have_view = 0, have_layout = 0;
+    if (!view || !view_cap || !layout || !layout_cap) return 0;
+    view[0] = 0;
+    layout[0] = 0;
+    f = fopen("/tmp/mmi-mirror-hmi.state", "r");
+    if (!f) return 0;
+    while (fgets(line, sizeof(line), f)) {
+        alt_trim_line(line);
+        if (alt_kv_text(line, "view", view, view_cap))
+            have_view = 1;
+        else if (alt_kv_text(line, "layout_name", layout, layout_cap))
+            have_layout = 1;
+    }
+    fclose(f);
+    return have_view && have_layout;
+}
+
+static int alt_load_observed_safe_area(uint32_t display_w,
+                                       uint32_t display_h,
+                                       const char *current_view,
+                                       const char *current_layout,
+                                       struct alt_safe_rect *out) {
+    FILE *f;
+    char line[512];
+    char observer[64] = "";
+    char view[16] = "";
+    char layout[128] = "";
+    uint32_t valid = 0, map_w = 0, map_h = 0;
+    struct alt_safe_rect r;
+
+    if (!out) return 0;
+    memset(&r, 0, sizeof(r));
+    f = fopen("/tmp/carplay-oem-geometry.state", "r");
+    if (!f) return 0;
+
+    while (fgets(line, sizeof(line), f)) {
+        alt_trim_line(line);
+        if (alt_kv_text(line, "observer", observer, sizeof(observer))) {
+        } else if (alt_kv_text(line, "view", view, sizeof(view))) {
+        } else if (alt_kv_text(line, "layout_class",
+                               layout, sizeof(layout))) {
+        } else if (alt_kv_u32(line, "valid", &valid)) {
+        } else if (alt_kv_u32(line, "map_width_effective", &map_w)) {
+        } else if (alt_kv_u32(line, "map_height_effective", &map_h)) {
+        } else if (alt_kv_u32(line, "visible_active_x", &r.x)) {
+        } else if (alt_kv_u32(line, "visible_active_y", &r.y)) {
+        } else if (alt_kv_u32(line, "visible_active_w", &r.w)) {
+        } else if (alt_kv_u32(line, "visible_active_h", &r.h)) {
+        }
+    }
+    fclose(f);
+
+    if (strcmp(observer, "OEM_LAYOUT_OBSERVER_V1") || valid != 1u ||
+        map_w != display_w || map_h != display_h ||
+        !alt_safe_rect_valid(&r, display_w, display_h))
+        return 0;
+
+    /*
+     * A geometry file can survive a reconnect within the same boot.  Prefer it
+     * only when it still describes the current early HMI state; otherwise use
+     * the measured HMI fallback below instead of applying stale coordinates.
+     */
+    if (current_view && *current_view && strcmp(view, current_view))
+        return 0;
+    if (current_layout && *current_layout && strcmp(layout, current_layout))
+        return 0;
+
+    strncpy(r.view, view, sizeof(r.view) - 1u);
+    r.view[sizeof(r.view) - 1u] = 0;
+    strncpy(r.layout, layout, sizeof(r.layout) - 1u);
+    r.layout[sizeof(r.layout) - 1u] = 0;
+    strcpy(r.source, "observer176");
+    *out = r;
+    return 1;
+}
+
+static int alt_load_measured_k1004_safe_area(uint32_t display_w,
+                                             uint32_t display_h,
+                                             const char *view,
+                                             const char *layout,
+                                             struct alt_safe_rect *out) {
+    struct alt_safe_rect r;
+    if (!view || !layout || !out) return 0;
+    if (display_w != 1440u || display_h != 455u) return 0;
+    if (!strstr(layout, "LayoutMIB2HighB9")) return 0;
+
+    memset(&r, 0, sizeof(r));
+    if (!strcmp(view, "SMALL")) {
+        r.x = 490u; r.y = 49u; r.w = 460u; r.h = 300u;
+    } else if (!strcmp(view, "FULL")) {
+        r.x = 370u; r.y = 49u; r.w = 700u; r.h = 300u;
+    } else {
+        return 0;
+    }
+    strncpy(r.view, view, sizeof(r.view) - 1u);
+    r.view[sizeof(r.view) - 1u] = 0;
+    strncpy(r.layout, layout, sizeof(r.layout) - 1u);
+    r.layout[sizeof(r.layout) - 1u] = 0;
+    strcpy(r.source, "k1004-measured");
+    *out = r;
+    return 1;
+}
+
+static void alt_resolve_cluster_safe_area(uint32_t display_w,
+                                          uint32_t display_h,
+                                          struct alt_safe_rect *out) {
+    char view[16] = "";
+    char layout[128] = "";
+    struct alt_safe_rect r;
+    int have_hmi;
+
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    out->w = display_w;
+    out->h = display_h;
+    strcpy(out->view, "FULL");
+    strcpy(out->layout, "UNKNOWN");
+    strcpy(out->source, "fullscreen-fallback");
+
+    have_hmi = alt_load_hmi_layout(
+        view, sizeof(view), layout, sizeof(layout));
+
+    if (alt_load_observed_safe_area(
+            display_w, display_h,
+            have_hmi ? view : NULL,
+            have_hmi ? layout : NULL,
+            &r)) {
+        *out = r;
+        return;
+    }
+
+    if (have_hmi && alt_load_measured_k1004_safe_area(
+            display_w, display_h, view, layout, &r)) {
+        *out = r;
+        return;
+    }
+}
+
+static cf_obj make_view_areas_with_safe(uint32_t w, uint32_t h,
+                                        const struct alt_safe_rect *safe_rect) {
     cf_obj view = NULL, safe = NULL, areas = NULL;
+    uint32_t sx = 0u, sy = 0u, sw = w, sh = h;
     if (!cf_array_create_mutable || !cf_array_append || !cf_dict_set) return NULL;
+    if (safe_rect && alt_safe_rect_valid(safe_rect, w, h)) {
+        sx = safe_rect->x;
+        sy = safe_rect->y;
+        sw = safe_rect->w;
+        sh = safe_rect->h;
+    }
     view = rect_dict(w, h, 0, 0);
-    safe = rect_dict(w, h, 0, 0);
+    safe = rect_dict(sw, sh, sx, sy);
     if (!view || !safe) goto fail;
     if (!cf_dict_set_cstr_obj(view, "safeArea", safe)) goto fail;
     cf_release_safe(safe); safe = NULL;
@@ -391,10 +594,15 @@ fail:
     return NULL;
 }
 
+static cf_obj make_view_areas(uint32_t w, uint32_t h) {
+    return make_view_areas_with_safe(w, h, NULL);
+}
+
 void *alt_build_cluster_display(void) {
     const struct altscreen_display *d;
     uint32_t width = 0, height = 0;
     uint32_t physical_width, physical_height;
+    struct alt_safe_rect cluster_safe;
     cf_obj dict = NULL, areas = NULL, vs = NULL;
     /* Refresh on every display-info build so the request follows the current
      * target mode. If Screen temporarily refuses a second context, retain only
@@ -446,13 +654,24 @@ void *alt_build_cluster_display(void) {
     if (!vs || !cf_dict_set_cstr_obj(dict, "uuid", vs)) goto fail;
     cf_release_safe(vs); vs = NULL;
 
-    areas = make_view_areas(d->width_pixels, d->height_pixels);
+    alt_resolve_cluster_safe_area(
+        d->width_pixels, d->height_pixels, &cluster_safe);
+    areas = make_view_areas_with_safe(
+        d->width_pixels, d->height_pixels, &cluster_safe);
     if (areas) {
         if (!cf_dict_set_cstr_obj(dict, "viewAreas", areas) ||
             !set_i64(dict, "initialViewArea", 0)) goto fail;
         cf_release_safe(areas); areas = NULL;
-        altscreen_log("ALTAREA schema=viewAreas[array] initialViewArea=0 safeArea=nested full=%ux%u",
-                      d->width_pixels, d->height_pixels);
+        altscreen_log(
+            "ALTAREA_LAYOUT_SAFE_V1 schema=viewAreas[array] "
+            "initialViewArea=0 view=full:%ux%u "
+            "safe=%u,%u,%ux%u mode=%s layout=%s source=%s "
+            "renderer_scale=0",
+            d->width_pixels, d->height_pixels,
+            cluster_safe.x, cluster_safe.y,
+            cluster_safe.w, cluster_safe.h,
+            cluster_safe.view, cluster_safe.layout,
+            cluster_safe.source);
     } else {
         altscreen_log("ERROR ALTAREA failed to build reference-compatible viewAreas");
         goto fail;
