@@ -1,3 +1,14 @@
+**V1.1 当前状态：源码已准备，QNX 观察程序尚需编译。** 本分支专门用于原厂地图 plane 33/58 的四态只读采样；不要启动 CarPlay 实验链。详见 [OEM-PLANE-CENSUS-V1.1.md](OEM-PLANE-CENSUS-V1.1.md)。
+
+> [!IMPORTANT]
+> **V1.1 是 STOCK MAP ONLY 观察分支。**
+>
+> 上车时只安装独立的 `oem-plane-census` 观察程序，然后依次切换 Classic Full / Classic Small / Sport Full / Sport Small 并执行对应 CAPTURE。该程序只枚举已有 QNX Screen window 并读取 33/58 的属性，不修改 CarPlay `viewArea/safeArea`、不启动 private111、不切换 Context80、不写 Screen property。
+>
+> 当前仓库提交中还没有由本次会话实际编译出的 QNX ARMv7 release binary；请先运行 `Toolbox/carplay_alt_screen/plane_census/build_qnx.sh` 并校验 release 产物，再制作上车 SD 包。
+
+---
+
 **实车状态：已完成实车验证。** 在保持 V2 第二屏正常点亮的同时，已成功采集 Classic/Sport × Full/Small 四种 OEM 布局参数，observer 未破坏主显示链路。
 
 > [!IMPORTANT]
