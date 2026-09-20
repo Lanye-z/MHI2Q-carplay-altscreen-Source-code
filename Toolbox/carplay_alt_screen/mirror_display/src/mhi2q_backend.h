@@ -10,6 +10,24 @@ struct Mhi2qBackendConfig {
     bool verbose;
 };
 
+/*
+ * Read-only ownership snapshot for the managed displayable window.
+ * This never creates a Screen context, enumerates windows, or changes any
+ * property.  It exists solely to correlate displayable3 health with Java
+ * Context80/OEM-navigation events during cold-start diagnostics.
+ */
+struct Mhi2qWindowState {
+    bool backend_ready;
+    bool native_window_present;
+    bool visible_valid;
+    int visible;
+    bool manager_valid;
+    char manager[96];
+    unsigned long native_window_value;
+    int kd_window;
+    int displayable_id;
+};
+
 class Mhi2qBackend {
 public:
     Mhi2qBackend();
@@ -19,6 +37,7 @@ public:
      * V2.2 Native never reads or writes Cluster context. */
     bool init(const Mhi2qBackendConfig &cfg);
     bool swap();
+    bool sample_window_state(Mhi2qWindowState *state) const;
     void shutdown();
 
     int width() const { return cfg_.width; }
