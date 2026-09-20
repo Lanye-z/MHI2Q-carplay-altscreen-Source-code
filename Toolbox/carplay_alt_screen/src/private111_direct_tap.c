@@ -18,9 +18,6 @@ extern void altscreen_log(const char *fmt, ...);
 #define P111_AVCC_CACHE_SLOTS 8u
 #define P111_AVCC_CACHE_MAX   512u
 #define P111_MAP_MAX_ATTEMPTS 3u
-#define P111_LINEARIZER_TARGET_FPS 30u
-#define P111_LINEARIZER_TARGET_INTERVAL_US 33333u
-#define P111_LINEARIZER_RESYNC_LATE_US (P111_LINEARIZER_TARGET_INTERVAL_US * 4u)
 /* QNX Neutrino dlopen flag; same ABI value already used by the P1404 hook. */
 #define P111_RTLD_NOW 2
 
@@ -916,9 +913,6 @@ struct p111_linearizer_state {
     uint32_t failures;
     uint32_t fallback_count;
     uint32_t slow_readback_count;
-    uint32_t rate_limit_skips;
-    uint32_t next_readback_due_us;
-    int rate_limit_armed;
     uint32_t readback_max_us;
     uint32_t readback_hist_ms[65];
     uint32_t sample_count;
@@ -990,9 +984,6 @@ static void linearizer_shutdown_locked(void) {
     g_linearizer.failures = 0;
     g_linearizer.fallback_count = 0;
     g_linearizer.slow_readback_count = 0;
-    g_linearizer.rate_limit_skips = 0;
-    g_linearizer.next_readback_due_us = 0;
-    g_linearizer.rate_limit_armed = 0;
     g_linearizer.readback_max_us = 0;
     memset(g_linearizer.readback_hist_ms, 0,
            sizeof(g_linearizer.readback_hist_ms));
@@ -1406,7 +1397,6 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
     int backend;
     int published;
     uint32_t requests;
-    uint32_t now_us, lateness_us;
     uint32_t t0, t1, elapsed;
 
     if (!stream || !screen_window || !width || !height) return 0;
@@ -1430,49 +1420,13 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
     requests = ++g_linearizer.requests;
 
     /*
-     * Cap Screen readback near 30 fps by time, not by callback parity.
+     * Do not rate-limit the producer here. Every valid stock private111 render
+     * callback is linearized and published so /carplay111_decoded always
+     * carries the freshest frame the phone/stock renderer supplied.
      *
-     * Vehicle logs show stock private111 callbacks are often only ~33-40 fps.
-     * A fixed "every other callback" policy therefore cut the real VC output
-     * to ~16-20 fps.  The deadline accumulator below preserves all callbacks
-     * when the source is <=30 fps, samples ~30 fps when the source is faster,
-     * and avoids phase drift that a simple "now-last >= 33ms" gate would cause
-     * for ~33 fps sources.
-     *
-     * uint32_t modular microseconds are intentional: no 64-bit division helper
-     * is introduced into the freestanding ARM/QNX hook.
+     * The proven sidecar/displayable3 path remains independently paced at
+     * 30 fps; this change removes only the producer-side 1/2 or time cap.
      */
-    now_us = tap_now_us32();
-    if (now_us != 0u) {
-        if (!g_linearizer.rate_limit_armed) {
-            g_linearizer.rate_limit_armed = 1;
-            g_linearizer.next_readback_due_us =
-                now_us + P111_LINEARIZER_TARGET_INTERVAL_US;
-        } else if ((int32_t)(now_us - g_linearizer.next_readback_due_us) < 0) {
-            ++g_linearizer.rate_limit_skips;
-            linearizer_unlock();
-            return 1;
-        } else {
-            lateness_us = now_us - g_linearizer.next_readback_due_us;
-            if (lateness_us > P111_LINEARIZER_RESYNC_LATE_US)
-                g_linearizer.next_readback_due_us =
-                    now_us + P111_LINEARIZER_TARGET_INTERVAL_US;
-            else
-                g_linearizer.next_readback_due_us +=
-                    P111_LINEARIZER_TARGET_INTERVAL_US;
-        }
-    } else {
-        /*
-         * gettimeofday() failure is not expected on target. Preserve the old
-         * conservative half-rate behavior only as a clock-failure fallback.
-         */
-        if ((requests & 1u) == 0u) {
-            ++g_linearizer.rate_limit_skips;
-            linearizer_unlock();
-            return 1;
-        }
-    }
-
     if (!linearizer_configure_locked((p111_screen_window_t)screen_window,
                                      width, height,
                                      source_format, source_usage)) {
@@ -1582,7 +1536,7 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
 
     ++g_linearizer.publish_success;
     if (g_linearizer.publish_success == 1u) {
-        altscreen_log("PHASE=FRAME_LINEARIZER_FIRST_FRAME backend=%s source_format=%u source_usage=0x%x size=%ux%u readback_us=%u readback_success=%u shm_publish_success=1 output=packed-nv12 window_readback=exact-stock-handle rate_policy=time_30fps target_fps=30",
+        altscreen_log("PHASE=FRAME_LINEARIZER_FIRST_FRAME backend=%s source_format=%u source_usage=0x%x size=%ux%u readback_us=%u readback_success=%u shm_publish_success=1 output=packed-nv12 window_readback=exact-stock-handle rate_policy=uncapped_source_callbacks sink_target_fps=30",
                       backend == P111_LINEARIZER_NV12 ?
                           "screen-nv12" : "screen-rgba-bt601",
                       source_format, source_usage, width, height,
@@ -1590,14 +1544,13 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
     } else if ((g_linearizer.publish_success % 300u) == 0u) {
         unsigned p50 = linearizer_percentile_ms_locked(50u);
         unsigned p95 = linearizer_percentile_ms_locked(95u);
-        altscreen_log("PHASE=FRAME_LINEARIZER_PROGRESS backend=%s readbacks=%u published=%u publish_drops=%u requests=%u rate_skips=%u target_fps=30 failures=%u fallbacks=%u slow_readbacks=%u readback_p50_ms=%u readback_p95_ms=%u readback_max_us=%u size=%ux%u",
+        altscreen_log("PHASE=FRAME_LINEARIZER_PROGRESS backend=%s readbacks=%u published=%u publish_drops=%u requests=%u rate_policy=uncapped_source_callbacks sink_target_fps=30 failures=%u fallbacks=%u slow_readbacks=%u readback_p50_ms=%u readback_p95_ms=%u readback_max_us=%u size=%ux%u",
                       backend == P111_LINEARIZER_NV12 ?
                           "screen-nv12" : "screen-rgba-bt601",
                       g_linearizer.readback_success,
                       g_linearizer.publish_success,
                       g_linearizer.publish_drop,
                       g_linearizer.requests,
-                      g_linearizer.rate_limit_skips,
                       g_linearizer.failures,
                       g_linearizer.fallback_count,
                       g_linearizer.slow_readback_count,
