@@ -172,8 +172,14 @@ public final class ClusterStateController {
         diag("worker running; writerThread=" + contextWriterThread.getName());
         while (true) {
             try {
-                pollHmiState();
+                /*
+                 * Keep the proven V2 display/control path higher priority than
+                 * the diagnostic OEM observer.  If a proprietary HMI model
+                 * lookup is slow or unavailable, it must never delay the first
+                 * ctx80 acquisition/reconcile.
+                 */
                 pollContextPolicy();
+                pollHmiState();
             } catch (Throwable t) {
                 diag("ERROR poll failed: " + describe(t));
             }
@@ -266,7 +272,14 @@ public final class ClusterStateController {
          * proved that the actual OEM geometry comes from ListModel 176 row 1;
          * do not use the class-name hint as a geometry source.
          */
-        pollOemGeometry(hmi, layoutObject, choiceValue, layoutName, view);
+        /*
+         * Observation starts only after the proven Java80 composite has been
+         * physically verified.  This keeps all unproven ListModel176/reflection
+         * work out of the startup-critical path.
+         */
+        if (compositeApplied) {
+            pollOemGeometry(hmi, layoutObject, choiceValue, layoutName, view);
+        }
 
         observerStatus("ok choice=" + choiceValue + " choiceClass=" + choiceClass
             + " layoutClass=" + layoutName + " c80=" + smallDx + " c81=" + smallDy
@@ -574,6 +587,18 @@ public final class ClusterStateController {
             int smallW = screenWidth - tubeLeftKb - tubeRightKb;
             int smallH = fullH;
 
+            if (!oemGeometrySane(screenWidth, screenHeight,
+                                 mapWidth, mapHeight,
+                                 fullW, fullH, smallW, smallH)) {
+                oemProbeUnavailable("ListModel176 geometry failed sanity check"
+                    + " screen=" + screenWidth + "x" + screenHeight
+                    + " map=" + mapWidth + "x" + mapHeight
+                    + " full=" + fullW + "x" + fullH
+                    + " small=" + smallW + "x" + smallH
+                    + " access=" + lastOemModelAccess);
+                return;
+            }
+
             boolean small = choiceValue == 1;
             int activeX = small ? smallX : fullX;
             int activeY = small ? smallY : fullY;
@@ -590,18 +615,20 @@ public final class ClusterStateController {
             String rowValues = serializeIntegerRow(values);
             String signature = choiceValue + "/" + layoutName + "/"
                 + rowValues + "/" + c80 + "/" + c81 + "/" + c108 + "/"
-                + c109 + "/" + c114 + "/" + c115;
+                + c109 + "/" + c114 + "/" + c115
+                + "/access=" + lastOemModelAccess
+                + "/cp=" + (carPlaySessionActive ? "1" : "0")
+                + "/rgi=" + (rgiPresentationActive ? "1" : "0");
 
             if (!signature.equals(lastOemGeometrySignature)) {
-                lastOemGeometrySignature = signature;
-                ++oemGeometryRevision;
+                long nextRevision = oemGeometryRevision + 1L;
                 String layoutHint = layoutName.toLowerCase().indexOf("sport") >= 0
                     ? "SPORT_HINT" : "UNKNOWN";
                 String text = "schema=1\n"
                     + "observer=OEM_LAYOUT_OBSERVER_V1\n"
                     + "mode=OBSERVE_ONLY\n"
                     + "valid=1\n"
-                    + "revision=" + oemGeometryRevision + "\n"
+                    + "revision=" + nextRevision + "\n"
                     + "timestamp_ms=" + now + "\n"
                     + "apply_to_carplay=0\n"
                     + "apply_to_renderer=0\n"
@@ -611,8 +638,10 @@ public final class ClusterStateController {
                     + "layout_hint=" + layoutHint + "\n"
                     + "list_model_id=176\n"
                     + "list_model_access=" + lastOemModelAccess + "\n"
+                    + "list_model_class=" + list.getClass().getName() + "\n"
                     + "list_row=1\n"
                     + "list_length=" + rowCount + "\n"
+                    + "row_class=" + row.getClass().getName() + "\n"
                     + "row1_column_count=" + colCount + "\n"
                     + "row1_values=" + rowValues + "\n"
                     + "screen_width=" + screenWidth + "\n"
@@ -651,6 +680,14 @@ public final class ClusterStateController {
                     + "rgi_active=" + (rgiPresentationActive ? "1" : "0") + "\n";
 
                 if (writeAtomicState(OEM_GEOMETRY_STATE_FILE, text)) {
+                    /*
+                     * Commit the signature/revision only after the state file
+                     * was successfully published.  A transient /tmp write
+                     * failure must be retried on the next poll rather than
+                     * suppressing this geometry forever.
+                     */
+                    oemGeometryRevision = nextRevision;
+                    lastOemGeometrySignature = signature;
                     appendOemGeometryHistory(text);
                     lastOemProbeStatus = "valid";
                     diag("OEM_GEOMETRY_OBSERVER publish revision="
@@ -766,10 +803,16 @@ public final class ClusterStateController {
         throws Exception {
         if (owner == null) return null;
         Object candidate = null;
+
+        /*
+         * Treat each runtime seam independently.  A method can exist yet throw
+         * from inside the proprietary HMI implementation; that must not prevent
+         * the remaining read-only fallbacks from being attempted.
+         */
         try {
             candidate = invokeInt(owner, "getListModel",
                                   OEM_SCREEN_LAYOUT_MODEL_ID);
-        } catch (NoSuchMethodException e) {
+        } catch (Throwable ignored) {
             candidate = null;
         }
         if (isListModelShape(candidate)) {
@@ -784,7 +827,7 @@ public final class ClusterStateController {
         try {
             candidate = invokeInt(owner, "getModel",
                                   OEM_SCREEN_LAYOUT_MODEL_ID);
-        } catch (NoSuchMethodException e) {
+        } catch (Throwable ignored) {
             candidate = null;
         }
         if (isListModelShape(candidate)) {
@@ -831,13 +874,39 @@ public final class ClusterStateController {
 
     private static boolean oemColumnsValid(int[] values) {
         int[] required = new int[]{
-            0, 1, 8, 9, 11, 12, 13, 14, 24, 25
+            0, 1, 8, 9, 11, 12, 13, 14, 24, 25, 26, 27
         };
         int i;
         for (i = 0; i < required.length; ++i) {
             int c = required[i];
             if (c >= values.length || values[c] == OEM_MISSING) return false;
         }
+        return true;
+    }
+
+    private static boolean oemGeometrySane(int screenWidth,
+                                                  int screenHeight,
+                                                  int mapWidth,
+                                                  int mapHeight,
+                                                  int fullW,
+                                                  int fullH,
+                                                  int smallW,
+                                                  int smallH) {
+        /*
+         * Fail closed on a false model seam or corrupt row.  Negative X/Y are
+         * legitimate for some layouts, so only dimensions are constrained.
+         */
+        if (screenWidth <= 0 || screenHeight <= 0
+            || screenWidth > 8192 || screenHeight > 8192)
+            return false;
+        if (mapWidth <= 0 || mapHeight <= 0
+            || mapWidth > 8192 || mapHeight > 8192)
+            return false;
+        if (fullW <= 0 || fullH <= 0 || smallW <= 0 || smallH <= 0)
+            return false;
+        if (fullW > 16384 || fullH > 16384
+            || smallW > 16384 || smallH > 16384)
+            return false;
         return true;
     }
 
