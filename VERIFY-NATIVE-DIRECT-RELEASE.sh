@@ -13,6 +13,7 @@ SOURCE="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/private111_direct_so
 BACKEND_H="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/mhi2q_backend.h"
 BACKEND_CPP="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/mhi2q_backend.cpp"
 CLUSTER_CPP="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/cluster_video_display.cpp"
+GL_RENDERER_CPP="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/gl_renderer.cpp"
 MAIN_CPP="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/main.cpp"
 HMI_SRC="$ROOT/Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java"
 START="$ROOT/Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh"
@@ -34,7 +35,7 @@ sha256_file(){
 }
 binary_strings(){ strings "$1" 2>/dev/null || grep -a -o '[[:print:]][[:print:]]*' "$1"; }
 
-for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$AIRPLAY_SRC" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$MAIN_CPP" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$STOP" "$INSTALL" "$STATUS" "$CHAIN" "$BOOT_DIAG"; do
+for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$AIRPLAY_SRC" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$GL_RENDERER_CPP" "$MAIN_CPP" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$STOP" "$INSTALL" "$STATUS" "$CHAIN" "$BOOT_DIAG"; do
     [ -s "$f" ] || fail "missing/empty: $f"
 done
 
@@ -83,10 +84,10 @@ elif grep -Fq 'release_binary_status=V2_BINARY_STALE_LAYOUT_PROTOCOL_REBUILDS_RE
         binary_strings "$BIN" | grep -Fq "$marker" ||
             fail "previous clean V2 sidecar marker missing while awaiting source-driven rebuild: $marker"
     done
-    if binary_strings "$BIN" | grep -Fq 'carplay-private111-direct-display-v2-source-driven-v2'; then
-        fail "BUILD_INFO says source-driven rebuild required but sidecar already contains new build id"
+    if binary_strings "$BIN" | grep -Fq 'carplay-private111-direct-display-v2-source-driven-layout-v3'; then
+        fail "BUILD_INFO says source/layout rebuild required but sidecar already contains new build id"
     fi
-    if binary_strings "$HOOK" | grep -Fq 'ALTAREA_LAYOUT_SAFE_V1'; then
+    if binary_strings "$HOOK" | grep -Fq 'ALTAREA_LAYOUT_SAFE_V2'; then
         fail "BUILD_INFO says safeArea hook rebuild required but hook already contains new marker"
     fi
 elif grep -Fq 'release_binary_status=V2_BINARY_STALE_OWNERSHIP_REBUILD_REQUIRED' "$INFO"; then
@@ -112,7 +113,7 @@ elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$INFO"; then
         grep -Fq 'hook_runtime_rebuild_required=no' "$INFO" ||
             fail "vehicle-ready V2 package must declare rebuilt hook runtime"
     fi
-    for marker in 'carplay-private111-direct-display-v2-source-driven-v2' 'PHASE=DECODED_SHM_WAIT_SIZE' 'PHASE=SOURCE_SESSION' 'PHASE=GATE_RECOVER_CURRENT_SESSION' 'matching_identity_plus_frame_progress' 'packed_tight_required=1' 'stream111_request_or_phone_marker' 'STREAM_111_REQUESTED=YES' 'PHASE=PIPELINE_SOURCE_PRIMED' 'startup_frame_progress_required=2' 'PHASE=DISPLAYABLE3_FIRST_PRESENT' 'PHASE=DISPLAYABLE3_OWNERSHIP' 'DISPLAYABLE3_OWNERSHIP_V1' '/tmp/mmi-mirror-displayable3.state' 'PHASE=DIRECT111_ACTIVE' 'present_policy=source-driven'
+    for marker in 'carplay-private111-direct-display-v2-source-driven-layout-v3' 'PHASE=DECODED_SHM_WAIT_SIZE' 'PHASE=SOURCE_SESSION' 'PHASE=GATE_RECOVER_CURRENT_SESSION' 'matching_identity_plus_frame_progress' 'packed_tight_required=1' 'stream111_request_or_phone_marker' 'STREAM_111_REQUESTED=YES' 'PHASE=PIPELINE_SOURCE_PRIMED' 'startup_frame_progress_required=2' 'PHASE=DISPLAYABLE3_FIRST_PRESENT' 'PHASE=DISPLAYABLE3_OWNERSHIP' 'DISPLAYABLE3_OWNERSHIP_V1' '/tmp/mmi-mirror-displayable3.state' 'PHASE=DIRECT111_ACTIVE' 'present_policy=source-driven'
     do
         binary_strings "$BIN" | grep -Fq "$marker" ||
             fail "V2 sidecar marker missing: $marker"
@@ -255,12 +256,12 @@ grep -Fq 'PHASE=PIPELINE_SOURCE_PRIMED' "$MAIN_CPP" ||
     fail "startup does not require decoded frame progress before displayable creation"
 grep -Fq 'startup_frame_progress_required=2' "$MAIN_CPP" ||
     fail "startup fresh-frame threshold marker missing"
-grep -Fq 'carplay-private111-direct-display-v2-source-driven-v2' "$MAIN_CPP" ||
-    fail "source-driven V2 sidecar build id missing"
+grep -Fq 'carplay-private111-direct-display-v2-source-driven-layout-v3' "$MAIN_CPP" ||
+    fail "source-driven/layout V2 sidecar build id missing"
 
-# ---- CarPlay protocol-level layout/safe-area contract ----
-grep -Fq 'ALTAREA_LAYOUT_SAFE_V1' "$AIRPLAY_SRC" ||
-    fail "CarPlay cluster safeArea layout marker missing"
+# ---- CarPlay protocol-level layout/safe-area + OEM map placement contract ----
+grep -Fq 'ALTAREA_LAYOUT_SAFE_V2' "$AIRPLAY_SRC" ||
+    fail "CarPlay cluster compensated safeArea marker missing"
 grep -Fq '/tmp/mmi-mirror-hmi.state' "$AIRPLAY_SRC" ||
     fail "early HMI layout state input missing"
 if grep -Fq '/tmp/carplay-oem-geometry.state' "$AIRPLAY_SRC"; then
@@ -268,16 +269,37 @@ if grep -Fq '/tmp/carplay-oem-geometry.state' "$AIRPLAY_SRC"; then
 fi
 grep -Fq 'LayoutMIB2HighB9' "$AIRPLAY_SRC" ||
     fail "K1004 measured layout guard missing"
-grep -Fq 'r.x = 370u; r.y = 49u; r.w = 700u; r.h = 300u;' "$AIRPLAY_SRC" ||
-    fail "measured FULL safeArea fallback missing"
-grep -Fq 'r.x = 490u; r.y = 49u; r.w = 460u; r.h = 300u;' "$AIRPLAY_SRC" ||
-    fail "measured SMALL safeArea fallback missing"
+grep -Fq 'r.physical_x = 370u; r.physical_y = 49u;' "$AIRPLAY_SRC" ||
+    fail "measured FULL physical safe region missing"
+grep -Fq 'r.physical_x = 490u; r.physical_y = 49u;' "$AIRPLAY_SRC" ||
+    fail "measured SMALL physical safe region missing"
+grep -Fq 'source_x = (int64_t)r.physical_x - (int64_t)r.renderer_dx;' "$AIRPLAY_SRC" ||
+    fail "safeArea source-coordinate compensation missing"
+grep -Fq 'small_stage_dx' "$AIRPLAY_SRC" ||
+    fail "hook does not consume OEM small-stage X offset"
+grep -Fq '*small_dx = -476;' "$AIRPLAY_SRC" ||
+    fail "verified B9Sport SMALL -476 fallback missing"
+grep -Fq 'safe_source=%u,%u,%ux%u safe_physical=%u,%u,%ux%u' "$AIRPLAY_SRC" ||
+    fail "safeArea source/physical diagnostic marker missing"
 grep -Fq 'renderer_scale=0' "$AIRPLAY_SRC" ||
     fail "protocol safeArea path must explicitly keep renderer scaling disabled"
-if grep -Fq 'OEM_LAYOUT_ADAPTIVE_SINK_V2' "$MAIN_CPP" ||
-   grep -Fq 'PHASE=OEM_LAYOUT_APPLY' "$MAIN_CPP" ||
-   grep -Fq 'visible_active_x' "$MAIN_CPP"; then
-    fail "renderer-side OEM layout scaling must not be reintroduced"
+
+grep -Fq 'PHASE=OEM_MAP_PLACEMENT' "$MAIN_CPP" ||
+    fail "session-latched OEM map placement marker missing"
+grep -Fq 'small_stage_dx' "$MAIN_CPP" ||
+    fail "sidecar does not consume OEM small-stage X offset"
+grep -Fq 'small_dx = -476;' "$MAIN_CPP" ||
+    fail "sidecar verified B9Sport SMALL -476 fallback missing"
+grep -Fq 'display.set_destination_rect(p.dx, p.dy, 1440, 455)' "$MAIN_CPP" ||
+    fail "sidecar full-size translated destination is missing"
+grep -Fq 'renderer_scale=0' "$MAIN_CPP" ||
+    fail "sidecar map placement must keep scaling disabled"
+grep -Fq 'natural_clip=1' "$MAIN_CPP" ||
+    fail "translated renderer natural clipping marker missing"
+grep -Fq 'OEM map stages may translate the full-size plane partially outside' "$GL_RENDERER_CPP" ||
+    fail "GLES negative-destination clipping contract missing"
+if grep -Fq 'visible_active_x' "$MAIN_CPP"; then
+    fail "physical safe rectangle must not be reused as a renderer scale box"
 fi
 
 # ---- displayable3 ownership source contract (targeted observer only) ----
