@@ -21,13 +21,22 @@ if [ -x "$READELF" ]; then
   fi
 fi
 
+STRINGS="${STRINGS:-}"
+if [ -z "$STRINGS" ]; then
+  if [ -x "$QNX_HOST/usr/bin/ntoarmv7-strings" ]; then
+    STRINGS="$QNX_HOST/usr/bin/ntoarmv7-strings"
+  elif command -v strings >/dev/null 2>&1; then
+    STRINGS="$(command -v strings)"
+  fi
+fi
+[ -n "$STRINGS" ] || {
+  echo "ERROR: no strings tool found for sidecar verification" >&2
+  exit 1
+}
+
 check_marker() {
   marker=$1
-  if command -v strings >/dev/null 2>&1; then
-    strings "$BIN" | grep -Fq "$marker"
-  else
-    grep -a -Fq "$marker" "$BIN"
-  fi
+  "$STRINGS" "$BIN" | grep -Fq "$marker"
 }
 
 for marker in \
@@ -58,14 +67,15 @@ do
   }
 done
 
-if strings "$BIN" | grep -Fq 'screen_read_window'; then
-  echo "ERROR: Window58 readback leaked into direct-display binary" >&2
-  exit 1
-fi
-if strings "$BIN" | grep -Fq 'WINDOW_MANAGER_CONTEXT event observer ready'; then
-  echo "ERROR: Window58 event observer leaked into direct-display binary" >&2
-  exit 1
-fi
+for marker in \
+  'screen_read_window' \
+  'WINDOW_MANAGER_CONTEXT event observer ready'
+do
+  if "$STRINGS" "$BIN" | grep -Fq "$marker"; then
+    echo "ERROR: forbidden direct-display marker present: $marker" >&2
+    exit 1
+  fi
+done
 
 echo "MIRROR_BUILD_ID=carplay-private111-direct-display-v2"
 echo "MIRROR_BUILD=PASS output=$ROOT/$BIN"

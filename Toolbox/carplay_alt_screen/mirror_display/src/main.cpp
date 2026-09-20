@@ -67,7 +67,6 @@ static void sanitize_state_value(char *value) {
  */
 static void publish_displayable_state(const ClusterVideoDisplay &display,
                                       const Private111DirectSource *source,
-                                      const VideoFrame *frame,
                                       const char *phase) {
     Mhi2qWindowState state;
     memset(&state, 0, sizeof(state));
@@ -83,7 +82,7 @@ static void publish_displayable_state(const ClusterVideoDisplay &display,
     const uint32_t generation = source ? source->generation() : 0u;
     const uint32_t h264_packets = source ? source->h264_packets() : 0u;
     const uint32_t decoded_frames = source ? source->decoded_frames() : 0u;
-    const uint32_t sequence = frame ? frame->sequence : 0u;
+    const uint32_t sequence = source ? source->sequence() : 0u;
 
     const char *path = displayable_state_path();
     char tmp[512];
@@ -672,7 +671,7 @@ int main(int argc, char **argv) {
 
     marker(true, "private111-decoded-shm", "direct-display");
     if (!activate_context80()) {
-        publish_displayable_state(display, &source, &frame,
+        publish_displayable_state(display, &source,
                                   "ctx80-activate-failed");
         marker(false, 0, 0);
         display.shutdown();
@@ -685,7 +684,7 @@ int main(int argc, char **argv) {
      * path.  Normal startup acquires the proven Java context first, then takes
      * the initial read-only displayable3 snapshot.
      */
-    publish_displayable_state(display, &source, &frame, "ctx80-active");
+    publish_displayable_state(display, &source, "ctx80-active");
 
     fprintf(stderr,
             "direct111: PHASE=DIRECT111_ACTIVE "
@@ -708,7 +707,7 @@ int main(int argc, char **argv) {
         const unsigned long long frame_start = now_us();
         if (!next_ownership_probe_us ||
             (frame_start && frame_start >= next_ownership_probe_us)) {
-            publish_displayable_state(display, &source, &frame, "periodic");
+            publish_displayable_state(display, &source, "periodic");
             next_ownership_probe_us = frame_start + 500000ULL;
         }
 
@@ -805,7 +804,7 @@ int main(int argc, char **argv) {
     }
 
     const unsigned long presented_frames = display.frame_count();
-    publish_displayable_state(display, &source, &frame, "pre-shutdown");
+    publish_displayable_state(display, &source, "pre-shutdown");
     marker(false, 0, 0);
     restore_context80();
     display.shutdown();

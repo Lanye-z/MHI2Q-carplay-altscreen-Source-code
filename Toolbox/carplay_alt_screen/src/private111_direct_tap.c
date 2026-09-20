@@ -1396,7 +1396,6 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
     int packed = 0;
     int backend;
     int published;
-    uint32_t requests;
     uint32_t t0, t1, elapsed;
 
     if (!stream || !screen_window || !width || !height) return 0;
@@ -1417,7 +1416,7 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
     tap_unlock();
 
     linearizer_lock();
-    requests = ++g_linearizer.requests;
+    ++g_linearizer.requests;
 
     /*
      * Do not rate-limit the producer here. Every valid stock private111 render
