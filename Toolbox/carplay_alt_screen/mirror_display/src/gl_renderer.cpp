@@ -303,20 +303,39 @@ bool GlRenderer::upload_test_grid(int width, int height) {
 
 bool GlRenderer::set_destination_rect(int x, int y, int width, int height) {
     if (output_width_ <= 0 || output_height_ <= 0 ||
-        width <= 0 || height <= 0 ||
-        x < 0 || y < 0 || x + width > output_width_ || y + height > output_height_) {
+        width <= 0 || height <= 0) {
+        return false;
+    }
+
+    /*
+     * OEM map stages may translate the full-size plane partially outside the
+     * 1440x455 viewport (Sport + SMALL is -476 px on X).  Do not clamp that
+     * translation back into the viewport or rescale the texture: GLES clip
+     * space should naturally discard the off-screen portion, matching the
+     * stock map-plane behavior.
+     */
+    const long long right_px = (long long)x + (long long)width;
+    const long long bottom_px = (long long)y + (long long)height;
+    if (right_px <= 0 || bottom_px <= 0 ||
+        x >= output_width_ || y >= output_height_) {
         return false;
     }
 
     const GLfloat left = -1.0f + 2.0f * (GLfloat)x / (GLfloat)output_width_;
-    const GLfloat right = -1.0f + 2.0f * (GLfloat)(x + width) / (GLfloat)output_width_;
+    const GLfloat right = -1.0f + 2.0f * (GLfloat)right_px / (GLfloat)output_width_;
     const GLfloat top = 1.0f - 2.0f * (GLfloat)y / (GLfloat)output_height_;
-    const GLfloat bottom = 1.0f - 2.0f * (GLfloat)(y + height) / (GLfloat)output_height_;
+    const GLfloat bottom = 1.0f - 2.0f * (GLfloat)bottom_px / (GLfloat)output_height_;
 
     vertices_[0] = left;  vertices_[1] = top;
     vertices_[2] = left;  vertices_[3] = bottom;
     vertices_[4] = right; vertices_[5] = top;
     vertices_[6] = right; vertices_[7] = bottom;
+
+    fprintf(stderr,
+            "renderer: destination x=%d y=%d size=%dx%d natural_clip=%d\n",
+            x, y, width, height,
+            (x < 0 || y < 0 || right_px > output_width_ ||
+             bottom_px > output_height_) ? 1 : 0);
     return true;
 }
 
