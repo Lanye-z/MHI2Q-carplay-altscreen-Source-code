@@ -30,8 +30,9 @@ The resulting evidence should answer:
 
 The native census process:
 
-- creates a privileged `SCREEN_DISPLAY_MANAGER_CONTEXT` only so it can enumerate already-existing Screen windows;
-- reads `SCREEN_PROPERTY_WINDOW_COUNT` and `SCREEN_PROPERTY_WINDOWS`;
+- creates a privileged `SCREEN_WINDOW_MANAGER_CONTEXT` owned by the observer;
+- discovers stock windows from the global window-manager event queue (`CREATE / PROPERTY / POST / CLOSE`);
+- does **not** use `SCREEN_PROPERTY_WINDOW_COUNT/WINDOWS` as a global census, because QNX scopes those lists to the calling context;
 - matches only ID strings `33` and `58` by default;
 - calls only `screen_get_*` APIs for existing windows/buffers;
 - does **not** call `screen_set_*`;
@@ -101,13 +102,15 @@ Do not connect/start CarPlay for this experiment.
 
 1. Build/promote the QNX observer binary and prepare the Toolbox SD card.
 2. Open `MMI-Cockpit-Carplay` and run **INSTALL OBSERVER**.
-3. Return the car to its stock Audi map/navigation display.
-4. Select **Classic + Full**, wait for the OEM layout to settle, then run **CAPTURE CLASSIC FULL**.
-5. Select **Classic + Small**, wait, then run **CAPTURE CLASSIC SMALL**.
-6. Select **Sport + Full**, wait, then run **CAPTURE SPORT FULL**.
-7. Select **Sport + Small**, wait, then run **CAPTURE SPORT SMALL**.
-8. Run **STATUS / SUMMARY** and verify all four labels have at least one sample.
-9. Run **UNINSTALL OBSERVER**.
+3. Run **START OBSERVER**. The watcher now remains resident and listens only for QNX Screen window events.
+4. Return the car to its stock Audi map/navigation display.
+5. Before the first capture, toggle the stock View once (for example Classic Small → Classic Full). This deliberately causes the already-existing map planes to emit PROPERTY/POST events so the observer can acquire both 33/58 handles without creating or modifying any window.
+6. Select **Classic + Full**, wait for the OEM layout to settle, then run **CAPTURE CLASSIC FULL**.
+7. Select **Classic + Small**, wait, then run **CAPTURE CLASSIC SMALL**.
+8. Select **Sport + Full**, wait, then run **CAPTURE SPORT FULL**.
+9. Select **Sport + Small**, wait, then run **CAPTURE SPORT SMALL**.
+10. Run **STATUS / SUMMARY** and verify all four labels have at least one sample and that both `window33.state` / `window58.state` have been observed.
+11. Run **STOP OBSERVER** or directly **UNINSTALL OBSERVER**.
 
 Each capture writes a timestamped file and appends to:
 
@@ -115,8 +118,11 @@ Each capture writes a timestamped file and appends to:
 MMI-Cockpit-Carplay/logs/oem-plane-census/plane33-58-census.log
 ```
 
-If the old HMI geometry observer state happens to exist, the helper also copies it for correlation,
-but the native census does not depend on it.
+The persistent watcher atomically maintains `/tmp/oem-plane-census/window33.state` and
+`window58.state` whenever it sees a target CREATE/PROPERTY/POST event. Each labeled CAPTURE
+copies the latest native state for both IDs into the SD log. If the old HMI geometry observer
+state happens to exist, the helper also copies it for correlation, but the native census does
+not depend on it.
 
 ## Expected comparison
 
@@ -144,6 +150,8 @@ Toolbox/carplay_alt_screen/plane_census/
 
 Toolbox/scripts/
   install_oem_plane_census.sh
+  start_oem_plane_census.sh
+  stop_oem_plane_census.sh
   oem_plane_census_capture.sh
   oem_plane_census_classic_full.sh
   oem_plane_census_classic_small.sh
