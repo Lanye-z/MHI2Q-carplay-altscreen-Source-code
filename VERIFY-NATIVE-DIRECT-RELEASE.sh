@@ -13,6 +13,7 @@ BACKEND_H="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/mhi2q_backend.h"
 BACKEND_CPP="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/mhi2q_backend.cpp"
 CLUSTER_CPP="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/cluster_video_display.cpp"
 MAIN_CPP="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/main.cpp"
+HMI_SRC="$ROOT/Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java"
 START="$ROOT/Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh"
 CTRL="$ROOT/Toolbox/scripts/altscreen_chain_test_universal.sh"
 LAUNCH="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/start_vehicle.sh"
@@ -42,6 +43,7 @@ done
 
 SOURCE_ONLY=0
 HOOK_PENDING=0
+NATIVE_REBUILDS=0
 if grep -Fq 'release_binary_status=V1_BINARY_STALE_V2_SOURCE_REBUILD_REQUIRED' "$INFO"; then
     SOURCE_ONLY=1
     grep -Fq 'vehicle_zip_status=NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED' "$INFO" ||
@@ -63,6 +65,16 @@ elif grep -Fq 'release_binary_status=V2_BINARY_STALE_HARDENING_REBUILD_REQUIRED'
     if binary_strings "$BIN" | grep -Fq 'matching_identity_plus_frame_progress'; then
         fail "BUILD_INFO says hardening rebuild required but binary already contains final recovery marker"
     fi
+elif grep -Fq 'release_binary_status=V2_BINARY_STALE_OWNERSHIP_REBUILD_REQUIRED' "$INFO"; then
+    SOURCE_ONLY=1
+    HOOK_PENDING=1
+    NATIVE_REBUILDS=1
+    grep -Fq 'vehicle_zip_status=NOT_READY_NATIVE_REBUILDS_REQUIRED' "$INFO" ||
+        fail "clean ownership source must remain blocked until sidecar and hook rebuild"
+    grep -Fq 'hook_runtime_rebuild_required=yes' "$INFO" ||
+        fail "uncapped hook rebuild must remain pending"
+    grep -Fq 'displayable3_ownership_observer=DISPLAYABLE3_OWNERSHIP_V1' "$INFO" ||
+        fail "ownership observer metadata missing"
 elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$INFO"; then
     if grep -Fq 'vehicle_zip_status=NOT_READY_HOOK_REBUILD_REQUIRED' "$INFO"; then
         HOOK_PENDING=1
@@ -76,7 +88,7 @@ elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$INFO"; then
         grep -Fq 'hook_runtime_rebuild_required=no' "$INFO" ||
             fail "vehicle-ready V2 package must declare rebuilt hook runtime"
     fi
-    for marker in 'carplay-private111-direct-display-v2' 'PHASE=DECODED_SHM_WAIT_SIZE' 'PHASE=SOURCE_SESSION' 'PHASE=GATE_RECOVER_CURRENT_SESSION' 'matching_identity_plus_frame_progress' 'packed_tight_required=1' 'stream111_request_or_phone_marker' 'STREAM_111_REQUESTED=YES' 'PHASE=PIPELINE_SOURCE_PRIMED' 'startup_frame_progress_required=2' 'PHASE=DISPLAYABLE3_FIRST_PRESENT' 'PHASE=DIRECT111_ACTIVE'
+    for marker in 'carplay-private111-direct-display-v2' 'PHASE=DECODED_SHM_WAIT_SIZE' 'PHASE=SOURCE_SESSION' 'PHASE=GATE_RECOVER_CURRENT_SESSION' 'matching_identity_plus_frame_progress' 'packed_tight_required=1' 'stream111_request_or_phone_marker' 'STREAM_111_REQUESTED=YES' 'PHASE=PIPELINE_SOURCE_PRIMED' 'startup_frame_progress_required=2' 'PHASE=DISPLAYABLE3_FIRST_PRESENT' 'PHASE=DISPLAYABLE3_OWNERSHIP' 'DISPLAYABLE3_OWNERSHIP_V1' '/tmp/mmi-mirror-displayable3.state' 'PHASE=DIRECT111_ACTIVE'
     do
         binary_strings "$BIN" | grep -Fq "$marker" ||
             fail "V2 sidecar marker missing: $marker"
@@ -212,6 +224,36 @@ grep -Fq 'startup_frame_progress_required=2' "$MAIN_CPP" ||
 grep -Fq 'carplay-private111-direct-display-v2' "$MAIN_CPP" ||
     fail "V2 sidecar source build id missing"
 
+# ---- displayable3 ownership source contract (targeted observer only) ----
+grep -Fq 'struct Mhi2qWindowState' "$BACKEND_H" ||
+    fail "displayable3 physical-state struct missing"
+grep -Fq 'sample_window_state(Mhi2qWindowState' "$BACKEND_H" ||
+    fail "displayable3 state sampler declaration missing"
+grep -Fq 'bool Mhi2qBackend::sample_window_state' "$BACKEND_CPP" ||
+    fail "displayable3 state sampler implementation missing"
+grep -Fq 'observer=DISPLAYABLE3_OWNERSHIP_V1' "$MAIN_CPP" ||
+    fail "displayable3 ownership state publication missing"
+grep -Fq '/tmp/mmi-mirror-displayable3.state' "$MAIN_CPP" ||
+    fail "displayable3 ownership state path missing"
+grep -Fq 'OWNERSHIP_SNAPSHOT' "$HMI_SRC" ||
+    fail "Context80/displayable3 ownership correlation missing"
+grep -Fq 'COLD_START_OWNERSHIP_DIAG_V1' "$HMI_SRC" ||
+    fail "cold-start ownership observer marker missing"
+grep -Fq 'mmi-mirror-displayable3.state' "$BOOT_DIAG" ||
+    fail "boot diagnostics do not collect displayable3 snapshot"
+
+# Explicitly reject the removed yuedizhibo logging/telemetry port.
+if grep -Fq 'FRAME_PRESENT_TIMING' "$MAIN_CPP" ||
+   grep -Fq 'FRAME_CHAIN_HEALTH' "$MAIN_CPP"; then
+    fail "removed per-frame/chain telemetry reintroduced into sidecar"
+fi
+if grep -Fq 'DIAG_QUEUE' "$HMI_SRC" ||
+   grep -Fq 'SD_DIAG_SEGMENT_BYTES' "$HMI_SRC"; then
+    fail "removed async Java SD logging reintroduced"
+fi
+[ ! -e "$ROOT/Toolbox/scripts/altscreen_log_ring.sh" ] ||
+    fail "removed SD log-ring helper reintroduced"
+
 # ---- Reliability contract: EGL swap failure must propagate to first present ----
 grep -Fq 'bool swap();' "$BACKEND_H" ||
     fail "Mhi2qBackend::swap() must return bool"
@@ -342,7 +384,9 @@ echo "context_owner=JAVA80_ONLY"
 echo "session_identity=writer_pid+generation+stream_cookie"
 echo "raw_vendor_fallback=DISABLED"
 echo "same_session_recovery=VALIDATED_SHM_ONLY"
-if [ "$SOURCE_ONLY" = 1 ]; then
+if [ "$NATIVE_REBUILDS" = 1 ]; then
+    echo "vehicle_zip_status=NOT_READY_NATIVE_REBUILDS_REQUIRED"
+elif [ "$SOURCE_ONLY" = 1 ]; then
     echo "vehicle_zip_status=NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED"
 elif [ "$HOOK_PENDING" = 1 ]; then
     echo "vehicle_zip_status=NOT_READY_HOOK_REBUILD_REQUIRED"
