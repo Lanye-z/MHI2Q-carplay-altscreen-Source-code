@@ -161,6 +161,13 @@ jobs:
           assert 'STREAM_111_REQUESTED=YES' in side
           assert 'PIPELINE_SOURCE_PRIMED' in side
           assert 'startup_frame_progress_required=2' in side
+          assert 'PHASE=DISPLAYABLE3_OWNERSHIP' in side
+          assert 'DISPLAYABLE3_OWNERSHIP_V1' in side
+          assert '/tmp/mmi-mirror-displayable3.state' in side
+          backend = Path('Toolbox/carplay_alt_screen/mirror_display/src/mhi2q_backend.cpp').read_text()
+          assert 'sample_window_state' in backend
+          assert 'screen_get_window_property_iv_' in backend
+          assert 'screen_get_window_property_cv_' in backend
           assert 'MIRROR_ABNORMAL_RESTART=SCHEDULED' in launch
           assert 'ALT111_RECOVER_CURRENT_SESSION=1' in launch
           assert 'MAX_ABNORMAL_RESTARTS' in launch
@@ -270,6 +277,9 @@ jobs:
             strings "$bin" | grep -Fq 'PHASE=PIPELINE_SOURCE_PRIMED'
             strings "$bin" | grep -Fq 'startup_frame_progress_required=2'
             strings "$bin" | grep -Fq 'PHASE=DISPLAYABLE3_FIRST_PRESENT'
+            strings "$bin" | grep -Fq 'PHASE=DISPLAYABLE3_OWNERSHIP'
+            strings "$bin" | grep -Fq 'DISPLAYABLE3_OWNERSHIP_V1'
+            strings "$bin" | grep -Fq '/tmp/mmi-mirror-displayable3.state'
             strings "$bin" | grep -Fq 'PHASE=DIRECT111_ACTIVE'
             if strings "$bin" | grep -Fq 'screen_read_window'; then
               echo "DIRECT111_V2_FAIL Screen readback must remain in hook, not sidecar" >&2
