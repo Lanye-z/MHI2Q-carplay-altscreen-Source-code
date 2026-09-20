@@ -194,6 +194,7 @@ for marker in \
   'renderer_offset=' \
   'runtime_switch=updateViewArea' \
   'gate=LayoutMIB2HighB9' \
+  'canvas_gate=%d' \
   'predeclared_even_if_hmi_late=' \
   'PHASE=ALT111_VIEWAREA_SUBMIT' \
   'PHASE=ALT111_VIEWAREA_TARGET' \

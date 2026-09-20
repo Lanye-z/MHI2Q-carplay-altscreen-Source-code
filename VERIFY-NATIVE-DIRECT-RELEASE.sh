@@ -326,8 +326,16 @@ grep -Fq 'PHASE=ALT111_VIEWAREA_RESULT' "$NATIVE" ||
     fail "native view-area response/retry observer missing"
 grep -Fq 'strstr(layout, "LayoutMIB2HighB9")' "$NATIVE" ||
     fail "view-area sender is not gated to the measured B9 layout family"
+grep -Fq 'native_measured_view_area_canvas' "$NATIVE" ||
+    fail "view-area sender does not gate on measured private111 canvas geometry"
+grep -Fq 'route_ready &&' "$NATIVE" ||
+    fail "view-area update may run before the private route has a validated first frame"
+grep -Fq 'height == 542u || height == 540u || height == 455u' "$NATIVE" ||
+    fail "view-area sender canvas gate does not match the declared B9 geometry set"
 grep -Fq 'gate=LayoutMIB2HighB9' "$NATIVE" ||
     fail "B9-only view-area gate diagnostic missing"
+grep -Fq 'canvas_gate=%d' "$NATIVE" ||
+    fail "view-area canvas gate diagnostic missing"
 grep -Fq 'usleep(100000u);' "$NATIVE" ||
     fail "live CarPlay layout watcher must poll HMI state at 100ms"
 grep -Fq 'renderer_scale=0' "$AIRPLAY_SRC" ||

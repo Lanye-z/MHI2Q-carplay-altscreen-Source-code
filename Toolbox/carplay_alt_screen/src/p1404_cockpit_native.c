@@ -589,6 +589,12 @@ static int request_route_action(struct native_slot *slot, int action) {
     return 1;
 }
 
+static int native_measured_view_area_canvas(uint32_t width,
+                                             uint32_t height) {
+    return width == 1440u &&
+           (height == 542u || height == 540u || height == 455u);
+}
+
 static int native_read_view_area_target(void) {
     FILE *f;
     char line[192];
@@ -697,9 +703,13 @@ static void *native_monitor_worker(void *arg) {
 
             if (desired_view_area == 0 || desired_view_area == 1) {
                 if (slot->view_area_target != desired_view_area) {
-                    altscreen_log("PHASE=ALT111_VIEWAREA_TARGET receiver=%p stream=%p generation=%u old=%d new=%d source=/tmp/mmi-mirror-hmi.state gate=LayoutMIB2HighB9",
+                    altscreen_log("PHASE=ALT111_VIEWAREA_TARGET receiver=%p stream=%p generation=%u old=%d new=%d source=/tmp/mmi-mirror-hmi.state gate=LayoutMIB2HighB9 config=%ux%u canvas_gate=%d",
                                   receiver, stream, generation,
-                                  slot->view_area_target, desired_view_area);
+                                  slot->view_area_target, desired_view_area,
+                                  slot->config_width, slot->config_height,
+                                  native_measured_view_area_canvas(
+                                      slot->config_width,
+                                      slot->config_height));
                     slot->view_area_target = desired_view_area;
                     slot->view_area_event_state = 0;
                 }
@@ -718,6 +728,9 @@ static void *native_monitor_worker(void *arg) {
                 slot->keyframe_event_at = now;
                 event_kind = ALT111_EVENT_FORCE_KEYFRAME;
             } else if (slot->ui_event_state == 2 &&
+                       route_ready &&
+                       native_measured_view_area_canvas(
+                           slot->config_width, slot->config_height) &&
                        (slot->view_area_target == 0 ||
                         slot->view_area_target == 1) &&
                        slot->view_area_applied != slot->view_area_target &&

@@ -220,9 +220,14 @@ params.adjacentViewAreas = [other index]
 ```
 
 The native watcher polls the HMI state at 100 ms and retries a failed/timed-out
-view-area transition. It sends index 0/1 only when `layout_name` belongs to the
-measured `LayoutMIB2HighB9` family, so an unknown/non-B9 display that declared
-only one viewArea cannot receive an invalid SMALL index.
+view-area transition. It sends index 0/1 only when all three conditions are true:
+
+- `layout_name` belongs to the measured `LayoutMIB2HighB9` family;
+- the validated private stream config is 1440x542, 1440x540, or 1440x455;
+- the private route has reached the accepted-showUI + valid config + first-real-frame state.
+
+An unknown/non-B9 or unexpected-canvas display therefore cannot receive an
+index that its `/info` contract may not have declared.
 
 The sidecar polls placement at 50 ms. Java updates
 `/tmp/mmi-mirror-hmi.state` through a temporary file; if a poll lands in the
