@@ -1,3 +1,21 @@
+<!-- ALTSCREEN-BRANCH-STATUS:BEGIN -->
+# AltScreen CarPlay / Virtual Cockpit status
+
+**Branch:** `carplay-private111-direct-display-v1`  
+**Role:** Historical V1 experiment — superseded
+
+This branch is retained for history and regression reference. It did **not** produce the confirmed usable physical VC first-light that was later achieved by the modified V2 branch.
+
+V1 was valuable for proving and instrumenting the private111/H.264/stock-OMX/displayable3/Context80 boundaries, but it is no longer the branch to use for new vehicle testing.
+
+For current work use `main`. For the known-good first-light reference use `carplay-private111-direct-display-v2`.
+
+> The toolbox documentation below is inherited from the upstream MIB2 High toolbox. The branch-status section above describes the CarPlay/VC experiment in this repository.
+
+---
+
+<!-- ALTSCREEN-BRANCH-STATUS:END -->
+
 # MIB2 High toolbox
 The ultimate MIB2-HIGH toolbox for all your MIB2 High customization needs.
 
