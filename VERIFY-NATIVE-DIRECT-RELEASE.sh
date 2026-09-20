@@ -76,7 +76,7 @@ elif grep -Fq 'release_binary_status=V2_BINARY_STALE_LOGGING_REBUILD_REQUIRED' "
 elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$INFO"; then
     grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$INFO" ||
         fail "rebuilt V2 sidecar is not marked vehicle-ready"
-    for marker in 'carplay-private111-direct-display-v2' 'PHASE=DECODED_SHM_WAIT_SIZE' 'PHASE=SOURCE_SESSION' 'PHASE=GATE_RECOVER_CURRENT_SESSION' 'matching_identity_plus_frame_progress' 'packed_tight_required=1' 'stream111_request_or_phone_marker' 'STREAM_111_REQUESTED=YES' 'PHASE=PIPELINE_SOURCE_PRIMED' 'startup_frame_progress_required=2' 'PHASE=DISPLAYABLE3_FIRST_PRESENT' 'PHASE=DIRECT111_ACTIVE'
+    for marker in 'carplay-private111-direct-display-v2' 'PHASE=DECODED_SHM_WAIT_SIZE' 'PHASE=SOURCE_SESSION' 'PHASE=GATE_RECOVER_CURRENT_SESSION' 'matching_identity_plus_frame_progress' 'packed_tight_required=1' 'stream111_request_or_phone_marker' 'STREAM_111_REQUESTED=YES' 'PHASE=PIPELINE_SOURCE_PRIMED' 'startup_frame_progress_required=2' 'PHASE=DISPLAYABLE3_FIRST_PRESENT' 'PHASE=DISPLAYABLE3_OWNERSHIP' 'DISPLAYABLE3_OWNERSHIP_V1' '/tmp/mmi-mirror-displayable3.state' 'PHASE=DIRECT111_ACTIVE'
     do
         binary_strings "$BIN" | grep -Fq "$marker" ||
             fail "V2 sidecar marker missing: $marker"
@@ -175,6 +175,18 @@ if grep -Fq 'P111_LINEARIZER_TARGET_INTERVAL_US' "$TAP" ||
 fi
 grep -Fq 'static const unsigned kTargetFps = 30;' "$MAIN_CPP" ||
     fail "sidecar presentation pacing must remain 30fps"
+grep -Fq 'PHASE=DISPLAYABLE3_OWNERSHIP' "$MAIN_CPP" ||
+    fail "displayable3 ownership transition diagnostics missing"
+grep -Fq 'DISPLAYABLE3_OWNERSHIP_V1' "$MAIN_CPP" ||
+    fail "displayable3 ownership observer identity missing"
+grep -Fq '/tmp/mmi-mirror-displayable3.state' "$MAIN_CPP" ||
+    fail "displayable3 ownership state file missing"
+grep -Fq 'sample_window_state' "$BACKEND_CPP" ||
+    fail "read-only displayable3 window-state sampler missing"
+grep -Fq 'screen_get_window_property_iv_' "$BACKEND_CPP" ||
+    fail "displayable3 visible-state readback missing"
+grep -Fq 'screen_get_window_property_cv_' "$BACKEND_CPP" ||
+    fail "displayable3 manager-state readback missing"
 grep -Fq 'DIRECT111_TAP_STOP_STALE' "$TAP" ||
     fail "stale-stream teardown isolation missing"
 grep -Fq 'DIRECT111_TAP_STALE_CALLBACK' "$TAP" ||
