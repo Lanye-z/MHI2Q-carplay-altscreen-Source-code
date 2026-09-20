@@ -1,3 +1,5 @@
+**实车状态：已完成实车验证。** 在保持 V2 第二屏正常点亮的同时，已成功采集 Classic/Sport × Full/Small 四种 OEM 布局参数，observer 未破坏主显示链路。
+
 > [!IMPORTANT]
 > **当前状态与安全提示**
 >
