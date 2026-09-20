@@ -35,6 +35,7 @@ public final class ClusterStateController {
     public static final int VIEWAREA_SMALLSCREEN = 1;
 
     private static final long POLL_MS = 100L;
+    private static final long OEM_PROBE_MS = 500L;
     private static final long RECONCILE_MS = 250L;
     private static final long BOUNCE_MS = 180L;
     private static final long VERIFY_STEP_MS = 50L;
@@ -44,6 +45,20 @@ public final class ClusterStateController {
     private static final long DIAG_MAX_BYTES = 131072L;
 
     private static final String HMI_STATE_FILE = "/tmp/mmi-mirror-hmi.state";
+    /*
+     * OEM_LAYOUT_OBSERVER_V1
+     *
+     * This snapshot is observation-only.  It deliberately does not drive
+     * CarPlay viewAreas/safeArea or the displayable3 renderer until the
+     * vehicle-specific ListModel176 values and plane geometry have been
+     * correlated on-car.
+     */
+    private static final String OEM_GEOMETRY_STATE_FILE =
+        "/tmp/carplay-oem-geometry.state";
+    private static final int OEM_SCREEN_LAYOUT_MODEL_ID = 176;
+    private static final int OEM_SCREEN_LAYOUT_ROW = 1;
+    private static final int OEM_REQUIRED_COLUMN_COUNT = 28;
+    private static final int OEM_MISSING = Integer.MIN_VALUE;
     private static final String BASEVIDEO_ACTIVE_FILE = "/tmp/mmi-mirror-active";
     private static final String BASEVIDEO_READY_FILE = "/tmp/mmi-mirror-basevideo.ready";
     private static final String CONTEXT_MODE_FILE = "/tmp/mmi-mirror-context.mode";
@@ -66,6 +81,10 @@ public final class ClusterStateController {
     private static String lastStateSignature = "";
     private static String lastContextMode = "";
     private static String lastObserverStatus = "";
+    private static String lastOemGeometrySignature = "";
+    private static String lastOemProbeStatus = "";
+    private static long oemGeometryRevision;
+    private static long lastOemProbeMs;
     private static long lastReconcileMs;
     private static int contextWriteFailures;
     private static long circuitOpenUntilMs;
@@ -204,6 +223,7 @@ public final class ClusterStateController {
         }
 
         String layoutName = "unknown";
+        Object layoutObject = null;
         int smallDx = 0;
         int smallDy = 0;
         try {
@@ -213,19 +233,15 @@ public final class ClusterStateController {
                     + " class=" + choiceClass);
                 return;
             }
-            Object layout = invokeNoArg(terminal, "getLayout");
-            if (layout == null) {
+            layoutObject = invokeNoArg(terminal, "getLayout");
+            if (layoutObject == null) {
                 observerStatus("terminal1 layout=null; choice=" + choiceValue
                     + " class=" + choiceClass);
                 return;
             }
-            layoutName = layout.getClass().getName();
-            Method getInt = layout.getClass().getMethod(
-                "getIntegerConstant", new Class[]{Integer.TYPE});
-            smallDx = ((Integer)getInt.invoke(
-                layout, new Object[]{new Integer(80)})).intValue();
-            smallDy = ((Integer)getInt.invoke(
-                layout, new Object[]{new Integer(81)})).intValue();
+            layoutName = layoutObject.getClass().getName();
+            smallDx = readLayoutConstant(layoutObject, 80);
+            smallDy = readLayoutConstant(layoutObject, 81);
         } catch (Throwable t) {
             observerStatus("terminal/layout read failed: " + describe(t)
                 + " choice=" + choiceValue + " class=" + choiceClass);
@@ -236,6 +252,15 @@ public final class ClusterStateController {
         boolean sport = lower.indexOf("sport") >= 0 || smallDx != 0 || smallDy != 0;
         String layout = sport ? "SPORT" : "CLASSIC";
         String view = small ? "SMALL" : "FULL";
+
+        /*
+         * The legacy CLASSIC/SPORT hint above is retained only for the old
+         * mmi-mirror-hmi.state compatibility file.  K1004 reverse engineering
+         * proved that the actual OEM geometry comes from ListModel 176 row 1;
+         * do not use the class-name hint as a geometry source.
+         */
+        pollOemGeometry(hmi, layoutObject, choiceValue, layoutName, view);
+
         observerStatus("ok choice=" + choiceValue + " choiceClass=" + choiceClass
             + " layoutClass=" + layoutName + " c80=" + smallDx + " c81=" + smallDy
             + " -> " + layout + "_" + view);
@@ -451,6 +476,345 @@ public final class ClusterStateController {
         contextWriteFailures = 0;
         diag("context circuit breaker OPEN for " + CIRCUIT_BREAKER_MS
             + " ms; ownership released");
+    }
+
+
+    /*
+     * Read-only K1004 OEM geometry probe.
+     *
+     * Reverse-engineering evidence:
+     *   ListModel 176 row 1:
+     *     0 screenWidth, 1 screenHeight,
+     *     8 infolineBottom, 9 reiterlineTop,
+     *     11/12 full tube L/R, 13/14 small(KB) tube L/R,
+     *     24/25 map offsets, 26/27 map H/W.
+     *
+     * getVisibleArea:
+     *   x = tubeLeft - mapOffsetLeft
+     *   y = reiterlineTop - mapOffsetTop
+     *   w = screenWidth - tubeLeft - tubeRight
+     *   h = screenHeight - reiterlineTop - infolineBottom
+     *
+     * Nothing in this method changes a HMI model, context, displayable,
+     * CarPlay dictionary, decoder or renderer.
+     */
+    private static void pollOemGeometry(Object hmi, Object layoutObject,
+                                        int choiceValue, String layoutName,
+                                        String view) {
+        long now = nowMs();
+        if (now - lastOemProbeMs < OEM_PROBE_MS) return;
+        lastOemProbeMs = now;
+
+        try {
+            Object list = resolveListModel176(hmi);
+            if (list == null) {
+                oemProbeUnavailable("ListModel176 unavailable");
+                return;
+            }
+
+            Object lengthValue = invokeNoArg(list, "getLength");
+            int rowCount = numberValue(lengthValue, -1);
+            if (rowCount <= OEM_SCREEN_LAYOUT_ROW) {
+                oemProbeUnavailable("ListModel176 length=" + rowCount);
+                return;
+            }
+
+            Object row = invokeInt(list, "getRow", OEM_SCREEN_LAYOUT_ROW);
+            if (row == null) {
+                oemProbeUnavailable("ListModel176 row1=null");
+                return;
+            }
+
+            int colCount = numberValue(invokeNoArg(row, "getColumnCount"), -1);
+            if (colCount < OEM_REQUIRED_COLUMN_COUNT) {
+                oemProbeUnavailable("ListModel176 row1 columns=" + colCount
+                    + " required>=" + OEM_REQUIRED_COLUMN_COUNT);
+                return;
+            }
+
+            int[] values = readIntegerRow(row, colCount);
+            if (!oemColumnsValid(values)) {
+                oemProbeUnavailable("ListModel176 required integer columns missing");
+                return;
+            }
+
+            int screenWidth = values[0];
+            int screenHeight = values[1];
+            int infolineBottom = values[8];
+            int reiterlineTop = values[9];
+            int tubeLeft = values[11];
+            int tubeRight = values[12];
+            int tubeLeftKb = values[13];
+            int tubeRightKb = values[14];
+            int mapOffsetLeft = values[24];
+            int mapOffsetTop = values[25];
+            int mapHeightRaw = values[26];
+            int mapWidthRaw = values[27];
+
+            int mapWidth = mapWidthRaw > 0 ? mapWidthRaw : screenWidth;
+            int mapHeight = mapHeightRaw > 0 ? mapHeightRaw : screenHeight;
+
+            int fullX = tubeLeft - mapOffsetLeft;
+            int fullY = reiterlineTop - mapOffsetTop;
+            int fullW = screenWidth - tubeLeft - tubeRight;
+            int fullH = screenHeight - reiterlineTop - infolineBottom;
+
+            int smallX = tubeLeftKb - mapOffsetLeft;
+            int smallY = fullY;
+            int smallW = screenWidth - tubeLeftKb - tubeRightKb;
+            int smallH = fullH;
+
+            boolean small = choiceValue == 1;
+            int activeX = small ? smallX : fullX;
+            int activeY = small ? smallY : fullY;
+            int activeW = small ? smallW : fullW;
+            int activeH = small ? smallH : fullH;
+
+            int c80 = readLayoutConstantSafe(layoutObject, 80);
+            int c81 = readLayoutConstantSafe(layoutObject, 81);
+            int c108 = readLayoutConstantSafe(layoutObject, 108);
+            int c109 = readLayoutConstantSafe(layoutObject, 109);
+            int c114 = readLayoutConstantSafe(layoutObject, 114);
+            int c115 = readLayoutConstantSafe(layoutObject, 115);
+
+            String rowValues = serializeIntegerRow(values);
+            String signature = choiceValue + "/" + layoutName + "/"
+                + rowValues + "/" + c80 + "/" + c81 + "/" + c108 + "/"
+                + c109 + "/" + c114 + "/" + c115;
+
+            if (!signature.equals(lastOemGeometrySignature)) {
+                lastOemGeometrySignature = signature;
+                ++oemGeometryRevision;
+                String layoutHint = layoutName.toLowerCase().indexOf("sport") >= 0
+                    ? "SPORT_HINT" : "UNKNOWN";
+                String text = "schema=1\n"
+                    + "observer=OEM_LAYOUT_OBSERVER_V1\n"
+                    + "mode=OBSERVE_ONLY\n"
+                    + "valid=1\n"
+                    + "revision=" + oemGeometryRevision + "\n"
+                    + "timestamp_ms=" + now + "\n"
+                    + "apply_to_carplay=0\n"
+                    + "apply_to_renderer=0\n"
+                    + "nav_view_size_choice=" + choiceValue + "\n"
+                    + "view=" + view + "\n"
+                    + "layout_class=" + layoutName + "\n"
+                    + "layout_hint=" + layoutHint + "\n"
+                    + "list_model_id=176\n"
+                    + "list_row=1\n"
+                    + "list_length=" + rowCount + "\n"
+                    + "row1_column_count=" + colCount + "\n"
+                    + "row1_values=" + rowValues + "\n"
+                    + "screen_width=" + screenWidth + "\n"
+                    + "screen_height=" + screenHeight + "\n"
+                    + "infoline_bottom=" + infolineBottom + "\n"
+                    + "reiterline_top=" + reiterlineTop + "\n"
+                    + "tube_left_full=" + tubeLeft + "\n"
+                    + "tube_right_full=" + tubeRight + "\n"
+                    + "tube_left_small=" + tubeLeftKb + "\n"
+                    + "tube_right_small=" + tubeRightKb + "\n"
+                    + "map_offset_left=" + mapOffsetLeft + "\n"
+                    + "map_offset_top=" + mapOffsetTop + "\n"
+                    + "map_width_raw=" + mapWidthRaw + "\n"
+                    + "map_height_raw=" + mapHeightRaw + "\n"
+                    + "map_width_effective=" + mapWidth + "\n"
+                    + "map_height_effective=" + mapHeight + "\n"
+                    + "visible_full_x=" + fullX + "\n"
+                    + "visible_full_y=" + fullY + "\n"
+                    + "visible_full_w=" + fullW + "\n"
+                    + "visible_full_h=" + fullH + "\n"
+                    + "visible_small_x=" + smallX + "\n"
+                    + "visible_small_y=" + smallY + "\n"
+                    + "visible_small_w=" + smallW + "\n"
+                    + "visible_small_h=" + smallH + "\n"
+                    + "visible_active_x=" + activeX + "\n"
+                    + "visible_active_y=" + activeY + "\n"
+                    + "visible_active_w=" + activeW + "\n"
+                    + "visible_active_h=" + activeH + "\n"
+                    + "layout_const_80=" + c80 + "\n"
+                    + "layout_const_81=" + c81 + "\n"
+                    + "layout_const_108=" + c108 + "\n"
+                    + "layout_const_109=" + c109 + "\n"
+                    + "layout_const_114=" + c114 + "\n"
+                    + "layout_const_115=" + c115 + "\n"
+                    + "carplay_session=" + (carPlaySessionActive ? "1" : "0") + "\n"
+                    + "rgi_active=" + (rgiPresentationActive ? "1" : "0") + "\n";
+
+                if (writeAtomicState(OEM_GEOMETRY_STATE_FILE, text)) {
+                    lastOemProbeStatus = "valid";
+                    diag("OEM_GEOMETRY_OBSERVER publish revision="
+                        + oemGeometryRevision + " view=" + view
+                        + " active=" + activeX + "," + activeY + ","
+                        + activeW + "x" + activeH
+                        + " screen=" + screenWidth + "x" + screenHeight
+                        + " map=" + mapWidth + "x" + mapHeight
+                        + " apply=NONE");
+                }
+            }
+        } catch (Throwable t) {
+            oemProbeUnavailable(describe(t));
+        }
+    }
+
+    private static Object resolveListModel176(Object hmi) throws Exception {
+        if (hmi == null) return null;
+        Object candidate = null;
+        try {
+            candidate = invokeInt(hmi, "getListModel", OEM_SCREEN_LAYOUT_MODEL_ID);
+        } catch (NoSuchMethodException e) {
+            candidate = null;
+        }
+        if (isListModelShape(candidate)) return candidate;
+
+        /*
+         * Some HMI service implementations expose list models through the
+         * generic getModel(int) entry.  Accept that fallback only after
+         * verifying the expected getLength/getRow shape.
+         */
+        try {
+            candidate = invokeInt(hmi, "getModel", OEM_SCREEN_LAYOUT_MODEL_ID);
+        } catch (NoSuchMethodException e) {
+            candidate = null;
+        }
+        return isListModelShape(candidate) ? candidate : null;
+    }
+
+    private static boolean isListModelShape(Object candidate) {
+        if (candidate == null) return false;
+        try {
+            Object length = invokeNoArg(candidate, "getLength");
+            if (!(length instanceof Number)) return false;
+            candidate.getClass().getMethod(
+                "getRow", new Class[]{Integer.TYPE});
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private static int[] readIntegerRow(Object row, int colCount)
+        throws Exception {
+        int limit = colCount;
+        if (limit > 64) limit = 64;
+        int[] values = new int[limit];
+        int i;
+        for (i = 0; i < limit; ++i) {
+            values[i] = OEM_MISSING;
+            try {
+                Object cell = invokeInt(row, "getCell", i);
+                if (cell == null) continue;
+                Object value = invokeNoArg(cell, "getValue");
+                if (value instanceof Number) {
+                    values[i] = ((Number)value).intValue();
+                }
+            } catch (Throwable ignored) {
+                values[i] = OEM_MISSING;
+            }
+        }
+        return values;
+    }
+
+    private static boolean oemColumnsValid(int[] values) {
+        int[] required = new int[]{
+            0, 1, 8, 9, 11, 12, 13, 14, 24, 25
+        };
+        int i;
+        for (i = 0; i < required.length; ++i) {
+            int c = required[i];
+            if (c >= values.length || values[c] == OEM_MISSING) return false;
+        }
+        return true;
+    }
+
+    private static String serializeIntegerRow(int[] values) {
+        StringBuffer b = new StringBuffer();
+        int i;
+        for (i = 0; i < values.length; ++i) {
+            if (i > 0) b.append(',');
+            b.append(i).append(':');
+            if (values[i] == OEM_MISSING) b.append('?');
+            else b.append(values[i]);
+        }
+        return b.toString();
+    }
+
+    private static int readLayoutConstant(Object layout, int id)
+        throws Exception {
+        if (layout == null) throw new Exception("layout=null");
+        Method getInt = layout.getClass().getMethod(
+            "getIntegerConstant", new Class[]{Integer.TYPE});
+        Object value = getInt.invoke(layout, new Object[]{new Integer(id)});
+        if (!(value instanceof Number)) {
+            throw new Exception("layout constant " + id + " non-number");
+        }
+        return ((Number)value).intValue();
+    }
+
+    private static int readLayoutConstantSafe(Object layout, int id) {
+        try {
+            return readLayoutConstant(layout, id);
+        } catch (Throwable t) {
+            return OEM_MISSING;
+        }
+    }
+
+    private static int numberValue(Object value, int fallback) {
+        return value instanceof Number ? ((Number)value).intValue() : fallback;
+    }
+
+    private static void oemProbeUnavailable(String reason) {
+        String status = reason == null ? "unknown" : reason;
+        if (!status.equals(lastOemProbeStatus)) {
+            lastOemProbeStatus = status;
+            diag("OEM_GEOMETRY_OBSERVER unavailable: " + status);
+        }
+
+        /*
+         * Preserve a previously valid snapshot.  If no valid snapshot has
+         * ever been published, expose an explicit invalid state so log
+         * collection can distinguish 'not yet sampled' from a missing probe.
+         */
+        File dst = new File(OEM_GEOMETRY_STATE_FILE);
+        if (!dst.exists()) {
+            String text = "schema=1\n"
+                + "observer=OEM_LAYOUT_OBSERVER_V1\n"
+                + "mode=OBSERVE_ONLY\n"
+                + "valid=0\n"
+                + "timestamp_ms=" + nowMs() + "\n"
+                + "reason=" + sanitizeStateValue(status) + "\n"
+                + "apply_to_carplay=0\n"
+                + "apply_to_renderer=0\n";
+            writeAtomicState(OEM_GEOMETRY_STATE_FILE, text);
+        }
+    }
+
+    private static String sanitizeStateValue(String value) {
+        if (value == null) return "unknown";
+        return value.replace('\n', ' ').replace('\r', ' ');
+    }
+
+    private static boolean writeAtomicState(String path, String text) {
+        File tmp = new File(path + ".tmp");
+        File dst = new File(path);
+        FileOutputStream out = null;
+        try {
+            out = new FileOutputStream(tmp);
+            out.write(text.getBytes("UTF-8"));
+            out.flush();
+            out.close();
+            out = null;
+            if (dst.exists() && !dst.delete()) {
+                diag("WARN could not delete old OEM geometry state before replace");
+            }
+            if (!tmp.renameTo(dst)) {
+                copyFile(tmp, dst);
+                tmp.delete();
+            }
+            return true;
+        } catch (Throwable t) {
+            diag("ERROR OEM geometry state write failed: " + describe(t));
+            try { if (out != null) out.close(); } catch (Throwable ignored) {}
+            return false;
+        }
     }
 
     private static int resolveNavViewSizeChoiceId() {
