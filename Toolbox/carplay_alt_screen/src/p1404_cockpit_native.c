@@ -28,6 +28,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <dlfcn.h>
 #include <unistd.h>
 
@@ -118,8 +119,12 @@ struct native_slot {
     uint32_t config_usage;
     uint64_t ui_event_at;
     uint64_t keyframe_event_at;
+    uint64_t view_area_event_at;
     int ui_event_state;       /* 0=needed, 1=inflight, 2=accepted, 3=timed-out */
     int keyframe_event_state; /* 0=needed, 1=inflight, 2=accepted, 3=timed-out */
+    int view_area_event_state;/* 0=needed, 1=inflight, 2=accepted */
+    int view_area_target;     /* 0=FULL, 1=SMALL, -1=unknown */
+    int view_area_applied;    /* last accepted index, -1=unknown */
 };
 
 struct native_thread_job {
@@ -584,6 +589,33 @@ static int request_route_action(struct native_slot *slot, int action) {
     return 1;
 }
 
+static int native_read_view_area_target(void) {
+    FILE *f;
+    char line[128];
+    int target = -1;
+
+    f = fopen("/tmp/mmi-mirror-hmi.state", "r");
+    if (!f) return -1;
+
+    while (fgets(line, sizeof(line), f)) {
+        if (!strncmp(line, "view=FULL", 9u)) {
+            target = 0;
+            break;
+        }
+        if (!strncmp(line, "view=SMALL", 10u)) {
+            target = 1;
+            break;
+        }
+    }
+    fclose(f);
+    return target;
+}
+
+/*
+ * This monitor is the same-session bridge between Audi NAV_VIEW_SIZE_CHOICE
+ * and CarPlay's standard updateViewArea command.  Java publishes the OEM state;
+ * no reconnect and no second /info transaction is required.
+ */
 static void *native_monitor_worker(void *arg) {
     struct native_thread_job *job = (struct native_thread_job *)arg;
     struct native_slot *slot = job ? job->slot : NULL;
@@ -593,10 +625,19 @@ static void *native_monitor_worker(void *arg) {
     uint32_t state_generation = job ? job->state_generation : 0;
     uint64_t now;
     int visible, pending, live, route_ready, event_kind, send_rc;
+    int desired_view_area, view_area_send_index;
+
     for (;;) {
-        sleep(1u);
+        /*
+         * 100 ms layout polling keeps Audi View-button changes perceptibly
+         * immediate while staying far away from the frame/render hot path.
+         */
+        usleep(100000u);
         now = obs_now_us();
+        desired_view_area = native_read_view_area_target();
         event_kind = 0;
+        view_area_send_index = -1;
+
         native_lock();
         live = slot && slot->stream == stream && slot->receiver == receiver &&
                slot->generation == generation &&
@@ -606,6 +647,7 @@ static void *native_monitor_worker(void *arg) {
         route_ready = live && slot->ui_event_state == 2 &&
                       slot->preconfig_rewritten && slot->config_ok &&
                       slot->first_real_frame_posted;
+
         if (live) {
             if (slot->ui_event_state == 1 &&
                 now > slot->ui_event_at + NATIVE_EVENT_TIMEOUT_SECONDS) {
@@ -619,6 +661,31 @@ static void *native_monitor_worker(void *arg) {
                 altscreen_log("ERROR PHASE=ALT111_EVENT_TIMEOUT receiver=%p stream=%p generation=%u event=forceKeyFrame retry=0 fail_closed=1",
                               receiver, stream, generation);
             }
+
+            /*
+             * View-area commands are safe to retry: they only select one of
+             * the two viewAreas already declared for type111. A stale callback
+             * cannot mark a newer target accepted because the callback carries
+             * the requested index and result handling checks it.
+             */
+            if (slot->view_area_event_state == 1 &&
+                now > slot->view_area_event_at + NATIVE_EVENT_TIMEOUT_SECONDS) {
+                altscreen_log("WARN PHASE=ALT111_VIEWAREA_TIMEOUT receiver=%p stream=%p generation=%u target=%d retry=1",
+                              receiver, stream, generation,
+                              slot->view_area_target);
+                slot->view_area_event_state = 0;
+            }
+
+            if (desired_view_area == 0 || desired_view_area == 1) {
+                if (slot->view_area_target != desired_view_area) {
+                    altscreen_log("PHASE=ALT111_VIEWAREA_TARGET receiver=%p stream=%p generation=%u old=%d new=%d source=/tmp/mmi-mirror-hmi.state",
+                                  receiver, stream, generation,
+                                  slot->view_area_target, desired_view_area);
+                    slot->view_area_target = desired_view_area;
+                    slot->view_area_event_state = 0;
+                }
+            }
+
             if (slot->ui_event_state == 0 &&
                 (!slot->ui_event_at || now > slot->ui_event_at + NATIVE_EVENT_RETRY_SECONDS)) {
                 slot->ui_event_state = 1;
@@ -631,16 +698,35 @@ static void *native_monitor_worker(void *arg) {
                 slot->keyframe_event_state = 1;
                 slot->keyframe_event_at = now;
                 event_kind = ALT111_EVENT_FORCE_KEYFRAME;
+            } else if (slot->ui_event_state == 2 &&
+                       (slot->view_area_target == 0 ||
+                        slot->view_area_target == 1) &&
+                       slot->view_area_applied != slot->view_area_target &&
+                       slot->view_area_event_state != 1) {
+                slot->view_area_event_state = 1;
+                slot->view_area_event_at = now;
+                view_area_send_index = slot->view_area_target;
+                event_kind = ALT111_EVENT_UPDATE_VIEW_AREA;
             }
         }
         native_unlock();
+
         if (!live) break;
-        if (event_kind) {
+
+        if (event_kind == ALT111_EVENT_UPDATE_VIEW_AREA) {
+            send_rc = alt_send_cluster_view_area(
+                receiver, stream, generation, view_area_send_index);
+            if (send_rc != 0)
+                p1404_cockpit_native_view_area_result(
+                    receiver, stream, generation, view_area_send_index,
+                    send_rc, 0);
+        } else if (event_kind) {
             send_rc = alt_send_cluster_event(receiver, stream, generation, event_kind);
             if (send_rc != 0)
                 p1404_cockpit_native_event_result(receiver, stream, generation,
                                                    event_kind, send_rc, 0);
         }
+
         if (route_ready && !visible && !pending && native_route_requested()) {
             altscreen_log("PHASE=NATIVE_111_ROUTE_READY receiver=%p stream=%p generation=%u basis=dynamic_config_plus_accepted_showui_plus_first_real_type111_post video_availability_gate=real_frame",
                           receiver, stream, generation);
@@ -683,6 +769,40 @@ void p1404_cockpit_native_event_result(void *receiver, void *stream,
                   receiver, stream, generation, event_kind, status,
                   response_received, accepted && applied, applied,
                   applied && !accepted);
+}
+
+
+void p1404_cockpit_native_view_area_result(void *receiver, void *stream,
+                                            uint32_t generation,
+                                            int view_area_index,
+                                            int status,
+                                            int response_received) {
+    struct native_slot *slot;
+    int accepted = status == 0 && response_received;
+    int applied = 0;
+
+    native_lock();
+    slot = find_stream_locked(receiver, stream);
+    if (slot && slot->generation == generation &&
+        slot->view_area_target == view_area_index &&
+        slot->view_area_event_state == 1) {
+        if (accepted) {
+            slot->view_area_applied = view_area_index;
+            slot->view_area_event_state = 2;
+        } else {
+            slot->view_area_event_state = 0;
+        }
+        applied = 1;
+    }
+    native_unlock();
+
+    altscreen_log(
+        "PHASE=ALT111_VIEWAREA_RESULT receiver=%p stream=%p generation=%u "
+        "viewAreaIndex=%d status=%d response_received=%d accepted=%d "
+        "target_still_current=%d retry=%d",
+        receiver, stream, generation, view_area_index, status,
+        response_received, accepted && applied, applied,
+        applied && !accepted);
 }
 
 int p1404_cockpit_native_prepare_start(void *receiver) {
@@ -958,6 +1078,8 @@ int p1404_cockpit_native_attach(void *receiver, void *stream) {
         slot->generation = ++g_generation;
         if (!slot->generation) slot->generation = ++g_generation;
         slot->state_generation = state_snap.generation;
+        slot->view_area_target = -1;
+        slot->view_area_applied = -1;
         assigned_generation = slot->generation;
     }
     native_unlock();
@@ -1042,6 +1164,8 @@ int p1404_cockpit_native_test_route_seed(void *receiver, void *stream,
         slot->stream = stream;
         slot->generation = generation;
         slot->state_generation = state_generation;
+        slot->view_area_target = -1;
+        slot->view_area_applied = -1;
         ok = 1;
     }
     native_unlock();
