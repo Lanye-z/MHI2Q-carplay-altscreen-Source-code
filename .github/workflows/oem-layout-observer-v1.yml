@@ -267,6 +267,39 @@ jobs:
               )
               path.write_text(source)
 
+          # Keep the checked-in release manifest internally consistent even
+          # while the sidecar binary is intentionally marked stale/pending a
+          # QNX rebuild. BUILD_INFO is part of the release tree and its hash
+          # must describe the current metadata, not a previous promotion.
+          release_dir = (
+              root / "Toolbox/carplay_alt_screen/mirror_display/release"
+          )
+          release_sums = release_dir / "SHA256SUMS"
+          if release_sums.exists():
+              release_table = {}
+              for line in release_sums.read_text().splitlines():
+                  parts = line.split(None, 1)
+                  if len(parts) == 2:
+                      release_table[parts[1].strip()] = parts[0].lower()
+              for name in [
+                  "BUILD_INFO.txt",
+                  "carplay-alt111-mirror-display",
+                  "start_vehicle.sh",
+                  "stop_vehicle.sh",
+                  "libscreen_id_bridge.so",
+              ]:
+                  path = release_dir / name
+                  if path.is_file():
+                      release_table[name] = hashlib.sha256(
+                          path.read_bytes()
+                      ).hexdigest()
+              release_sums.write_text(
+                  "".join(
+                      "%s  %s\n" % (release_table[name], name)
+                      for name in sorted(release_table)
+                  )
+              )
+
           package = root / "PACKAGE_SOURCE_MAP.json"
           if package.exists():
               data = json.loads(package.read_text())
@@ -499,6 +532,7 @@ jobs:
             Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh \
             Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh \
             Toolbox/scripts/status_mmi_cockpit_carplay_test.sh \
+            Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS \
             PACKAGE_SOURCE_MAP.json \
             SHA256SUMS.txt
 
