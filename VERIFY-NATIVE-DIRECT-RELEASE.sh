@@ -194,6 +194,8 @@ if grep -Fq 'P111_LINEARIZER_TARGET_INTERVAL_US' "$TAP" ||
 fi
 grep -Fq 'static const unsigned kNoFramePollUs = 5000u;' "$MAIN_CPP" ||
     fail "source-driven sidecar must use the bounded 5ms no-new-frame poll"
+grep -Fq 'static const unsigned kDecodedStallReportUs = 120000u;' "$MAIN_CPP" ||
+    fail "source-driven sidecar must not report normal frame gaps as stalls"
 grep -Fq 'OEM_LAYOUT_ADAPTIVE_SINK_V2' "$MAIN_CPP" ||
     fail "OEM four-layout renderer controller missing"
 grep -Fq 'PHASE=OEM_LAYOUT_APPLY' "$MAIN_CPP" ||

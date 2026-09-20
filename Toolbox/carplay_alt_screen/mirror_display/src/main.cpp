@@ -10,6 +10,7 @@
 
 static volatile sig_atomic_t g_stop = 0;
 static const unsigned kNoFramePollUs = 5000u;
+static const unsigned kDecodedStallReportUs = 120000u;
 static const unsigned kOemLayoutProbeUs = 250000u;
 static const char kBuildId[] =
     "carplay-private111-direct-display-v2-source-driven-layout-v2";
@@ -937,33 +938,47 @@ int main(int argc, char **argv) {
             }
         } else {
             ++failures;
-            if (!in_stall) {
+            const unsigned long long idle_now = now_us();
+            if (!stall_start_us)
+                stall_start_us = idle_now;
+
+            const unsigned long long idle_us =
+                (idle_now && stall_start_us && idle_now >= stall_start_us)
+                    ? idle_now - stall_start_us : 0;
+
+            /*
+             * Source-driven polling normally observes several "no new
+             * sequence yet" iterations between ~30 fps producer frames.
+             * Do not misclassify those expected gaps as decoder stalls.
+             * A stall is reported only after the decoded sequence has failed
+             * to advance for a materially longer interval.
+             */
+            if (!in_stall && idle_us >= kDecodedStallReportUs) {
                 in_stall = true;
-                stall_start_us = now_us();
                 fprintf(stderr,
                         "direct111: PHASE=DECODED_SOURCE_STALL "
-                        "freeze_last_frame=1 failures=%u h264_packets=%u "
-                        "decoded_frames=%u generation=%u\n",
-                        failures, (unsigned)source.h264_packets(),
+                        "freeze_last_frame=1 duration_ms=%llu failures=%u "
+                        "h264_packets=%u decoded_frames=%u generation=%u "
+                        "poll_us=%u report_after_ms=%u\n",
+                        idle_us / 1000ULL, failures,
+                        (unsigned)source.h264_packets(),
                         (unsigned)source.decoded_frames(),
-                        (unsigned)source.generation());
-            } else if ((failures % 250u) == 0u) {
-                const unsigned long long now = now_us();
-                const unsigned long long stall_ms =
-                    (now && stall_start_us && now >= stall_start_us)
-                        ? (now - stall_start_us) / 1000ULL : 0;
+                        (unsigned)source.generation(),
+                        kNoFramePollUs,
+                        kDecodedStallReportUs / 1000u);
+            } else if (in_stall && (failures % 250u) == 0u) {
                 fprintf(stderr,
                         "direct111: PHASE=DECODED_SOURCE_STALL "
                         "freeze_last_frame=1 duration_ms=%llu failures=%u "
                         "h264_packets=%u decoded_frames=%u generation=%u\n",
-                        stall_ms, failures,
+                        idle_us / 1000ULL, failures,
                         (unsigned)source.h264_packets(),
                         (unsigned)source.decoded_frames(),
                         (unsigned)source.generation());
             }
-            /* No fixed ~3s auto-exit: keep freezing the last frame and let the
-             * stop script / signal own teardown. Short decoded gaps are normal
-             * during nav-map / phone / OMX scheduling jitter. */
+
+            /* No fixed ~3s auto-exit: freeze the last frame and let the
+             * stop script / signal own teardown. */
             usleep(kNoFramePollUs);
             continue;
         }

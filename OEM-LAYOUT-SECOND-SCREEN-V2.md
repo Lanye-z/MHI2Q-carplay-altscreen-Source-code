@@ -18,6 +18,7 @@ V2 removes the post-success 33.3 ms sleep. The sidecar now:
 - presents immediately when a fresh decoded SHM sequence is available;
 - sleeps only when no new sequence is available;
 - uses a bounded 5 ms no-new-frame poll;
+- treats those short polls as normal idle time; only >=120 ms without a new decoded sequence is reported as a real stall.
 - keeps the producer uncapped policy unchanged.
 
 Expected log marker:

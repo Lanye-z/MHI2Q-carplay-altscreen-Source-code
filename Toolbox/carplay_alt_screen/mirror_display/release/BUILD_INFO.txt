@@ -34,6 +34,7 @@ v2_pending_hardening=source_driven_sink,oem_layout_adaptive_destination
 sidecar_layout_adaptation_rebuild_required=yes
 sidecar_present_policy=source_driven_no_success_sleep
 sidecar_no_new_frame_poll_us=5000
+sidecar_stall_report_after_ms=120
 oem_layout_renderer=OEM_LAYOUT_ADAPTIVE_SINK_V2
 oem_layout_state=/tmp/carplay-oem-geometry.state
 oem_layout_modes=CLASSIC_FULL,CLASSIC_SMALL,SPORT_FULL,SPORT_SMALL
