@@ -1,6 +1,18 @@
 name: CarPlay private111 Direct Display V2
 
 on:
+  push:
+    branches:
+      - experiment/oem-layout-second-screen
+    paths:
+      - '.github/workflows/private111-direct-display-v2.yml'
+      - 'Toolbox/carplay_alt_screen/mirror_display/src/**'
+      - 'Toolbox/carplay_alt_screen/mirror_display/Makefile'
+      - 'Toolbox/carplay_alt_screen/mirror_display/build_qnx.sh'
+      - 'Toolbox/carplay_alt_screen/src/**'
+      - 'Toolbox/carplay_alt_screen/tests/**'
+      - 'Toolbox/scripts/**'
+      - 'VERIFY-NATIVE-DIRECT-RELEASE.sh'
   workflow_dispatch:
 concurrency:
   group: experiment-oem-layout-logging-qnx-v2
@@ -182,9 +194,15 @@ jobs:
             Toolbox/carplay_alt_screen/mirror_display/src/gl_renderer.cpp
           g++ -std=c++98 -Wall -Wextra -Werror -fsyntax-only \
             -IToolbox/carplay_alt_screen/mirror_display/src \
+            Toolbox/carplay_alt_screen/mirror_display/src/mhi2q_backend.cpp
+          g++ -std=c++98 -Wall -Wextra -Werror -fsyntax-only \
+            -IToolbox/carplay_alt_screen/mirror_display/src \
+            Toolbox/carplay_alt_screen/mirror_display/src/cluster_video_display.cpp
+          g++ -std=c++98 -Wall -Wextra -Werror -fsyntax-only \
+            -IToolbox/carplay_alt_screen/mirror_display/src \
             -IToolbox/carplay_alt_screen/src \
             Toolbox/carplay_alt_screen/mirror_display/src/main.cpp
-          echo "DIRECT111_V2_SIDECAR_SOURCE=PASS"
+          echo "DIRECT111_V2_SIDECAR_SOURCE=PASS all_translation_units=YES"
 
       - name: Check vehicle scripts
         run: |
