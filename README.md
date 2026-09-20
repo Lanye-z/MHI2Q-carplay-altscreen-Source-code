@@ -19,6 +19,41 @@
 - `carplay-private111-direct-display-v2` 保留为首次成功点亮的备份分支。
 - `carplay-private111-direct-display-v1` 仅保留用于历史对照，不再作为新的测试起点。
 
+### 2026-09-20 `experiment/oem-layout-second-screen` 实车结论
+
+本次 `MMI-Cockpit-Carplay.zip` 日志表明，本实验分支在保留 V2 第二屏直显链路的同时，已经完成 **OEM 四态布局参数的一次性实车采集**。本次日志中的车机报告固件为 `MHI2Q_CN_AUG22_P1404`。
+
+核心结论：
+
+- **V2 主显示链没有被 OEM observer 改坏。** Private111 能完成协商、`accept()`、原车 OMX 解码、NV12 linearizer、decoded SHM、displayable3 和 Context80 输出；日志记录到 `CTX80_OBSERVED actual=80`，并持续出现显示帧。
+- **Main110 仍保持原车路径。** Native 日志继续记录 `main110_untouched=1`，本轮观察逻辑没有改写主 CarPlay 视频链。
+- **四种 OEM 布局均已成功识别。** 同一 CarPlay 会话内捕获到了 Sport Full、Sport Small、Classic Full、Classic Small，无需为同一目的再次上车采集。
+- **Observer 契约保持成立。** 所有 geometry snapshot 均为 `apply_to_carplay=0`、`apply_to_renderer=0`；DisplayManager 只完成方法元数据枚举，没有调用 getter/setter 去改变原车显示状态。
+- **producer 侧解除限帧已经生效。** Linearizer 连续记录到 3600 次 readback / 3600 次 publish，`publish_drops=0`、`failures=0`、`fallbacks=0`；readback P50 约 3 ms、P95 约 4 ms、最大约 7.05 ms，说明当前 Screen 读取本身可以稳定跟随约 30 fps 的 producer。
+- **当前实际显示端仍约 15 fps。** Sidecar 的 `PHASE=RUN` 在稳定阶段约为 14.3–16.8 fps，后段为约 14.97 fps；因此当前主要帧率损失已经不在 producer readback，而更可能位于 `decoded SHM → sidecar 取帧/去重 → RGBA/GLES → present` 这一段。下一步不应再主动把 producer 改成“隔一帧读一帧”。
+- 日志中可见少量 `DECODED_SOURCE_STALL` / `RECOVERED` 和 `DECODED_FRAME_RACE retry=1`，但均能自动恢复，没有看到它们导致本次第二屏会话中止。
+
+本次采集得到的 OEM 四态几何如下：
+
+| OEM 状态 | Layout class | 关键布局常量 | Active visible area |
+| --- | --- | ---: | --- |
+| Sport Full | `LayoutMIB2HighB9Sport` | `layout_const_80=-476` | `x=370, y=49, 700×300` |
+| Sport Small | `LayoutMIB2HighB9Sport` | `layout_const_80=-476` | `x=490, y=49, 460×300` |
+| Classic Full | `LayoutMIB2HighB9` | `layout_const_80=0` | `x=370, y=49, 700×300` |
+| Classic Small | `LayoutMIB2HighB9` | `layout_const_80=0` | `x=490, y=49, 460×300` |
+
+四态共同参数为：
+
+```text
+screen = 1440 × 540
+map raw/effective = 1440 × 455
+map offset = (0, 26)
+Full visible = (370, 49, 700, 300)
+Small visible = (490, 49, 460, 300)
+```
+
+这说明 **Full / Small 的主要差异是左右 tube 留出的可视宽度；Sport / Classic 在本次车上没有改变计算出的地图可视矩形，但可以通过 Layout class 与 `layout_const_80` 明确区分。** 因此，OEM geometry observer 的第一阶段目标已经完成，下一阶段可以基于这些实车参数研究 CarPlay canvas / safe area 与 OEM 可视区域之间的映射，而不再依赖猜测的 1440×445 / 455 / 542 常量。
+
 当前已证明的显示链路为：
 
 ```text
@@ -82,6 +117,7 @@ Virtual Cockpit
 | 分支 | 当前用途 |
 | --- | --- |
 | `main` | **正式开发主线。** 当前基于实车已点亮的 V2，后续修复和优化在这里进行。 |
+| `experiment/oem-layout-second-screen` | **当前 OEM 布局实验分支。** 已完成四态 geometry 实车采集，并确认未破坏 V2 直显主链。 |
 | `carplay-private111-direct-display-v2` | **实车点亮备份。** 保留首次成功路线，主要用于回归对比和恢复。 |
 | `carplay-private111-direct-display-v1` | **历史实验分支。** 用于回看早期 private111 / OMX / Context80 验证过程。 |
 
@@ -162,23 +198,40 @@ PHYSICAL_ROUTE_READY=SOFTWARE_CHAIN_COMPLETE
 
 ## 当前已知问题
 
-### 1. Screen 读取负载仍可继续优化
+### 1. 当前帧率瓶颈在显示消费端，不在 producer Screen 读取端
 
-当前已确认显示路线本身能够工作。下一步优先优化的是读取节奏，而不是更换架构。
+2026-09-20 的实车日志已经改变了此前“优先隔一帧读一帧”的判断。
 
-计划方向为：
+当前 producer / linearizer 侧表现为：
 
 ```text
-原车每帧继续正常渲染
-        ↓
-我们的辅助链路主动隔一帧处理一帧
-        ↓
-只对选中的帧执行 Screen 读取 / SHM 发布
+rate_policy=uncapped_source_callbacks
+sink_target_fps=30
+readbacks=3600
+published=3600
+publish_drops=0
+failures=0
+fallbacks=0
+readback_p50_ms=3
+readback_p95_ms=4
+readback_max_us≈7050
 ```
 
-也就是“**隔一帧读一帧**”，目标是在保持仪表导航流畅度的同时减少 QNX Screen 读取和后续 CSC / GLES 的负载。
+也就是说，**Screen readback 已经能够稳定接近 30 fps 工作**。但 sidecar 的实际 `present_fps` 稳定阶段仍主要落在约 15 fps。
 
-目前没有证据表明必须立刻加入独立解码器或 `screen_blit`。
+因此下一步应优先检查：
+
+```text
+/carplay111_decoded
+        ↓
+sidecar 新帧检测 / 取帧
+        ↓
+NV12 → RGBA
+        ↓
+GLES / displayable3 present
+```
+
+重点确认是否存在固定 2:1 取帧、轮询周期与 producer 相位冲突、重复帧过滤或 present 节奏导致的降采样。在这一问题定位前，**不再主动把 producer 改为“隔一帧读一帧”**，否则可能进一步降低实际仪表帧率。
 
 ### 2. CarPlay 断开后的原车导航箭头状态
 
@@ -191,6 +244,12 @@ PHYSICAL_ROUTE_READY=SOFTWARE_CHAIN_COMPLETE
 这一现象更像是 **CarPlay 第二屏退出后，Context / 导航状态 / 箭头状态的清理或交接不完整**。
 
 目前将其作为独立生命周期问题继续分析，不认为它推翻已经验证成功的 private111 显示路线。
+
+### 3. OEM 四态参数已采集，但尚未应用到 CarPlay / renderer
+
+本轮分支是严格的 **OBSERVE ONLY**。四态参数已经拿到，但当前代码仍没有根据这些参数动态修改 CarPlay `viewArea/safeArea`，也没有改变 sidecar destination/source rect。
+
+因此本次结论是“**采集完成，可以进入映射设计阶段**”，而不是“布局适配已经完成”。下一阶段应先建立 CarPlay 1440×542 canvas 与 OEM Full/Small 可视区域之间的 transform，再单独验证动态切换，避免同时改动协商尺寸、renderer 和 Context80。
 
 ## 日志
 
@@ -245,8 +304,8 @@ private111
 
 优先处理：
 
-1. 隔一帧读一帧的性能优化；
-2. CarPlay 断开后的原车导航箭头状态清理；
-3. 多次连接 / 断开后的长期稳定性验证。
+1. 定位 `decoded SHM → sidecar → GLES/present` 为什么从约 30 fps producer 降到约 15 fps；
+2. 基于本次已采集的 Classic/Sport × Full/Small 四态实车几何，建立 CarPlay canvas / safe area 到 OEM 可视区域的映射；
+3. CarPlay 断开后的原车导航箭头状态清理，并继续验证多次连接 / 断开的长期稳定性。
 
 在没有新的实车证据前，不主动增加额外显示层和解码层。
