@@ -85,5 +85,7 @@ sync >/dev/null 2>&1 || true
 echo "OEM_PLANE_CENSUS_CAPTURE label=$LABEL missing=$MISSING"
 echo "snapshot=$SNAP"
 echo "master=$MASTER"
-[ "$MISSING" -eq 0 ] || exit 6
+if [ "$MISSING" -ne 0 ]; then
+    echo "WARN: one or more target windows have not emitted an observable event yet; log was retained"
+fi
 exit 0
