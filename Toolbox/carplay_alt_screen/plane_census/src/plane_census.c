@@ -50,6 +50,7 @@
 #define SCR_PROP_USAGE                    48
 #define SCR_PROP_VISIBLE                  51
 #define SCR_PROP_WINDOW                   52
+#define SCR_PROP_RENDER_BUFFER_COUNT      53
 #define SCR_PROP_SCALE_QUALITY            56
 #define SCR_PROP_SOURCE_CLIP_POSITION     68
 #define SCR_PROP_SOURCE_CLIP_SIZE         72
@@ -324,13 +325,13 @@ static void out_buffers(FILE *out, struct api *a, scr_window_t w) {
     void **buffers;
 
     errno = 0;
-    rc = a->get_window_iv(w, SCR_PROP_BUFFER_COUNT, &count);
+    rc = a->get_window_iv(w, SCR_PROP_RENDER_BUFFER_COUNT, &count);
     e = errno;
     if (rc != 0) {
-        fprintf(out, "buffer_count=NA rc=%d errno=%d\n", rc, e);
+        fprintf(out, "render_buffer_count=NA rc=%d errno=%d\n", rc, e);
         return;
     }
-    fprintf(out, "buffer_count=%d rc=0\n", count);
+    fprintf(out, "render_buffer_count=%d rc=0\n", count);
     if (count <= 0 || count > 16) {
         if (count > 16)
             fprintf(out, "render_buffers=SKIPPED reason=unexpected_count\n");
@@ -394,6 +395,9 @@ static int write_snapshot(const char *state_dir, const char *id,
     out_iv2(out, a, w, SCR_PROP_POSITION, "SCREEN_PROPERTY_POSITION");
     out_iv1(out, a, w, SCR_PROP_VISIBLE, "SCREEN_PROPERTY_VISIBLE");
     out_iv1(out, a, w, SCR_PROP_FORMAT, "SCREEN_PROPERTY_FORMAT");
+    out_iv1(out, a, w, SCR_PROP_BUFFER_COUNT, "SCREEN_PROPERTY_BUFFER_COUNT");
+    out_iv1(out, a, w, SCR_PROP_RENDER_BUFFER_COUNT,
+            "SCREEN_PROPERTY_RENDER_BUFFER_COUNT");
     out_iv1(out, a, w, SCR_PROP_STRIDE, "SCREEN_PROPERTY_STRIDE_WINDOW");
     out_iv1(out, a, w, SCR_PROP_OWNER_PID, "SCREEN_PROPERTY_OWNER_PID");
     out_iv1(out, a, w, SCR_PROP_USAGE, "SCREEN_PROPERTY_USAGE");
@@ -419,9 +423,13 @@ static int write_snapshot(const char *state_dir, const char *id,
     out_buffers(out, a, w);
 
     fprintf(out, "snapshot_complete=1\n");
-    if (fflush(out) != 0 || fclose(out) != 0) {
-        remove(tmp);
-        return -1;
+    {
+        const int flush_rc = fflush(out);
+        const int close_rc = fclose(out);
+        if (flush_rc != 0 || close_rc != 0) {
+            remove(tmp);
+            return -1;
+        }
     }
     if (rename(tmp, path) != 0) {
         remove(tmp);
