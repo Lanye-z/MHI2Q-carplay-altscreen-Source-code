@@ -31,7 +31,9 @@ for marker in \
   'SCREEN_PROPERTY_SOURCE_CLIP_POSITION' \
   'SCREEN_PROPERTY_SOURCE_CLIP_SIZE' \
   'SCREEN_PROPERTY_SCALE_FACTOR' \
-  'SCREEN_PROPERTY_MANAGER_STRING'
+  'SCREEN_PROPERTY_MANAGER_STRING' \
+  'CENSUS_WATCH_READY' \
+  'source=WINDOW_MANAGER_EVENT_QUEUE'
 do
     "$STRINGS" "$BIN" | grep -Fq "$marker" || { echo "ERROR: marker missing: $marker" >&2; exit 1; }
 done
@@ -55,10 +57,11 @@ build_id=OEM_PLANE33_58_CENSUS_V1_1
 mode=READ_ONLY
 base_branch=experiment/oem-layout-second-screen
 carplay_protocol_changes=none
-screen_context=DISPLAY_MANAGER_CONTEXT
+screen_context=WINDOW_MANAGER_CONTEXT
 target_id_strings=33,58
 screen_property_writes=none
-window_lifecycle_changes=none
+foreign_window_lifecycle_changes=none
+event_source=WINDOW_MANAGER_EVENT_QUEUE
 context_switches=none
 binary_sha256=$SHA
 vehicle_binary_status=BUILT_QNX_ARMV7
