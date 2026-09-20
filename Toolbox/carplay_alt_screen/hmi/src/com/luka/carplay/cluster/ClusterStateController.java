@@ -210,11 +210,16 @@ public final class ClusterStateController {
             return;
         lastOwnershipProbeMs = now;
 
-        Object dm = displayManager();
-        int actual = currentContext(dm);
         boolean baseActive = new File(BASEVIDEO_ACTIVE_FILE).exists();
         boolean baseReady = new File(BASEVIDEO_READY_FILE).exists();
+        boolean displayStatePresent = new File(DISPLAYABLE3_STATE_FILE).exists();
+        if (!carPlaySessionActive && !rgiPresentationActive
+            && !baseReady && !displayStatePresent
+            && !ownershipIntent && !compositeApplied)
+            return;
 
+        Object dm = displayManager();
+        int actual = currentContext(dm);
         String state = readSmallState(DISPLAYABLE3_STATE_FILE, 4096);
         long stateTs = stateLong(state, "timestamp_ms", -1L);
         long stateAge = stateTs >= 0L && now >= stateTs ? now - stateTs : -1L;
@@ -243,7 +248,7 @@ public final class ClusterStateController {
             + "/" + visibleValid + "/" + visible
             + "/" + firstPresent + "/" + nativeWindow
             + "/" + kdWindow + "/" + manager
-            + "/" + generation + "/" + sequence
+            + "/" + generation
             + "/" + oemGeometryRevision
             + "/" + lastOemProbeStatus;
 
