@@ -405,13 +405,13 @@ static int alt_kv_text(const char *line, const char *key,
 
 static int alt_kv_u32(const char *line, const char *key, uint32_t *out) {
     char *end = NULL;
-    unsigned long value;
+    long value;
     size_t n;
     if (!line || !key || !out) return 0;
     n = strlen(key);
     if (strncmp(line, key, n) || line[n] != '=') return 0;
-    value = strtoul(line + n + 1u, &end, 10);
-    if (end == line + n + 1u) return 0;
+    value = strtol(line + n + 1u, &end, 10);
+    if (end == line + n + 1u || value < 0) return 0;
     *out = (uint32_t)value;
     return 1;
 }
@@ -499,7 +499,8 @@ static int alt_load_observed_safe_area(uint32_t display_w,
     r.view[sizeof(r.view) - 1u] = 0;
     strncpy(r.layout, layout, sizeof(r.layout) - 1u);
     r.layout[sizeof(r.layout) - 1u] = 0;
-    strcpy(r.source, "observer176");
+    strncpy(r.source, "observer176", sizeof(r.source) - 1u);
+    r.source[sizeof(r.source) - 1u] = 0;
     *out = r;
     return 1;
 }
@@ -526,7 +527,8 @@ static int alt_load_measured_k1004_safe_area(uint32_t display_w,
     r.view[sizeof(r.view) - 1u] = 0;
     strncpy(r.layout, layout, sizeof(r.layout) - 1u);
     r.layout[sizeof(r.layout) - 1u] = 0;
-    strcpy(r.source, "k1004-measured");
+    strncpy(r.source, "k1004-measured", sizeof(r.source) - 1u);
+    r.source[sizeof(r.source) - 1u] = 0;
     *out = r;
     return 1;
 }
@@ -543,9 +545,12 @@ static void alt_resolve_cluster_safe_area(uint32_t display_w,
     memset(out, 0, sizeof(*out));
     out->w = display_w;
     out->h = display_h;
-    strcpy(out->view, "FULL");
-    strcpy(out->layout, "UNKNOWN");
-    strcpy(out->source, "fullscreen-fallback");
+    strncpy(out->view, "FULL", sizeof(out->view) - 1u);
+    out->view[sizeof(out->view) - 1u] = 0;
+    strncpy(out->layout, "UNKNOWN", sizeof(out->layout) - 1u);
+    out->layout[sizeof(out->layout) - 1u] = 0;
+    strncpy(out->source, "fullscreen-fallback", sizeof(out->source) - 1u);
+    out->source[sizeof(out->source) - 1u] = 0;
 
     have_hmi = alt_load_hmi_layout(
         view, sizeof(view), layout, sizeof(layout));
