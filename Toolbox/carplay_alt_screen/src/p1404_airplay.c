@@ -488,6 +488,21 @@ static int alt_load_hmi_layout(char *view, size_t view_cap,
     return have_view && have_layout;
 }
 
+static int alt_is_measured_b9_canvas(uint32_t display_w,
+                                     uint32_t display_h) {
+    /*
+     * Vehicle evidence spans three related vertical extents:
+     *  - 542: negotiated private111 Screen/display canvas,
+     *  - 540: OEM cluster screen model,
+     *  - 455: effective map/displayable3 plane.
+     * The measured FULL/SMALL safe rectangles fit all three. Keep the guard
+     * narrow to these observed B9 geometries instead of accepting arbitrary
+     * 1440-wide displays.
+     */
+    return display_w == 1440u &&
+           (display_h == 542u || display_h == 540u || display_h == 455u);
+}
+
 static int alt_load_measured_k1004_safe_area(uint32_t display_w,
                                              uint32_t display_h,
                                              const char *view,
@@ -498,7 +513,7 @@ static int alt_load_measured_k1004_safe_area(uint32_t display_w,
     struct alt_safe_rect r;
     int64_t physical_x, physical_y;
     if (!view || !layout || !out) return 0;
-    if (display_w != 1440u || display_h != 455u) return 0;
+    if (!alt_is_measured_b9_canvas(display_w, display_h)) return 0;
     if (!strstr(layout, "LayoutMIB2HighB9")) return 0;
 
     memset(&r, 0, sizeof(r));
@@ -568,11 +583,11 @@ static void alt_resolve_cluster_safe_area(uint32_t display_w,
 
     /*
      * /info can be requested before Java has published the first HMI snapshot.
-     * For the measured 1440x455 cluster, predeclare the known FULL safe region
+     * For the measured B9 cluster canvas, predeclare the known FULL safe region
      * rather than falling back to a one-area/full-bleed shape that would make
      * same-session FULL<->SMALL switching impossible later.
      */
-    if (display_w == 1440u && display_h == 455u) {
+    if (alt_is_measured_b9_canvas(display_w, display_h)) {
         out->x = 370u; out->y = 49u; out->w = 700u; out->h = 300u;
         out->physical_x = 370;
         out->physical_y = 49;
@@ -634,8 +649,9 @@ static cf_obj make_view_areas(uint32_t w, uint32_t h) {
 /*
  * Type111 may declare multiple candidate viewAreas.  Apple cluster templates
  * do this as well; unlike type110, ALT entries do not carry
- * viewAreaTransitionControl/viewAreaStatusBarEdge flags.  Our coded canvas
- * remains 1440x455 in both states; only the nested safeArea changes.
+ * viewAreaTransitionControl/viewAreaStatusBarEdge flags. The outer viewArea
+ * keeps the runtime coded canvas (observed 1440x542 on the private111 path);
+ * only the nested safeArea changes. The displayable3 sink remains 1440x455.
  *
  * index 0 = FULL  (370,49,700x300)
  * index 1 = SMALL (490,49,460x300)
@@ -762,7 +778,7 @@ void *alt_build_cluster_display(void) {
         d->width_pixels, d->height_pixels, &cluster_safe);
 
     two_area_capable =
-        d->width_pixels == 1440u && d->height_pixels == 455u;
+        alt_is_measured_b9_canvas(d->width_pixels, d->height_pixels);
     layout_known =
         two_area_capable &&
         strstr(cluster_safe.layout, "LayoutMIB2HighB9") != NULL;
@@ -770,8 +786,8 @@ void *alt_build_cluster_display(void) {
         layout_known && !strcmp(cluster_safe.view, "SMALL") ? 1 : 0;
 
     /*
-     * Declare BOTH Audi FULL/SMALL candidates up front on the measured
-     * 1440x455 target even if Java's first HMI-state file is a few hundred ms
+     * Declare BOTH Audi FULL/SMALL candidates up front on the measured B9
+     * target canvas even if Java's first HMI-state file is a few hundred ms
      * late. updateViewArea can only select an index that /info already
      * declared; waiting for the HMI file here would re-introduce a reconnect
      * requirement on cold start.
