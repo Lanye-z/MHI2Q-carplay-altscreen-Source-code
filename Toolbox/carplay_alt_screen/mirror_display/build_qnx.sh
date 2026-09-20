@@ -40,10 +40,12 @@ check_marker() {
 }
 
 for marker in \
-  'carplay-private111-direct-display-v2-source-driven-layout-v3' \
+  'carplay-private111-direct-display-v2-source-driven-layout-live-v4' \
   'present_policy=source-driven' \
   'no_success_sleep=1' \
   'PHASE=OEM_MAP_PLACEMENT' \
+  'PHASE=OEM_MAP_RERENDER' \
+  'live_switch=1' \
   'renderer_scale=0' \
   'natural_clip=1' \
   'stall_report_after_ms=' \
@@ -84,5 +86,5 @@ do
   fi
 done
 
-echo "MIRROR_BUILD_ID=carplay-private111-direct-display-v2-source-driven-layout-v3"
+echo "MIRROR_BUILD_ID=carplay-private111-direct-display-v2-source-driven-layout-live-v4"
 echo "MIRROR_BUILD=PASS output=$ROOT/$BIN"
