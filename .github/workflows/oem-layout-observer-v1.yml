@@ -144,6 +144,7 @@ jobs:
               'oem_geometry_state': '/tmp/carplay-oem-geometry.state',
               'oem_geometry_policy': 'OBSERVE_ONLY_NO_CARPLAY_OR_RENDERER_APPLY',
               'oem_geometry_source': 'K1004_LISTMODEL176_ROW1',
+              'oem_geometry_build_status': 'COMPILED_OBSERVER_READY',
           }
           for key, value in updates.items():
               pat = r'^' + re.escape(key) + r'=.*$'
@@ -263,7 +264,11 @@ jobs:
           unzip -p Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar             com/luka/carplay/cluster/ClusterStateController.class | strings |             grep -Fq 'OEM_GEOMETRY_OBSERVER'
 
           sh -n Toolbox/scripts/altscreen_boot_diag.sh
+          sh -n Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh
+          sh -n Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh
           sh -n Toolbox/scripts/status_mmi_cockpit_carplay_test.sh
+          grep -Fq 'oem_geometry_build_status=COMPILED_OBSERVER_READY' Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt
+          grep -Fq 'oem_geometry_build_status=COMPILED_OBSERVER_READY' Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh
           grep -Fq 'carplay-oem-geometry.log' Toolbox/scripts/altscreen_boot_diag.sh
           grep -Fq 'carplay-oem-displaymanager-read-api.log' Toolbox/scripts/altscreen_boot_diag.sh
           grep -Fq 'OEM_LAYOUT_OBSERVER_MODE=OBSERVE_ONLY' Toolbox/scripts/status_mmi_cockpit_carplay_test.sh
