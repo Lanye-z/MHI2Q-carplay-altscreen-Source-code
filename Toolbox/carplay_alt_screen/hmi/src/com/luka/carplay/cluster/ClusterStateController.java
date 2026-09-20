@@ -88,6 +88,7 @@ public final class ClusterStateController {
     private static String lastObserverStatus = "";
     private static String lastOemGeometrySignature = "";
     private static String lastOemProbeStatus = "";
+    private static String lastOemModelAccess = "UNRESOLVED";
     private static long oemGeometryRevision;
     private static long lastOemProbeMs;
     private static long lastReconcileMs;
@@ -516,7 +517,8 @@ public final class ClusterStateController {
         try {
             Object list = resolveListModel176(hmi);
             if (list == null) {
-                oemProbeUnavailable("ListModel176 unavailable");
+                oemProbeUnavailable("ListModel176 unavailable access="
+                + lastOemModelAccess);
                 return;
             }
 
@@ -608,6 +610,7 @@ public final class ClusterStateController {
                     + "layout_class=" + layoutName + "\n"
                     + "layout_hint=" + layoutHint + "\n"
                     + "list_model_id=176\n"
+                    + "list_model_access=" + lastOemModelAccess + "\n"
                     + "list_row=1\n"
                     + "list_length=" + rowCount + "\n"
                     + "row1_column_count=" + colCount + "\n"
@@ -743,26 +746,52 @@ public final class ClusterStateController {
     }
 
     private static Object resolveListModel176(Object hmi) throws Exception {
-        if (hmi == null) return null;
+        /*
+         * Stock K1004 evidence is NavigationEnv.getListModel(176).  The hook
+         * is entered with IFrameworkAccess rather than a typed NavigationEnv,
+         * so first test the read-only model seams already exposed by the HMI
+         * runtime.  Never accept an object until it proves ListModel shape.
+         */
+        Object candidate = tryListModelOn(hmi, "HMIService");
+        if (candidate != null) return candidate;
+
+        candidate = tryListModelOn(frameworkAccess, "FrameworkAccess");
+        if (candidate != null) return candidate;
+
+        lastOemModelAccess = "UNRESOLVED_NAVIGATIONENV_SEAM";
+        return null;
+    }
+
+    private static Object tryListModelOn(Object owner, String ownerName)
+        throws Exception {
+        if (owner == null) return null;
         Object candidate = null;
         try {
-            candidate = invokeInt(hmi, "getListModel", OEM_SCREEN_LAYOUT_MODEL_ID);
+            candidate = invokeInt(owner, "getListModel",
+                                  OEM_SCREEN_LAYOUT_MODEL_ID);
         } catch (NoSuchMethodException e) {
             candidate = null;
         }
-        if (isListModelShape(candidate)) return candidate;
+        if (isListModelShape(candidate)) {
+            lastOemModelAccess = ownerName + ".getListModel(176)";
+            return candidate;
+        }
 
         /*
-         * Some HMI service implementations expose list models through the
-         * generic getModel(int) entry.  Accept that fallback only after
-         * verifying the expected getLength/getRow shape.
+         * A generic getModel(int) is also accepted, but only if its returned
+         * object implements the expected getLength/getRow read interface.
          */
         try {
-            candidate = invokeInt(hmi, "getModel", OEM_SCREEN_LAYOUT_MODEL_ID);
+            candidate = invokeInt(owner, "getModel",
+                                  OEM_SCREEN_LAYOUT_MODEL_ID);
         } catch (NoSuchMethodException e) {
             candidate = null;
         }
-        return isListModelShape(candidate) ? candidate : null;
+        if (isListModelShape(candidate)) {
+            lastOemModelAccess = ownerName + ".getModel(176)";
+            return candidate;
+        }
+        return null;
     }
 
     private static boolean isListModelShape(Object candidate) {
