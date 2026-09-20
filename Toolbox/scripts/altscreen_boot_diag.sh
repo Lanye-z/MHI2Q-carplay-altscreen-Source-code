@@ -81,6 +81,12 @@ select_controller_log_source() {
     # ClusterStateController writes this exact path on the vehicle.
     printf '%s\n' "$ROOT/tmp/mmi-mirror-controller.log"
 }
+select_oem_geometry_history_source() {
+    printf '%s\n' "$ROOT/tmp/carplay-oem-geometry.log"
+}
+select_oem_displaymanager_api_source() {
+    printf '%s\n' "$ROOT/tmp/carplay-oem-displaymanager-read-api.log"
+}
 flat_plain_append() {
     cat "$1" >> "$2"
 }
@@ -133,7 +139,7 @@ run_flat_plaintext() {
     if command -v sloginfo >/dev/null 2>&1; then
         (exec sloginfo -w -t) > "$flat_system" 2>&1 & flat_slog_pid=$!
     fi
-    flat_hook_offset=0; flat_dio_offset=0; flat_entry_offset=0; flat_mirror_offset=0; flat_mirror_autostart_offset=0; flat_controller_offset=0; flat_system_offset=0; flat_tick=0
+    flat_hook_offset=0; flat_dio_offset=0; flat_entry_offset=0; flat_mirror_offset=0; flat_mirror_autostart_offset=0; flat_controller_offset=0; flat_oem_geometry_offset=0; flat_oem_api_offset=0; flat_system_offset=0; flat_tick=0
     while [ -f "$ENABLED" ]; do
         flat_hook_offset=$(flat_capture_delta "$(select_hook_source)" "$flat_hook_offset" "$FLAT_DEST/streams/hook_tmp.log" "${FLAT_PREFIX}_hook.chunk")
         flat_dio_offset=$(flat_capture_delta "$ROOT/tmp/CinemoDioManager.log" "$flat_dio_offset" "$FLAT_DEST/streams/dio_tmp.log" "${FLAT_PREFIX}_dio.chunk")
@@ -141,6 +147,12 @@ run_flat_plaintext() {
         flat_mirror_offset=$(flat_capture_delta "$(select_mirror_log_source)" "$flat_mirror_offset" "$FLAT_DEST/streams/mirror.log" "${FLAT_PREFIX}_mirror.chunk")
         flat_mirror_autostart_offset=$(flat_capture_delta "$(select_mirror_autostart_source)" "$flat_mirror_autostart_offset" "$FLAT_DEST/streams/mirror_autostart.log" "${FLAT_PREFIX}_mirror_autostart.chunk")
         flat_controller_offset=$(flat_capture_delta "$(select_controller_log_source)" "$flat_controller_offset" "$FLAT_DEST/streams/mmi-mirror-controller.log" "${FLAT_PREFIX}_controller.chunk")
+        flat_oem_geometry_offset=$(flat_capture_delta "$(select_oem_geometry_history_source)" "$flat_oem_geometry_offset" "$FLAT_DEST/streams/carplay-oem-geometry.log" "${FLAT_PREFIX}_oem_geometry.chunk")
+        flat_oem_api_offset=$(flat_capture_delta "$(select_oem_displaymanager_api_source)" "$flat_oem_api_offset" "$FLAT_DEST/streams/carplay-oem-displaymanager-read-api.log" "${FLAT_PREFIX}_oem_api.chunk")
+        if [ -f "$ROOT/tmp/carplay-oem-geometry.state" ]; then
+            cp "$ROOT/tmp/carplay-oem-geometry.state" "$FLAT_DEST/streams/carplay-oem-geometry.state.new" 2>/dev/null &&
+                mv "$FLAT_DEST/streams/carplay-oem-geometry.state.new" "$FLAT_DEST/streams/carplay-oem-geometry.state" 2>/dev/null || true
+        fi
         flat_system_offset=$(flat_capture_delta "$flat_system" "$flat_system_offset" "$FLAT_DEST/streams/system.log" "${FLAT_PREFIX}_system.chunk")
         if [ -f "$flat_system" ] && [ "$(wc -c < "$flat_system")" -ge 8388608 ]; then
             flat_log_event "SYSTEM_RAW_TRIM possible_boundary_loss=1 limit_bytes=8388608"
@@ -365,6 +377,35 @@ runtime_logs() {
             mv "$controller_output.new" "$controller_output"
     elif [ ! -f "$controller_output" ]; then
         echo "MISSING $controller_source" > "$controller_output"
+    fi
+
+    # OEM_LAYOUT_OBSERVER_V1 evidence. These are read-only observer outputs;
+    # collecting them must not affect CarPlay or DisplayManager state.
+    oem_state_source="$ROOT/tmp/carplay-oem-geometry.state"
+    oem_state_output="$SPOOL/tmp_carplay-oem-geometry.state"
+    if [ -f "$oem_state_source" ]; then
+        cp "$oem_state_source" "$oem_state_output.new" 2>/dev/null &&
+            mv "$oem_state_output.new" "$oem_state_output"
+    elif [ ! -f "$oem_state_output" ]; then
+        echo "MISSING $oem_state_source" > "$oem_state_output"
+    fi
+
+    oem_history_source=$(select_oem_geometry_history_source)
+    oem_history_output="$SPOOL/tmp_carplay-oem-geometry.log"
+    if [ -f "$oem_history_source" ]; then
+        tail -c 1048576 "$oem_history_source" > "$oem_history_output.new" &&
+            mv "$oem_history_output.new" "$oem_history_output"
+    elif [ ! -f "$oem_history_output" ]; then
+        echo "MISSING $oem_history_source" > "$oem_history_output"
+    fi
+
+    oem_api_source=$(select_oem_displaymanager_api_source)
+    oem_api_output="$SPOOL/tmp_carplay-oem-displaymanager-read-api.log"
+    if [ -f "$oem_api_source" ]; then
+        tail -c 262144 "$oem_api_source" > "$oem_api_output.new" &&
+            mv "$oem_api_output.new" "$oem_api_output"
+    elif [ ! -f "$oem_api_output" ]; then
+        echo "MISSING $oem_api_source" > "$oem_api_output"
     fi
 }
 copy_snapshot() {
