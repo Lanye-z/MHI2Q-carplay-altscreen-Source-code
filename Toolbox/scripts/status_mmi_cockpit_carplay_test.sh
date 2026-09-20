@@ -48,8 +48,8 @@ if [ -n "$SD_VOLUME" ]; then
     recent=$(ls -t "$SD_VOLUME/MMI-Cockpit-Carplay/logs/mmi-mirror-controller.log" "$JAVA_LOG" 2>/dev/null | head -n 1)
     [ -z "$recent" ] || JAVA_LOG=$recent
 fi
-EXPECTED_SIZE=147443
-EXPECTED_CKSUM=211533722
+EXPECTED_SIZE=151141
+EXPECTED_CKSUM=2709689163
 
 file_size(){ n=$(wc -c < "$1" 2>/dev/null) || { echo 0; return; }; set -- $n; echo "${1:-0}"; }
 file_cksum(){ if command -v cksum >/dev/null 2>&1; then cksum < "$1" 2>/dev/null | awk '{print $1}'; else echo unavailable; fi; }

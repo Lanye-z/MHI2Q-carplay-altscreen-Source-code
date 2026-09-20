@@ -35,8 +35,8 @@ JAR_TARGET="$DEVICE_ROOT/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar"
 JAR_TARGET_DIR=$(dirname -- "$JAR_TARGET")
 BACKUP="$VOLUME/MMI-Cockpit-Carplay/backup/basevideo3-hmi-original"
 BACKUP_TMP="$BACKUP.new.$$"
-EXPECTED_SIZE=147443
-EXPECTED_CKSUM=211533722
+EXPECTED_SIZE=151141
+EXPECTED_CKSUM=2709689163
 
 [ -f "$CONTROLLER" ] || { echo "FAIL: chain controller missing: $CONTROLLER"; exit 127; }
 [ -s "$JAR_SOURCE" ] || { echo "FAIL: Java80 HMI JAR missing: $JAR_SOURCE"; exit 1; }
