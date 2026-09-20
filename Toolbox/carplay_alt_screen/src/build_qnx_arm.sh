@@ -188,7 +188,6 @@ for marker in \
   'rate_policy=uncapped_source_callbacks' \
   'ALTAREA_LAYOUT_SAFE_V1' \
   '/tmp/mmi-mirror-hmi.state' \
-  '/tmp/carplay-oem-geometry.state' \
   'renderer_scale=0'
 do
   grep -a -Fq "$marker" "$SO" || {

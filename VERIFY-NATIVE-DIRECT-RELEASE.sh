@@ -263,8 +263,9 @@ grep -Fq 'ALTAREA_LAYOUT_SAFE_V1' "$AIRPLAY_SRC" ||
     fail "CarPlay cluster safeArea layout marker missing"
 grep -Fq '/tmp/mmi-mirror-hmi.state' "$AIRPLAY_SRC" ||
     fail "early HMI layout state input missing"
-grep -Fq '/tmp/carplay-oem-geometry.state' "$AIRPLAY_SRC" ||
-    fail "ListModel176 geometry state input missing"
+if grep -Fq '/tmp/carplay-oem-geometry.state' "$AIRPLAY_SRC"; then
+    fail "OBSERVE_ONLY ListModel176 geometry state must not drive CarPlay safeArea"
+fi
 grep -Fq 'LayoutMIB2HighB9' "$AIRPLAY_SRC" ||
     fail "K1004 measured layout guard missing"
 grep -Fq 'r.x = 370u; r.y = 49u; r.w = 700u; r.h = 300u;' "$AIRPLAY_SRC" ||

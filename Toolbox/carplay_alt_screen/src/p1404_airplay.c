@@ -445,66 +445,6 @@ static int alt_load_hmi_layout(char *view, size_t view_cap,
     return have_view && have_layout;
 }
 
-static int alt_load_observed_safe_area(uint32_t display_w,
-                                       uint32_t display_h,
-                                       const char *current_view,
-                                       const char *current_layout,
-                                       struct alt_safe_rect *out) {
-    FILE *f;
-    char line[512];
-    char observer[64] = "";
-    char view[16] = "";
-    char layout[128] = "";
-    uint32_t valid = 0, map_w = 0, map_h = 0;
-    struct alt_safe_rect r;
-
-    if (!out) return 0;
-    memset(&r, 0, sizeof(r));
-    f = fopen("/tmp/carplay-oem-geometry.state", "r");
-    if (!f) return 0;
-
-    while (fgets(line, sizeof(line), f)) {
-        alt_trim_line(line);
-        if (alt_kv_text(line, "observer", observer, sizeof(observer))) {
-        } else if (alt_kv_text(line, "view", view, sizeof(view))) {
-        } else if (alt_kv_text(line, "layout_class",
-                               layout, sizeof(layout))) {
-        } else if (alt_kv_u32(line, "valid", &valid)) {
-        } else if (alt_kv_u32(line, "map_width_effective", &map_w)) {
-        } else if (alt_kv_u32(line, "map_height_effective", &map_h)) {
-        } else if (alt_kv_u32(line, "visible_active_x", &r.x)) {
-        } else if (alt_kv_u32(line, "visible_active_y", &r.y)) {
-        } else if (alt_kv_u32(line, "visible_active_w", &r.w)) {
-        } else if (alt_kv_u32(line, "visible_active_h", &r.h)) {
-        }
-    }
-    fclose(f);
-
-    if (strcmp(observer, "OEM_LAYOUT_OBSERVER_V1") || valid != 1u ||
-        map_w != display_w || map_h != display_h ||
-        !alt_safe_rect_valid(&r, display_w, display_h))
-        return 0;
-
-    /*
-     * A geometry file can survive a reconnect within the same boot.  Prefer it
-     * only when it still describes the current early HMI state; otherwise use
-     * the measured HMI fallback below instead of applying stale coordinates.
-     */
-    if (current_view && *current_view && strcmp(view, current_view))
-        return 0;
-    if (current_layout && *current_layout && strcmp(layout, current_layout))
-        return 0;
-
-    strncpy(r.view, view, sizeof(r.view) - 1u);
-    r.view[sizeof(r.view) - 1u] = 0;
-    strncpy(r.layout, layout, sizeof(r.layout) - 1u);
-    r.layout[sizeof(r.layout) - 1u] = 0;
-    strncpy(r.source, "observer176", sizeof(r.source) - 1u);
-    r.source[sizeof(r.source) - 1u] = 0;
-    *out = r;
-    return 1;
-}
-
 static int alt_load_measured_k1004_safe_area(uint32_t display_w,
                                              uint32_t display_h,
                                              const char *view,
@@ -554,15 +494,6 @@ static void alt_resolve_cluster_safe_area(uint32_t display_w,
 
     have_hmi = alt_load_hmi_layout(
         view, sizeof(view), layout, sizeof(layout));
-
-    if (alt_load_observed_safe_area(
-            display_w, display_h,
-            have_hmi ? view : NULL,
-            have_hmi ? layout : NULL,
-            &r)) {
-        *out = r;
-        return;
-    }
 
     if (have_hmi && alt_load_measured_k1004_safe_area(
             display_w, display_h, view, layout, &r)) {

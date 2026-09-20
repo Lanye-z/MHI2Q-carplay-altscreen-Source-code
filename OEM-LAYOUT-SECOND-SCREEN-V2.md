@@ -86,49 +86,26 @@ the map itself can still fill the complete cluster stream.
 
 ## 3. Safe-area resolver
 
-The hook resolves the current layout in this order.
-
-### A. Exact ListModel176 geometry
-
-If present and consistent with the current HMI state:
-
-```
-/tmp/carplay-oem-geometry.state
-```
-
-is used directly.
-
-Required properties include:
-
-```
-observer=OEM_LAYOUT_OBSERVER_V1
-valid=1
-map_width_effective=1440
-map_height_effective=455
-visible_active_x/y/w/h
-```
-
-The geometry snapshot is accepted only if its `view` and `layout_class`
-still match the current early HMI state, preventing a stale reconnect snapshot
-from overriding a changed layout.
-
-### B. Measured K1004 fallback
-
-The Java controller publishes the early state:
+The runtime controller intentionally consumes only:
 
 ```
 /tmp/mmi-mirror-hmi.state
 ```
 
-before the second-screen first-present path.
+from the already vehicle-tested Java controller.  The file supplies:
 
-For the vehicle-tested layout classes containing:
+```
+view=FULL|SMALL
+layout_name=<OEM layout class>
+```
+
+For the vehicle-tested K1004 layout family whose class contains:
 
 ```
 LayoutMIB2HighB9
 ```
 
-the measured fallback is:
+the safe-area mapping measured from the ListModel176 vehicle capture is:
 
 ```
 FULL  safeArea = 370,49,700x300
@@ -142,20 +119,27 @@ The four classified states are:
 - SPORT_FULL
 - SPORT_SMALL
 
-The captured K1004 vehicle currently reports the same safe geometry for
-CLASSIC and SPORT at a given FULL/SMALL mode, so the branch does not invent
+The captured vehicle currently reports the same safe geometry for CLASSIC and
+SPORT at a given FULL/SMALL mode, so this branch deliberately does not invent
 different SPORT coordinates.
 
-### C. Unknown layout fallback
-
-If the display size, HMI layout class, or state is not recognized:
+The separate file:
 
 ```
-safeArea = full display
+/tmp/carplay-oem-geometry.state
 ```
 
-The type111 display is therefore never withheld because layout adaptation
-failed.
+remains **observation-only evidence** from `OEM_LAYOUT_OBSERVER_V1`.
+Its existing contract says `mode=OBSERVE_ONLY`,
+`apply_to_carplay=0`, and `apply_to_renderer=0`; this V2 hook does not
+consume that file as a control input.
+
+If the display size, HMI state, or layout class is not recognized, the hook
+falls back to a full-screen safeArea.  Type111 is never withheld because layout
+adaptation failed.
+
+For the AltScreen/cluster display, `drawUIOutsideSafeArea` is intentionally
+left undefined, matching the reference cluster behavior used for comparison.
 
 ## 4. Runtime switching scope
 
