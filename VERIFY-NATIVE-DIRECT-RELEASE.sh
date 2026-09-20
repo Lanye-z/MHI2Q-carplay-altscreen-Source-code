@@ -41,6 +41,7 @@ for s in "$START" "$CTRL" "$LAUNCH" "$STOP" "$BOOT_DIAG" "$ROOT/Toolbox/carplay_
 done
 
 SOURCE_ONLY=0
+HOOK_PENDING=0
 if grep -Fq 'release_binary_status=V1_BINARY_STALE_V2_SOURCE_REBUILD_REQUIRED' "$INFO"; then
     SOURCE_ONLY=1
     grep -Fq 'vehicle_zip_status=NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED' "$INFO" ||
@@ -63,8 +64,18 @@ elif grep -Fq 'release_binary_status=V2_BINARY_STALE_HARDENING_REBUILD_REQUIRED'
         fail "BUILD_INFO says hardening rebuild required but binary already contains final recovery marker"
     fi
 elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$INFO"; then
-    grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$INFO" ||
-        fail "rebuilt V2 sidecar is not marked vehicle-ready"
+    if grep -Fq 'vehicle_zip_status=NOT_READY_HOOK_REBUILD_REQUIRED' "$INFO"; then
+        HOOK_PENDING=1
+        grep -Fq 'hook_runtime_rebuild_required=yes' "$INFO" ||
+            fail "hook-pending package must declare hook_runtime_rebuild_required=yes"
+        grep -Fq 'hook_runtime_policy=uncapped_source_callbacks' "$INFO" ||
+            fail "hook-pending package does not declare uncapped source callback policy"
+    else
+        grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$INFO" ||
+            fail "rebuilt V2 package has unknown vehicle-ready state"
+        grep -Fq 'hook_runtime_rebuild_required=no' "$INFO" ||
+            fail "vehicle-ready V2 package must declare rebuilt hook runtime"
+    fi
     for marker in 'carplay-private111-direct-display-v2' 'PHASE=DECODED_SHM_WAIT_SIZE' 'PHASE=SOURCE_SESSION' 'PHASE=GATE_RECOVER_CURRENT_SESSION' 'matching_identity_plus_frame_progress' 'packed_tight_required=1' 'stream111_request_or_phone_marker' 'STREAM_111_REQUESTED=YES' 'PHASE=PIPELINE_SOURCE_PRIMED' 'startup_frame_progress_required=2' 'PHASE=DISPLAYABLE3_FIRST_PRESENT' 'PHASE=DIRECT111_ACTIVE'
     do
         binary_strings "$BIN" | grep -Fq "$marker" ||
@@ -78,8 +89,10 @@ if binary_strings "$BIN" | grep -Fq 'screen_read_window'; then
     fail "Screen readback must remain in hook, not sidecar"
 fi
 
-binary_strings "$HOOK" | grep -Fq 'rate_policy=time_30fps' ||
-    fail "universal hook binary is stale: rebuild/promote the 30fps time-based linearizer"
+if [ "$HOOK_PENDING" = 0 ]; then
+    binary_strings "$HOOK" | grep -Fq 'rate_policy=uncapped_source_callbacks' ||
+        fail "universal hook binary is stale: rebuild/promote uncapped source-callback readback"
+fi
 
 grep -Fq 'window58_readback=disabled' "$INFO" ||
     fail "BUILD_INFO Window58 policy mismatch"
@@ -144,14 +157,17 @@ grep -Fq 'readback_p50_ms=' "$TAP" ||
     fail "readback latency percentile diagnostics missing"
 grep -Fq 'PHASE=FRAME_LINEARIZER_SLOW' "$TAP" ||
     fail "slow synchronous readback diagnostic missing"
-grep -Fq 'P111_LINEARIZER_TARGET_INTERVAL_US 33333u' "$TAP" ||
-    fail "30fps time-based linearizer interval missing"
-grep -Fq 'rate_policy=time_30fps' "$TAP" ||
-    fail "linearizer first-frame log does not identify time-based 30fps policy"
-grep -Fq 'rate_skips=%u target_fps=30' "$TAP" ||
-    fail "linearizer progress does not expose rate-limit skips"
-grep -Fq 'next_readback_due_us' "$TAP" ||
-    fail "deadline-based linearizer scheduler missing"
+grep -Fq 'rate_policy=uncapped_source_callbacks' "$TAP" ||
+    fail "hook source is not configured for uncapped source callbacks"
+grep -Fq 'sink_target_fps=30' "$TAP" ||
+    fail "hook diagnostics do not preserve the independent 30fps sink policy"
+if grep -Fq 'P111_LINEARIZER_TARGET_INTERVAL_US' "$TAP" ||
+   grep -Fq 'next_readback_due_us' "$TAP" ||
+   grep -Fq 'rate_limit_skips' "$TAP"; then
+    fail "producer-side readback rate limiter still remains"
+fi
+grep -Fq 'static const unsigned kTargetFps = 30;' "$MAIN_CPP" ||
+    fail "sidecar 30fps presentation pacing must remain unchanged"
 grep -Fq 'DIRECT111_TAP_STOP_STALE' "$TAP" ||
     fail "stale-stream teardown isolation missing"
 grep -Fq 'DIRECT111_TAP_STALE_CALLBACK' "$TAP" ||
@@ -328,6 +344,8 @@ echo "raw_vendor_fallback=DISABLED"
 echo "same_session_recovery=VALIDATED_SHM_ONLY"
 if [ "$SOURCE_ONLY" = 1 ]; then
     echo "vehicle_zip_status=NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED"
+elif [ "$HOOK_PENDING" = 1 ]; then
+    echo "vehicle_zip_status=NOT_READY_HOOK_REBUILD_REQUIRED"
 else
     echo "vehicle_zip_status=READY_FOR_VEHICLE_TEST"
 fi
