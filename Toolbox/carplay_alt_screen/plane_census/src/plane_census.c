@@ -2,13 +2,19 @@
  * OEM plane 33/58 census for Audi MHI2Q.
  *
  * Read-only design:
- *   - creates only a SCREEN_DISPLAY_MANAGER_CONTEXT;
- *   - enumerates existing windows;
- *   - calls screen_get_* APIs only;
- *   - never creates/manages/destroys a window and never sets a property.
+ *   - creates only a SCREEN_WINDOW_MANAGER_CONTEXT owned by this observer;
+ *   - discovers existing/future stock windows from CREATE/PROPERTY/POST events;
+ *   - calls screen_get_* APIs only on foreign windows and buffers;
+ *   - never creates/manages/destroys a foreign window and never sets a property.
+ *
+ * Important QNX detail:
+ * SCREEN_PROPERTY_WINDOW_COUNT/WINDOWS are scoped to the calling context and
+ * are NOT a global census.  The window-manager event queue is therefore the
+ * only identity-safe observation path used here.
  */
 #include <dlfcn.h>
 #include <errno.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,7 +23,14 @@
 
 #define CENSUS_SCHEMA "OEM_PLANE33_58_CENSUS_V1_1"
 
-#define SCR_DISPLAY_MANAGER_CONTEXT       8
+#define SCR_WINDOW_MANAGER_CONTEXT         1
+
+#define SCR_EVENT_NONE                     0
+#define SCR_EVENT_CREATE                   1
+#define SCR_EVENT_PROPERTY                 2
+#define SCR_EVENT_CLOSE                    3
+#define SCR_EVENT_POST                     9
+
 #define SCR_PROP_BUFFER_COUNT              4
 #define SCR_PROP_BUFFER_SIZE               5
 #define SCR_PROP_DISPLAY                  11
@@ -33,17 +46,18 @@
 #define SCR_PROP_SOURCE_POSITION          41
 #define SCR_PROP_SOURCE_SIZE              42
 #define SCR_PROP_STRIDE                   44
+#define SCR_PROP_TYPE                     47
 #define SCR_PROP_USAGE                    48
 #define SCR_PROP_VISIBLE                  51
+#define SCR_PROP_WINDOW                   52
 #define SCR_PROP_SCALE_QUALITY            56
 #define SCR_PROP_SOURCE_CLIP_POSITION     68
 #define SCR_PROP_SOURCE_CLIP_SIZE         72
-#define SCR_PROP_WINDOW_COUNT            108
-#define SCR_PROP_WINDOWS                 109
 #define SCR_PROP_SCALE_FACTOR            114
 #define SCR_PROP_MANAGER_STRING          152
 
 typedef void *scr_context_t;
+typedef void *scr_event_t;
 typedef void *scr_window_t;
 typedef void *scr_buffer_t;
 typedef void *scr_display_t;
@@ -51,8 +65,11 @@ typedef void *scr_group_t;
 
 typedef int (*fn_create_context)(scr_context_t *, int);
 typedef int (*fn_destroy_context)(scr_context_t);
-typedef int (*fn_get_context_iv)(scr_context_t, int, int *);
-typedef int (*fn_get_context_pv)(scr_context_t, int, void **);
+typedef int (*fn_create_event)(scr_event_t *);
+typedef int (*fn_destroy_event)(scr_event_t);
+typedef int (*fn_get_event)(scr_context_t, scr_event_t, uint64_t);
+typedef int (*fn_get_event_iv)(scr_event_t, int, int *);
+typedef int (*fn_get_event_pv)(scr_event_t, int, void **);
 typedef int (*fn_get_window_iv)(scr_window_t, int, int *);
 typedef int (*fn_get_window_pv)(scr_window_t, int, void **);
 typedef int (*fn_get_window_cv)(scr_window_t, int, int, char *);
@@ -64,8 +81,11 @@ struct api {
     void *lib;
     fn_create_context create_context;
     fn_destroy_context destroy_context;
-    fn_get_context_iv get_context_iv;
-    fn_get_context_pv get_context_pv;
+    fn_create_event create_event;
+    fn_destroy_event destroy_event;
+    fn_get_event get_event;
+    fn_get_event_iv get_event_iv;
+    fn_get_event_pv get_event_pv;
     fn_get_window_iv get_window_iv;
     fn_get_window_pv get_window_pv;
     fn_get_window_cv get_window_cv;
@@ -73,6 +93,19 @@ struct api {
     fn_get_display_cv get_display_cv;
     fn_get_group_cv get_group_cv;
 };
+
+struct tracked {
+    scr_window_t window;
+    unsigned long event_seq;
+    int last_event_type;
+};
+
+static volatile sig_atomic_t g_stop;
+
+static void on_signal(int sig) {
+    (void)sig;
+    g_stop = 1;
+}
 
 static void *sym(void *lib, const char *name) {
     dlerror();
@@ -87,20 +120,26 @@ static int open_api(struct api *a) {
         fprintf(stderr, "ERROR libscreen unavailable: %s\n", dlerror());
         return -1;
     }
+
     a->create_context = (fn_create_context)sym(a->lib, "screen_create_context");
     a->destroy_context = (fn_destroy_context)sym(a->lib, "screen_destroy_context");
-    a->get_context_iv = (fn_get_context_iv)sym(a->lib, "screen_get_context_property_iv");
-    a->get_context_pv = (fn_get_context_pv)sym(a->lib, "screen_get_context_property_pv");
+    a->create_event = (fn_create_event)sym(a->lib, "screen_create_event");
+    a->destroy_event = (fn_destroy_event)sym(a->lib, "screen_destroy_event");
+    a->get_event = (fn_get_event)sym(a->lib, "screen_get_event");
+    a->get_event_iv = (fn_get_event_iv)sym(a->lib, "screen_get_event_property_iv");
+    a->get_event_pv = (fn_get_event_pv)sym(a->lib, "screen_get_event_property_pv");
     a->get_window_iv = (fn_get_window_iv)sym(a->lib, "screen_get_window_property_iv");
     a->get_window_pv = (fn_get_window_pv)sym(a->lib, "screen_get_window_property_pv");
     a->get_window_cv = (fn_get_window_cv)sym(a->lib, "screen_get_window_property_cv");
     a->get_buffer_iv = (fn_get_buffer_iv)sym(a->lib, "screen_get_buffer_property_iv");
     a->get_display_cv = (fn_get_display_cv)sym(a->lib, "screen_get_display_property_cv");
     a->get_group_cv = (fn_get_group_cv)sym(a->lib, "screen_get_group_property_cv");
+
     if (!a->create_context || !a->destroy_context ||
-        !a->get_context_iv || !a->get_context_pv ||
+        !a->create_event || !a->destroy_event ||
+        !a->get_event || !a->get_event_iv || !a->get_event_pv ||
         !a->get_window_iv || !a->get_window_pv || !a->get_window_cv) {
-        fprintf(stderr, "ERROR required libscreen read API missing\n");
+        fprintf(stderr, "ERROR required libscreen read/event API missing\n");
         dlclose(a->lib);
         memset(a, 0, sizeof(*a));
         return -1;
@@ -113,255 +152,415 @@ static void close_api(struct api *a) {
     memset(a, 0, sizeof(*a));
 }
 
-static void print_iv1(struct api *a, scr_window_t w, int prop, const char *name) {
-    int v = 0x5a5a5a5a, rc, e;
+static void out_iv1(FILE *out, struct api *a, scr_window_t w,
+                    int prop, const char *name) {
+    int v = 0x5a5a5a5a;
+    int rc;
+    int e;
     errno = 0;
     rc = a->get_window_iv(w, prop, &v);
     e = errno;
-    if (rc == 0) printf("%s=%d rc=0\n", name, v);
-    else printf("%s=NA rc=%d errno=%d\n", name, rc, e);
+    if (rc == 0) fprintf(out, "%s=%d rc=0\n", name, v);
+    else fprintf(out, "%s=NA rc=%d errno=%d\n", name, rc, e);
 }
 
-static void print_iv2(struct api *a, scr_window_t w, int prop, const char *name) {
-    int v[2] = { 0x5a5a5a5a, 0x5a5a5a5a }, rc, e;
+static void out_iv2(FILE *out, struct api *a, scr_window_t w,
+                    int prop, const char *name) {
+    int v[2] = { 0x5a5a5a5a, 0x5a5a5a5a };
+    int rc;
+    int e;
     errno = 0;
     rc = a->get_window_iv(w, prop, v);
     e = errno;
-    if (rc == 0) printf("%s=%d,%d rc=0\n", name, v[0], v[1]);
-    else printf("%s=NA rc=%d errno=%d\n", name, rc, e);
+    if (rc == 0) fprintf(out, "%s=%d,%d rc=0\n", name, v[0], v[1]);
+    else fprintf(out, "%s=NA rc=%d errno=%d\n", name, rc, e);
 }
 
-static void print_cv(struct api *a, scr_window_t w, int prop,
-                     const char *name, int len) {
+static void out_cv(FILE *out, struct api *a, scr_window_t w,
+                   int prop, const char *name, int len) {
     char buf[192];
-    int rc, e;
+    int rc;
+    int e;
     if (len > (int)sizeof(buf) - 1) len = (int)sizeof(buf) - 1;
     memset(buf, 0, sizeof(buf));
     errno = 0;
     rc = a->get_window_cv(w, prop, len, buf);
     e = errno;
     buf[sizeof(buf) - 1] = 0;
-    if (rc == 0) printf("%s='%s' rc=0\n", name, buf);
-    else printf("%s=NA rc=%d errno=%d\n", name, rc, e);
+    if (rc == 0) fprintf(out, "%s='%s' rc=0\n", name, buf);
+    else fprintf(out, "%s=NA rc=%d errno=%d\n", name, rc, e);
 }
 
-static void print_buffer(struct api *a, scr_buffer_t b, int index) {
-    int v1, v2[3], rc, e;
-    printf("buffer_%d_handle=%p\n", index, b);
+static void out_buffer(FILE *out, struct api *a, scr_buffer_t b, int index) {
+    int v1;
+    int v3[3];
+    int rc;
+    int e;
+
+    fprintf(out, "buffer_%d_handle=%p\n", index, b);
     if (!a->get_buffer_iv || !b) {
-        printf("buffer_%d_properties=NA reason=get_buffer_iv_or_handle_missing\n", index);
+        fprintf(out, "buffer_%d_properties=NA reason=get_buffer_iv_or_handle_missing\n",
+                index);
         return;
     }
 
-    v2[0] = v2[1] = v2[2] = 0;
-    errno = 0; rc = a->get_buffer_iv(b, SCR_PROP_BUFFER_SIZE, v2); e = errno;
-    if (rc == 0) printf("buffer_%d_size=%d,%d rc=0\n", index, v2[0], v2[1]);
-    else printf("buffer_%d_size=NA rc=%d errno=%d\n", index, rc, e);
+    v3[0] = v3[1] = v3[2] = 0;
+    errno = 0;
+    rc = a->get_buffer_iv(b, SCR_PROP_BUFFER_SIZE, v3);
+    e = errno;
+    if (rc == 0)
+        fprintf(out, "buffer_%d_size=%d,%d rc=0\n", index, v3[0], v3[1]);
+    else
+        fprintf(out, "buffer_%d_size=NA rc=%d errno=%d\n", index, rc, e);
 
     v1 = 0;
-    errno = 0; rc = a->get_buffer_iv(b, SCR_PROP_FORMAT, &v1); e = errno;
-    if (rc == 0) printf("buffer_%d_format=%d rc=0\n", index, v1);
-    else printf("buffer_%d_format=NA rc=%d errno=%d\n", index, rc, e);
+    errno = 0;
+    rc = a->get_buffer_iv(b, SCR_PROP_FORMAT, &v1);
+    e = errno;
+    if (rc == 0) fprintf(out, "buffer_%d_format=%d rc=0\n", index, v1);
+    else fprintf(out, "buffer_%d_format=NA rc=%d errno=%d\n", index, rc, e);
 
     v1 = 0;
-    errno = 0; rc = a->get_buffer_iv(b, SCR_PROP_STRIDE, &v1); e = errno;
-    if (rc == 0) printf("buffer_%d_stride=%d rc=0\n", index, v1);
-    else printf("buffer_%d_stride=NA rc=%d errno=%d\n", index, rc, e);
+    errno = 0;
+    rc = a->get_buffer_iv(b, SCR_PROP_STRIDE, &v1);
+    e = errno;
+    if (rc == 0) fprintf(out, "buffer_%d_stride=%d rc=0\n", index, v1);
+    else fprintf(out, "buffer_%d_stride=NA rc=%d errno=%d\n", index, rc, e);
 
-    v2[0] = v2[1] = v2[2] = 0;
-    errno = 0; rc = a->get_buffer_iv(b, SCR_PROP_PLANAR_OFFSETS, v2); e = errno;
-    if (rc == 0) printf("buffer_%d_planar_offsets=%d,%d,%d rc=0\n",
-                        index, v2[0], v2[1], v2[2]);
-    else printf("buffer_%d_planar_offsets=NA rc=%d errno=%d\n", index, rc, e);
+    v3[0] = v3[1] = v3[2] = 0;
+    errno = 0;
+    rc = a->get_buffer_iv(b, SCR_PROP_PLANAR_OFFSETS, v3);
+    e = errno;
+    if (rc == 0) {
+        fprintf(out, "buffer_%d_planar_offsets=%d,%d,%d rc=0\n",
+                index, v3[0], v3[1], v3[2]);
+    } else {
+        fprintf(out, "buffer_%d_planar_offsets=NA rc=%d errno=%d\n",
+                index, rc, e);
+    }
 }
 
-static void print_related_objects(struct api *a, scr_window_t w) {
+static void out_related(FILE *out, struct api *a, scr_window_t w) {
     void *p = NULL;
-    int rc, e;
+    int rc;
+    int e;
+
     errno = 0;
-    rc = a->get_window_pv(w, SCR_PROP_GROUP, &p); e = errno;
+    rc = a->get_window_pv(w, SCR_PROP_GROUP, &p);
+    e = errno;
     if (rc == 0) {
-        printf("group_handle=%p rc=0\n", p);
+        fprintf(out, "group_handle=%p rc=0\n", p);
         if (p && a->get_group_cv) {
             char name[192];
             memset(name, 0, sizeof(name));
             errno = 0;
             rc = a->get_group_cv((scr_group_t)p, SCR_PROP_NAME,
-                                 (int)sizeof(name) - 1, name); e = errno;
-            if (rc == 0) printf("group_name='%s' rc=0\n", name);
-            else printf("group_name=NA rc=%d errno=%d\n", rc, e);
-        } else printf("group_name=NA reason=group_cv_unavailable\n");
-    } else printf("group_handle=NA rc=%d errno=%d\n", rc, e);
+                                 (int)sizeof(name) - 1, name);
+            e = errno;
+            if (rc == 0) fprintf(out, "group_name='%s' rc=0\n", name);
+            else fprintf(out, "group_name=NA rc=%d errno=%d\n", rc, e);
+        } else {
+            fprintf(out, "group_name=NA reason=group_cv_unavailable\n");
+        }
+    } else {
+        fprintf(out, "group_handle=NA rc=%d errno=%d\n", rc, e);
+    }
 
     p = NULL;
     errno = 0;
-    rc = a->get_window_pv(w, SCR_PROP_DISPLAY, &p); e = errno;
+    rc = a->get_window_pv(w, SCR_PROP_DISPLAY, &p);
+    e = errno;
     if (rc == 0) {
-        printf("display_handle=%p rc=0\n", p);
+        fprintf(out, "display_handle=%p rc=0\n", p);
         if (p && a->get_display_cv) {
             char id[192];
             memset(id, 0, sizeof(id));
             errno = 0;
             rc = a->get_display_cv((scr_display_t)p, SCR_PROP_ID_STRING,
-                                   (int)sizeof(id) - 1, id); e = errno;
-            if (rc == 0) printf("display_id_string='%s' rc=0\n", id);
-            else printf("display_id_string=NA rc=%d errno=%d\n", rc, e);
-        } else printf("display_id_string=NA reason=display_cv_unavailable\n");
-    } else printf("display_handle=NA rc=%d errno=%d\n", rc, e);
+                                   (int)sizeof(id) - 1, id);
+            e = errno;
+            if (rc == 0) fprintf(out, "display_id_string='%s' rc=0\n", id);
+            else fprintf(out, "display_id_string=NA rc=%d errno=%d\n", rc, e);
+        } else {
+            fprintf(out, "display_id_string=NA reason=display_cv_unavailable\n");
+        }
+    } else {
+        fprintf(out, "display_handle=NA rc=%d errno=%d\n", rc, e);
+    }
 
-    printf("parent=UNAVAILABLE_IN_QNX650_WINDOW_API\n");
-    printf("viewport=UNAVAILABLE_AS_STANDARD_QNX650_WINDOW_PROPERTY\n");
+    fprintf(out, "parent=UNAVAILABLE_IN_QNX650_WINDOW_API\n");
+    fprintf(out, "viewport=UNAVAILABLE_AS_STANDARD_QNX650_WINDOW_PROPERTY\n");
 }
 
-static void print_buffers(struct api *a, scr_window_t w) {
-    int count = 0, rc, e, i;
+static void out_buffers(FILE *out, struct api *a, scr_window_t w) {
+    int count = 0;
+    int rc;
+    int e;
+    int i;
     void **buffers;
+
     errno = 0;
-    rc = a->get_window_iv(w, SCR_PROP_BUFFER_COUNT, &count); e = errno;
+    rc = a->get_window_iv(w, SCR_PROP_BUFFER_COUNT, &count);
+    e = errno;
     if (rc != 0) {
-        printf("buffer_count=NA rc=%d errno=%d\n", rc, e);
+        fprintf(out, "buffer_count=NA rc=%d errno=%d\n", rc, e);
         return;
     }
-    printf("buffer_count=%d rc=0\n", count);
+    fprintf(out, "buffer_count=%d rc=0\n", count);
     if (count <= 0 || count > 16) {
-        if (count > 16) printf("render_buffers=SKIPPED reason=unexpected_count\n");
+        if (count > 16)
+            fprintf(out, "render_buffers=SKIPPED reason=unexpected_count\n");
         return;
     }
+
     buffers = (void **)calloc((size_t)count, sizeof(void *));
     if (!buffers) {
-        printf("render_buffers=NA reason=oom\n");
+        fprintf(out, "render_buffers=NA reason=oom\n");
         return;
     }
+
     errno = 0;
-    rc = a->get_window_pv(w, SCR_PROP_RENDER_BUFFERS, buffers); e = errno;
+    rc = a->get_window_pv(w, SCR_PROP_RENDER_BUFFERS, buffers);
+    e = errno;
     if (rc != 0) {
-        printf("render_buffers=NA rc=%d errno=%d\n", rc, e);
+        fprintf(out, "render_buffers=NA rc=%d errno=%d\n", rc, e);
         free(buffers);
         return;
     }
-    for (i = 0; i < count; ++i) print_buffer(a, (scr_buffer_t)buffers[i], i);
+
+    for (i = 0; i < count; ++i)
+        out_buffer(out, a, (scr_buffer_t)buffers[i], i);
     free(buffers);
 }
 
-static int target_id(const char *id) {
-    return id && (!strcmp(id, "33") || !strcmp(id, "58"));
+static int target_index(const char *id) {
+    if (!id) return -1;
+    if (!strcmp(id, "33")) return 0;
+    if (!strcmp(id, "58")) return 1;
+    return -1;
 }
 
-static void print_window(struct api *a, scr_window_t w, int index, const char *id) {
-    printf("WINDOW_BEGIN index=%d handle=%p id='%s'\n", index, w, id ? id : "");
-    print_iv2(a, w, SCR_PROP_SIZE, "SCREEN_PROPERTY_SIZE");
-    print_iv2(a, w, SCR_PROP_BUFFER_SIZE, "SCREEN_PROPERTY_BUFFER_SIZE");
-    print_iv2(a, w, SCR_PROP_SOURCE_SIZE, "SCREEN_PROPERTY_SOURCE_SIZE");
-    print_iv2(a, w, SCR_PROP_SOURCE_POSITION, "SCREEN_PROPERTY_SOURCE_POSITION");
-    print_iv2(a, w, SCR_PROP_POSITION, "SCREEN_PROPERTY_POSITION");
-    print_iv1(a, w, SCR_PROP_VISIBLE, "SCREEN_PROPERTY_VISIBLE");
-    print_iv1(a, w, SCR_PROP_FORMAT, "SCREEN_PROPERTY_FORMAT");
-    print_iv1(a, w, SCR_PROP_OWNER_PID, "SCREEN_PROPERTY_OWNER_PID");
-    print_iv1(a, w, SCR_PROP_USAGE, "SCREEN_PROPERTY_USAGE");
-    print_iv2(a, w, SCR_PROP_SOURCE_CLIP_POSITION, "SCREEN_PROPERTY_SOURCE_CLIP_POSITION");
-    print_iv2(a, w, SCR_PROP_SOURCE_CLIP_SIZE, "SCREEN_PROPERTY_SOURCE_CLIP_SIZE");
-    print_iv1(a, w, SCR_PROP_SCALE_FACTOR, "SCREEN_PROPERTY_SCALE_FACTOR");
-    print_iv1(a, w, SCR_PROP_SCALE_QUALITY, "SCREEN_PROPERTY_SCALE_QUALITY");
-    print_cv(a, w, SCR_PROP_MANAGER_STRING, "SCREEN_PROPERTY_MANAGER_STRING", 191);
-    print_related_objects(a, w);
-    print_buffers(a, w);
-    printf("WINDOW_END index=%d id='%s'\n", index, id ? id : "");
+static int write_snapshot(const char *state_dir, const char *id,
+                          scr_window_t w, int event_type,
+                          unsigned long event_seq, struct api *a) {
+    char path[512];
+    char tmp[544];
+    FILE *out;
+    time_t now = time(NULL);
+
+    if (!state_dir || !id || !w) return -1;
+    (void)snprintf(path, sizeof(path), "%s/window%s.state", state_dir, id);
+    (void)snprintf(tmp, sizeof(tmp), "%s.new", path);
+
+    out = fopen(tmp, "w");
+    if (!out) return -1;
+
+    fprintf(out, "schema=%s\n", CENSUS_SCHEMA);
+    fprintf(out, "mode=READ_ONLY\n");
+    fprintf(out, "id_string=%s\n", id);
+    fprintf(out, "window_handle=%p\n", w);
+    fprintf(out, "event_type=%d\n", event_type);
+    fprintf(out, "event_seq=%lu\n", event_seq);
+    fprintf(out, "snapshot_epoch=%lu\n", (unsigned long)now);
+
+    out_iv2(out, a, w, SCR_PROP_SIZE, "SCREEN_PROPERTY_SIZE");
+    out_iv2(out, a, w, SCR_PROP_BUFFER_SIZE, "SCREEN_PROPERTY_BUFFER_SIZE");
+    out_iv2(out, a, w, SCR_PROP_SOURCE_SIZE, "SCREEN_PROPERTY_SOURCE_SIZE");
+    out_iv2(out, a, w, SCR_PROP_SOURCE_POSITION, "SCREEN_PROPERTY_SOURCE_POSITION");
+    out_iv2(out, a, w, SCR_PROP_POSITION, "SCREEN_PROPERTY_POSITION");
+    out_iv1(out, a, w, SCR_PROP_VISIBLE, "SCREEN_PROPERTY_VISIBLE");
+    out_iv1(out, a, w, SCR_PROP_FORMAT, "SCREEN_PROPERTY_FORMAT");
+    out_iv1(out, a, w, SCR_PROP_STRIDE, "SCREEN_PROPERTY_STRIDE_WINDOW");
+    out_iv1(out, a, w, SCR_PROP_OWNER_PID, "SCREEN_PROPERTY_OWNER_PID");
+    out_iv1(out, a, w, SCR_PROP_USAGE, "SCREEN_PROPERTY_USAGE");
+
+    out_iv2(out, a, w, SCR_PROP_SOURCE_CLIP_POSITION,
+            "SCREEN_PROPERTY_SOURCE_CLIP_POSITION");
+    out_iv2(out, a, w, SCR_PROP_SOURCE_CLIP_SIZE,
+            "SCREEN_PROPERTY_SOURCE_CLIP_SIZE");
+    out_iv1(out, a, w, SCR_PROP_SCALE_FACTOR, "SCREEN_PROPERTY_SCALE_FACTOR");
+    out_iv1(out, a, w, SCR_PROP_SCALE_QUALITY, "SCREEN_PROPERTY_SCALE_QUALITY");
+    out_cv(out, a, w, SCR_PROP_MANAGER_STRING,
+           "SCREEN_PROPERTY_MANAGER_STRING", 191);
+    out_related(out, a, w);
+    out_buffers(out, a, w);
+
+    fprintf(out, "snapshot_complete=1\n");
+    if (fflush(out) != 0 || fclose(out) != 0) {
+        remove(tmp);
+        return -1;
+    }
+    if (rename(tmp, path) != 0) {
+        remove(tmp);
+        return -1;
+    }
+    return 0;
+}
+
+static int touch_ready(const char *state_dir) {
+    char path[512];
+    FILE *f;
+    (void)snprintf(path, sizeof(path), "%s/READY", state_dir);
+    f = fopen(path, "w");
+    if (!f) return -1;
+    fprintf(f, "schema=%s\nmode=READ_ONLY\nobserver=WINDOW_MANAGER_EVENT_QUEUE\n",
+            CENSUS_SCHEMA);
+    return fclose(f);
 }
 
 static void usage(const char *argv0) {
-    fprintf(stderr, "usage: %s --label <Classic_Full|Classic_Small|Sport_Full|Sport_Small> [--all]\n",
-            argv0);
+    fprintf(stderr, "usage: %s --watch --state-dir <path>\n", argv0);
 }
 
 int main(int argc, char **argv) {
     struct api a;
+    struct tracked tracked[2];
     scr_context_t ctx = NULL;
-    void **windows = NULL;
-    int count = 0, rc, e, i, matches33 = 0, matches58 = 0;
-    const char *label = NULL;
-    int show_all = 0;
-    time_t now = time(NULL);
+    scr_event_t event = NULL;
+    const char *state_dir = NULL;
+    int watch = 0;
+    int i;
+    int rc;
+    int e;
+    unsigned long event_seq = 0;
+
+    memset(tracked, 0, sizeof(tracked));
 
     for (i = 1; i < argc; ++i) {
-        if (!strcmp(argv[i], "--label") && i + 1 < argc) label = argv[++i];
-        else if (!strcmp(argv[i], "--all")) show_all = 1;
-        else { usage(argv[0]); return 64; }
+        if (!strcmp(argv[i], "--watch")) {
+            watch = 1;
+        } else if (!strcmp(argv[i], "--state-dir") && i + 1 < argc) {
+            state_dir = argv[++i];
+        } else {
+            usage(argv[0]);
+            return 64;
+        }
     }
-    if (!label || !*label) { usage(argv[0]); return 64; }
-
-    printf("CENSUS_BEGIN schema=%s label=%s epoch=%lu mode=READ_ONLY\n",
-           CENSUS_SCHEMA, label, (unsigned long)now);
-    printf("safety=no_screen_set no_window_create no_window_manage no_context_switch no_carplay_hook\n");
-
-    if (open_api(&a) != 0) {
-        printf("CENSUS_END result=FAIL reason=libscreen_api\n");
-        return 2;
+    if (!watch || !state_dir || !*state_dir) {
+        usage(argv[0]);
+        return 64;
     }
+
+    signal(SIGTERM, on_signal);
+    signal(SIGINT, on_signal);
+    signal(SIGHUP, on_signal);
+
+    printf("CENSUS_WATCH_BEGIN schema=%s mode=READ_ONLY source=WINDOW_MANAGER_EVENT_QUEUE\n",
+           CENSUS_SCHEMA);
+    printf("safety=no_screen_set no_foreign_window_create no_foreign_window_manage "
+           "no_foreign_window_destroy no_context_switch no_carplay_hook\n");
+    fflush(stdout);
+
+    if (open_api(&a) != 0) return 2;
 
     errno = 0;
-    rc = a.create_context(&ctx, SCR_DISPLAY_MANAGER_CONTEXT); e = errno;
+    rc = a.create_context(&ctx, SCR_WINDOW_MANAGER_CONTEXT);
+    e = errno;
     if (rc != 0 || !ctx) {
-        printf("display_manager_context=FAIL rc=%d errno=%d\n", rc, e);
-        printf("CENSUS_END result=FAIL reason=display_manager_context_required\n");
+        printf("window_manager_context=FAIL rc=%d errno=%d\n", rc, e);
         close_api(&a);
         return 3;
     }
-    printf("display_manager_context=OK handle=%p context_type=%d\n",
-           ctx, SCR_DISPLAY_MANAGER_CONTEXT);
+    printf("window_manager_context=OK handle=%p context_type=%d\n",
+           ctx, SCR_WINDOW_MANAGER_CONTEXT);
 
     errno = 0;
-    rc = a.get_context_iv(ctx, SCR_PROP_WINDOW_COUNT, &count); e = errno;
-    if (rc != 0 || count < 0 || count > 4096) {
-        printf("window_count=FAIL rc=%d errno=%d value=%d\n", rc, e, count);
+    rc = a.create_event(&event);
+    e = errno;
+    if (rc != 0 || !event) {
+        printf("event_create=FAIL rc=%d errno=%d\n", rc, e);
         a.destroy_context(ctx);
         close_api(&a);
-        printf("CENSUS_END result=FAIL reason=window_count\n");
         return 4;
     }
-    printf("window_count=%d rc=0\n", count);
 
-    if (count > 0) {
-        windows = (void **)calloc((size_t)count, sizeof(void *));
-        if (!windows) {
-            a.destroy_context(ctx); close_api(&a);
-            printf("CENSUS_END result=FAIL reason=oom_windows\n");
-            return 5;
-        }
-        errno = 0;
-        rc = a.get_context_pv(ctx, SCR_PROP_WINDOWS, windows); e = errno;
-        if (rc != 0) {
-            printf("windows=FAIL rc=%d errno=%d\n", rc, e);
-            free(windows); a.destroy_context(ctx); close_api(&a);
-            printf("CENSUS_END result=FAIL reason=window_list\n");
-            return 6;
-        }
+    if (touch_ready(state_dir) != 0) {
+        printf("ready_file=FAIL path=%s errno=%d\n", state_dir, errno);
+        a.destroy_event(event);
+        a.destroy_context(ctx);
+        close_api(&a);
+        return 5;
     }
 
-    for (i = 0; i < count; ++i) {
+    printf("CENSUS_WATCH_READY state_dir=%s targets=33,58 "
+           "events=CREATE,PROPERTY,POST,CLOSE\n", state_dir);
+    fflush(stdout);
+
+    while (!g_stop) {
+        int type = SCR_EVENT_NONE;
+        void *event_window = NULL;
         char id[128];
-        int idrc;
-        if (!windows[i]) continue;
-        memset(id, 0, sizeof(id));
+        int idx = -1;
+
         errno = 0;
-        idrc = a.get_window_cv((scr_window_t)windows[i], SCR_PROP_ID_STRING,
-                               (int)sizeof(id) - 1, id);
-        if (idrc != 0) {
-            if (show_all) printf("WINDOW_ID_UNREADABLE index=%d handle=%p errno=%d\n",
-                                 i, windows[i], errno);
+        rc = a.get_event(ctx, event, 250000000ULL);
+        e = errno;
+        if (rc != 0) {
+            if (e != ETIMEDOUT && e != EAGAIN)
+                printf("event_wait=FAIL rc=%d errno=%d\n", rc, e);
             continue;
         }
-        if (!strcmp(id, "33")) ++matches33;
-        if (!strcmp(id, "58")) ++matches58;
-        if (target_id(id) || show_all) print_window(&a, (scr_window_t)windows[i], i, id);
+
+        errno = 0;
+        if (a.get_event_iv(event, SCR_PROP_TYPE, &type) != 0 ||
+            type == SCR_EVENT_NONE)
+            continue;
+
+        ++event_seq;
+
+        if (type != SCR_EVENT_CREATE &&
+            type != SCR_EVENT_PROPERTY &&
+            type != SCR_EVENT_CLOSE &&
+            type != SCR_EVENT_POST)
+            continue;
+
+        errno = 0;
+        if (a.get_event_pv(event, SCR_PROP_WINDOW, &event_window) != 0 ||
+            !event_window)
+            continue;
+
+        memset(id, 0, sizeof(id));
+        errno = 0;
+        if (a.get_window_cv((scr_window_t)event_window, SCR_PROP_ID_STRING,
+                            (int)sizeof(id) - 1, id) == 0) {
+            idx = target_index(id);
+        }
+
+        if (idx < 0) {
+            if (type == SCR_EVENT_CLOSE) {
+                if (tracked[0].window == event_window) idx = 0;
+                else if (tracked[1].window == event_window) idx = 1;
+            }
+            if (idx < 0) continue;
+            (void)snprintf(id, sizeof(id), "%s", idx == 0 ? "33" : "58");
+        }
+
+        if (type == SCR_EVENT_CLOSE) {
+            printf("TARGET_EVENT id=%s event=CLOSE seq=%lu handle=%p\n",
+                   id, event_seq, event_window);
+            if (tracked[idx].window == event_window)
+                memset(&tracked[idx], 0, sizeof(tracked[idx]));
+            fflush(stdout);
+            continue;
+        }
+
+        tracked[idx].window = (scr_window_t)event_window;
+        tracked[idx].event_seq = event_seq;
+        tracked[idx].last_event_type = type;
+
+        rc = write_snapshot(state_dir, id, tracked[idx].window,
+                            type, event_seq, &a);
+        printf("TARGET_EVENT id=%s event=%d seq=%lu handle=%p snapshot=%s\n",
+               id, type, event_seq, event_window, rc == 0 ? "OK" : "FAIL");
+        fflush(stdout);
     }
 
-    printf("target_33_match_count=%d\n", matches33);
-    printf("target_58_match_count=%d\n", matches58);
-    printf("CENSUS_END result=PASS label=%s targets_found=%d\n",
-           label, matches33 + matches58);
+    printf("CENSUS_WATCH_END events=%lu tracked33=%d tracked58=%d\n",
+           event_seq, tracked[0].window != NULL, tracked[1].window != NULL);
+    fflush(stdout);
 
-    free(windows);
+    a.destroy_event(event);
     a.destroy_context(ctx);
     close_api(&a);
-    return (matches33 + matches58) > 0 ? 0 : 7;
+    return 0;
 }
