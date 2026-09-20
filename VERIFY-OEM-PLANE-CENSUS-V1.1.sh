@@ -11,6 +11,8 @@ fail(){ echo "OEM_PLANE_CENSUS_VERIFY=FAIL $*" >&2; exit 1; }
 for f in \
   "$SRC" "$BUILD" "$GEM" \
   "$ROOT/Toolbox/scripts/install_oem_plane_census.sh" \
+  "$ROOT/Toolbox/scripts/start_oem_plane_census.sh" \
+  "$ROOT/Toolbox/scripts/stop_oem_plane_census.sh" \
   "$ROOT/Toolbox/scripts/oem_plane_census_capture.sh" \
   "$ROOT/Toolbox/scripts/oem_plane_census_classic_full.sh" \
   "$ROOT/Toolbox/scripts/oem_plane_census_classic_small.sh" \
@@ -25,7 +27,13 @@ done
 
 for marker in \
   'OEM_PLANE33_58_CENSUS_V1_1' \
-  'SCR_DISPLAY_MANAGER_CONTEXT       8' \
+  'SCR_WINDOW_MANAGER_CONTEXT         1' \
+  'SCR_EVENT_CREATE                   1' \
+  'SCR_EVENT_PROPERTY                 2' \
+  'SCR_EVENT_CLOSE                    3' \
+  'SCR_EVENT_POST                     9' \
+  'SCR_PROP_TYPE                     47' \
+  'SCR_PROP_WINDOW                   52' \
   'SCR_PROP_ID_STRING                20' \
   'SCR_PROP_BUFFER_SIZE               5' \
   'SCR_PROP_POSITION                 35' \
@@ -36,8 +44,6 @@ for marker in \
   'SCR_PROP_VISIBLE                  51' \
   'SCR_PROP_SOURCE_CLIP_POSITION     68' \
   'SCR_PROP_SOURCE_CLIP_SIZE         72' \
-  'SCR_PROP_WINDOW_COUNT            108' \
-  'SCR_PROP_WINDOWS                 109' \
   'SCR_PROP_SCALE_FACTOR            114' \
   'SCR_PROP_MANAGER_STRING          152'
 do
@@ -46,6 +52,9 @@ done
 
 grep -Fq '!strcmp(id, "33")' "$SRC" || fail "target_33_missing"
 grep -Fq '!strcmp(id, "58")' "$SRC" || fail "target_58_missing"
+grep -Fq 'source=WINDOW_MANAGER_EVENT_QUEUE' "$SRC" || fail "event_source_marker_missing"
+grep -Fq 'SCREEN_PROPERTY_WINDOW_COUNT/WINDOWS are scoped' "$SRC" ||
+    fail "global_census_regression_guard_missing"
 
 if grep -Eq 'screen_set_|screen_manage_window|screen_create_window|screen_destroy_window' "$SRC"; then
     fail "forbidden_screen_write_or_window_lifecycle_api"
@@ -58,6 +67,8 @@ fi
 for f in \
   "$BUILD" \
   "$ROOT/Toolbox/scripts/install_oem_plane_census.sh" \
+  "$ROOT/Toolbox/scripts/start_oem_plane_census.sh" \
+  "$ROOT/Toolbox/scripts/stop_oem_plane_census.sh" \
   "$ROOT/Toolbox/scripts/oem_plane_census_capture.sh" \
   "$ROOT/Toolbox/scripts/oem_plane_census_classic_full.sh" \
   "$ROOT/Toolbox/scripts/oem_plane_census_classic_small.sh" \
@@ -75,7 +86,9 @@ for label in \
  'CAPTURE SPORT FULL' \
  'CAPTURE SPORT SMALL' \
  'INSTALL OBSERVER' \
+ 'START OBSERVER' \
  'STATUS / SUMMARY' \
+ 'STOP OBSERVER' \
  'UNINSTALL OBSERVER'
 do
     grep -Fq "$label" "$GEM" || fail "gem_action_missing=$label"
@@ -95,6 +108,8 @@ if [ -s "$REL/oem-plane-census" ]; then
     fi
     [ -s "$REL/BUILD_INFO.txt" ] || fail "built_binary_without_BUILD_INFO"
     grep -Fq 'mode=READ_ONLY' "$REL/BUILD_INFO.txt" || fail "release_mode_not_read_only"
+    grep -Fq 'screen_context=WINDOW_MANAGER_CONTEXT' "$REL/BUILD_INFO.txt" ||
+        fail "release_context_not_window_manager"
     echo "release_binary=present_and_read_only_markers_verified"
 else
     echo "release_binary=NOT_BUILT source_only=1"
