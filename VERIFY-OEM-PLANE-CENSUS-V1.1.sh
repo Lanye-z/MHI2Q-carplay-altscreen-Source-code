@@ -42,6 +42,7 @@ for marker in \
   'SCR_PROP_SOURCE_SIZE              42' \
   'SCR_PROP_STRIDE                   44' \
   'SCR_PROP_VISIBLE                  51' \
+  'SCR_PROP_RENDER_BUFFER_COUNT      53' \
   'SCR_PROP_SOURCE_CLIP_POSITION     68' \
   'SCR_PROP_SOURCE_CLIP_SIZE         72' \
   'SCR_PROP_VIEWPORT_POSITION        74' \
