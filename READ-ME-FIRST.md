@@ -1,62 +1,83 @@
-# CarPlay private111 Direct Display V2 — BACKUP BASELINE
+# 上车前请先阅读
 
-Branch: `carplay-private111-direct-display-v2`
+当前分支：`carplay-private111-direct-display-v2`
 
-## Status
+## 当前定位
 
-This branch is retained as the **known-good vehicle-tested V2 backup**.
+这是 **2026-09-19 首次实车成功点亮 Virtual Cockpit 的 V2 备份分支**。
 
-The modified V2 route achieved confirmed physical Virtual Cockpit first-light:
-the CarPlay private second-screen image was visible on the VC and followed the
-phone navigation image.
+本分支建议保持功能代码冻结，只用于：
 
-Future functional fixes should be developed on `main`. This branch should be
-used for recovery, regression comparison, and reference. Documentation-only
-updates are acceptable; the working source/binary path should otherwise remain
-frozen.
+- 回归对比；
+- 故障恢复；
+- 判断 `main` 后续修改是否引入退化；
+- 保留首次成功点亮时的完整实现。
 
-## Proven route
+日常开发请使用 `main`。
 
-```text
-CarPlay private type111
-  -> stock OMX
-  -> stock private renderer
-  -> Screen linearization
-  -> /carplay111_decoded
-  -> sidecar
-  -> CPU NV12 -> RGBA / GLES
-  -> displayable3
-  -> Java/HMI Context80
-  -> Virtual Cockpit
-```
+## 已经确认的结果
 
-Main110 remains outside the auxiliary route.
-
-## Vehicle-test observations
-
-- Physical VC output is confirmed on this V2 architecture.
-- The preferred performance refinement is to deliberately process every other
-  decoded frame ("skip one, read one") rather than changing the decoder or
-  display architecture.
-- One disconnect test showed a stock-navigation lifecycle anomaly: after
-  CarPlay disconnected and the stock map returned with no active stock route,
-  a navigation arrow appeared/remained unexpectedly. This still needs teardown
-  / navigation-state cleanup analysis.
-- No other mandatory architecture change has been established by the successful
-  run.
-
-## Release identity
+实车测试已经证明：
 
 ```text
-release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2
-vehicle_zip_status=READY_FOR_VEHICLE_TEST
-v2_pending_hardening=none
+private type111
+  → 原车 OMX
+  → 原车 private renderer
+  → QNX Screen 线性化
+  → /carplay111_decoded
+  → sidecar
+  → GLES / displayable3
+  → Java Context80
+  → Virtual Cockpit
 ```
 
-The earlier pre-test note that another QNX sidecar rebuild was required is
-obsolete for the promoted V2 baseline.
+这条链路可以物理点亮仪表，并且画面会跟随手机端 CarPlay 导航更新。
 
-## Backup policy
+## 推荐测试顺序
 
-Do not use this branch as the normal development head. Apply new fixes to
-`main`, test there, and compare behavior against this branch when needed.
+```text
+iPhone 保持断开
+        ↓
+INSTALL
+        ↓
+完整重启
+        ↓
+START
+        ↓
+再次完整重启
+        ↓
+连接 CarPlay
+        ↓
+启动导航
+        ↓
+观察仪表
+        ↓
+STATUS / 保存日志
+```
+
+## 当前已知问题
+
+### 隔一帧读一帧尚未加入
+
+当前备份版本保留首次点亮时的实现。
+
+性能优化将在 `main` 进行，优先改为主动“隔一帧读一帧”，而不是在本分支继续修改。
+
+### CarPlay 断开后箭头状态异常
+
+一次测试中，在 CarPlay 断开、原车地图恢复且没有活动导航的情况下，仪表仍出现导航箭头。
+
+该问题后续在 `main` 处理。
+
+## 使用原则
+
+如果后续 `main` 出现：
+
+- 仪表不再点亮；
+- 画面异常；
+- CarPlay 主画面受影响；
+- 多次连接后链路退化；
+
+优先切回本 V2 分支进行对照。
+
+本分支的主要价值就是保持一个已经实车验证成功的参考点。
