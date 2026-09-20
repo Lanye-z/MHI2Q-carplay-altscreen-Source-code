@@ -44,7 +44,12 @@ for marker in \
   'SCR_PROP_VISIBLE                  51' \
   'SCR_PROP_SOURCE_CLIP_POSITION     68' \
   'SCR_PROP_SOURCE_CLIP_SIZE         72' \
+  'SCR_PROP_VIEWPORT_POSITION        74' \
+  'SCR_PROP_VIEWPORT_SIZE            75' \
+  'SCR_PROP_CLIP_POSITION            91' \
+  'SCR_PROP_CLIP_SIZE                92' \
   'SCR_PROP_SCALE_FACTOR            114' \
+  'SCR_PROP_TRANSFORM               127' \
   'SCR_PROP_MANAGER_STRING          152'
 do
     grep -Fq "$marker" "$SRC" || fail "source_marker_missing=$marker"
