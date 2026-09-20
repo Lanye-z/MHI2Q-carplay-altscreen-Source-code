@@ -12,7 +12,7 @@ static volatile sig_atomic_t g_stop = 0;
 static const unsigned kNoFramePollUs = 5000u;
 static const unsigned kDecodedStallReportUs = 120000u;
 static const char kBuildId[] =
-    "carplay-private111-direct-display-v2-source-driven-v2";
+    "carplay-private111-direct-display-v2-source-driven-layout-v3";
 
 static const char *volatile_path(const char *key, const char *fallback) {
     const char *v = getenv(key);
@@ -239,6 +239,153 @@ static void copy_line(char *dst, size_t cap, const char *src) {
     strncpy(dst, src, cap - 1u);
     dst[cap - 1u] = 0;
     strip_eol(dst);
+}
+
+struct OemMapPlacement {
+    int dx;
+    int dy;
+    char view[16];
+    char layout[128];
+    bool recognized;
+};
+
+static bool state_kv_text(const char *line, const char *key,
+                          char *out, size_t cap) {
+    const size_t n = key ? strlen(key) : 0u;
+    if (!line || !key || !n || !out || !cap) return false;
+    if (strncmp(line, key, n) != 0 || line[n] != '=') return false;
+    copy_line(out, cap, line + n + 1u);
+    return true;
+}
+
+static bool state_kv_int(const char *line, const char *key, int *out) {
+    const size_t n = key ? strlen(key) : 0u;
+    char *end = 0;
+    long v;
+    if (!line || !key || !n || !out) return false;
+    if (strncmp(line, key, n) != 0 || line[n] != '=') return false;
+    v = strtol(line + n + 1u, &end, 10);
+    if (end == line + n + 1u || v < -8192L || v > 8192L) return false;
+    *out = (int)v;
+    return true;
+}
+
+/*
+ * Session-latched OEM map-plane placement.
+ *
+ * The stock B9Sport SMALL stage translates map planes 33/58 by (-476,0).
+ * Our displayable3 renderer keeps the same 1440x455 size and reproduces only
+ * that translation.  Negative destination coordinates are intentionally left
+ * to GLES clipping; there is no scale/crop-to-safe-area operation here.
+ *
+ * The hook independently compensates CarPlay safeArea into source coordinates,
+ * so after this translation the phone's important UI lands in the measured
+ * physical safe region.
+ */
+static OemMapPlacement load_session_map_placement() {
+    OemMapPlacement p;
+    memset(&p, 0, sizeof(p));
+    copy_line(p.view, sizeof(p.view), "UNKNOWN");
+    copy_line(p.layout, sizeof(p.layout), "UNKNOWN");
+
+    FILE *f = fopen("/tmp/mmi-mirror-hmi.state", "r");
+    if (!f) return p;
+
+    char line[256];
+    int small_dx = 0, small_dy = 0;
+    bool have_view = false, have_layout = false;
+    bool have_dx = false, have_dy = false;
+
+    while (fgets(line, sizeof(line), f)) {
+        strip_eol(line);
+        if (state_kv_text(line, "view", p.view, sizeof(p.view)))
+            have_view = true;
+        else if (state_kv_text(line, "layout_name", p.layout, sizeof(p.layout)))
+            have_layout = true;
+        else if (state_kv_int(line, "small_stage_dx", &small_dx))
+            have_dx = true;
+        else if (state_kv_int(line, "small_stage_dy", &small_dy))
+            have_dy = true;
+    }
+    fclose(f);
+
+    if (!have_view || !have_layout ||
+        !strstr(p.layout, "LayoutMIB2HighB9")) {
+        return p;
+    }
+
+    if (strcmp(p.view, "FULL") == 0) {
+        p.dx = 0;
+        p.dy = 0;
+        p.recognized = true;
+        return p;
+    }
+
+    if (strcmp(p.view, "SMALL") != 0)
+        return p;
+
+    if (strstr(p.layout, "LayoutMIB2HighB9Sport")) {
+        if (!have_dx) small_dx = -476;
+        if (!have_dy) small_dy = 0;
+    }
+
+    /*
+     * Require at least partial overlap with the 1440x455 viewport.  This keeps
+     * a corrupt HMI state from moving the whole surface off-screen.
+     */
+    if (small_dx <= -1440 || small_dx >= 1440 ||
+        small_dy <= -455 || small_dy >= 455) {
+        fprintf(stderr,
+                "direct111: WARN PHASE=OEM_MAP_PLACEMENT_INVALID "
+                "view=%s layout=%s dx=%d dy=%d fallback=fullscreen\n",
+                p.view, p.layout, small_dx, small_dy);
+        return p;
+    }
+
+    p.dx = small_dx;
+    p.dy = small_dy;
+    p.recognized = true;
+    return p;
+}
+
+static void apply_session_map_placement(ClusterVideoDisplay &display) {
+    const OemMapPlacement p = load_session_map_placement();
+
+    if (!p.recognized) {
+        display.set_fullscreen_destination();
+        fprintf(stderr,
+                "direct111: PHASE=OEM_MAP_PLACEMENT "
+                "mode=fallback-fullscreen renderer_offset=0,0 "
+                "renderer_scale=0 session_latched=1\n");
+        return;
+    }
+
+    if (p.dx == 0 && p.dy == 0) {
+        display.set_fullscreen_destination();
+        fprintf(stderr,
+                "direct111: PHASE=OEM_MAP_PLACEMENT "
+                "mode=%s layout=%s renderer_offset=0,0 "
+                "renderer_scale=0 session_latched=1\n",
+                p.view, p.layout);
+        return;
+    }
+
+    if (display.set_destination_rect(p.dx, p.dy, 1440, 455)) {
+        fprintf(stderr,
+                "direct111: PHASE=OEM_MAP_PLACEMENT "
+                "mode=%s layout=%s renderer_offset=%d,%d "
+                "size=1440x455 renderer_scale=0 natural_clip=1 "
+                "session_latched=1\n",
+                p.view, p.layout, p.dx, p.dy);
+        return;
+    }
+
+    display.set_fullscreen_destination();
+    fprintf(stderr,
+            "direct111: WARN PHASE=OEM_MAP_PLACEMENT "
+            "mode=%s layout=%s requested_offset=%d,%d "
+            "apply_failed=1 fallback=fullscreen renderer_scale=0\n",
+            p.view, p.layout, p.dx, p.dy);
 }
 
 static void load_consumed_gate(char *out, size_t cap) {
@@ -653,7 +800,7 @@ int main(int argc, char **argv) {
         source.shutdown();
         return 3;
     }
-    display.set_fullscreen_destination();
+    apply_session_map_placement(display);
 
     if (!display.present_frame(frame)) {
         fprintf(stderr,
@@ -694,6 +841,7 @@ int main(int argc, char **argv) {
             "decoder_backend=stock-omx-tap h264_tap_independent=1 "
             "same_session_recovery=%d window58_readback=0 "
             "present_policy=source-driven no_success_sleep=1 "
+            "oem_map_placement=session-latched "
             "no_new_frame_poll_us=%u stall_report_after_ms=%u\n",
             recovered_current_session ? 1 : 0,
             kNoFramePollUs, kDecodedStallReportUs / 1000u);
