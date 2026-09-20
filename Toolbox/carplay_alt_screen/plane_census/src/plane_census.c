@@ -103,6 +103,7 @@ struct tracked {
     scr_window_t window;
     unsigned long event_seq;
     int last_event_type;
+    time_t last_snapshot_epoch;
 };
 
 static volatile sig_atomic_t g_stop;
@@ -580,11 +581,26 @@ int main(int argc, char **argv) {
         tracked[idx].event_seq = event_seq;
         tracked[idx].last_event_type = type;
 
-        rc = write_snapshot(state_dir, id, tracked[idx].window,
-                            type, event_seq, &a);
-        printf("TARGET_EVENT id=%s event=%d seq=%lu handle=%p snapshot=%s\n",
-               id, type, event_seq, event_window, rc == 0 ? "OK" : "FAIL");
-        fflush(stdout);
+        /*
+         * CREATE/PROPERTY are rare and always worth a snapshot. POST may arrive
+         * at video frame rate, so refresh at most once per second to avoid
+         * turning a read-only census into a high-rate /tmp writer.
+         */
+        {
+            const time_t now = time(NULL);
+            const int should_snapshot =
+                type != SCR_EVENT_POST ||
+                tracked[idx].last_snapshot_epoch != now;
+            if (should_snapshot) {
+                rc = write_snapshot(state_dir, id, tracked[idx].window,
+                                    type, event_seq, &a);
+                if (rc == 0) tracked[idx].last_snapshot_epoch = now;
+                printf("TARGET_EVENT id=%s event=%d seq=%lu handle=%p snapshot=%s\n",
+                       id, type, event_seq, event_window,
+                       rc == 0 ? "OK" : "FAIL");
+                fflush(stdout);
+            }
+        }
     }
 
     printf("CENSUS_WATCH_END events=%lu tracked33=%d tracked58=%d\n",
