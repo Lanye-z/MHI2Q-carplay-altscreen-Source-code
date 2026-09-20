@@ -1569,7 +1569,7 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
 
     ++g_linearizer.publish_success;
     if (g_linearizer.publish_success == 1u) {
-        altscreen_log("PHASE=FRAME_LINEARIZER_FIRST_FRAME backend=%s source_format=%u source_usage=0x%x size=%ux%u readback_us=%u readback_success=%u shm_publish_success=1 output=packed-nv12 window_readback=exact-stock-handle",
+        altscreen_log("PHASE=FRAME_LINEARIZER_FIRST_FRAME backend=%s source_format=%u source_usage=0x%x size=%ux%u readback_us=%u readback_success=%u shm_publish_success=1 output=packed-nv12 window_readback=exact-stock-handle rate_policy=uncapped_source_callbacks sink_target_fps=30",
                       backend == P111_LINEARIZER_NV12 ?
                           "screen-nv12" : "screen-rgba-bt601",
                       source_format, source_usage, width, height,
@@ -1577,7 +1577,7 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
     } else if (minute_due(tap_now_us32(), &g_linearizer_progress_us32)) {
         unsigned p50 = linearizer_percentile_ms_locked(50u);
         unsigned p95 = linearizer_percentile_ms_locked(95u);
-        altscreen_log("PHASE=FRAME_LINEARIZER_PROGRESS backend=%s readbacks=%u published=%u publish_drops=%u requests=%u failures=%u fallbacks=%u slow_readbacks=%u readback_p50_ms=%u readback_p95_ms=%u readback_max_us=%u size=%ux%u",
+        altscreen_log("PHASE=FRAME_LINEARIZER_PROGRESS backend=%s readbacks=%u published=%u publish_drops=%u requests=%u rate_policy=uncapped_source_callbacks sink_target_fps=30 failures=%u fallbacks=%u slow_readbacks=%u readback_p50_ms=%u readback_p95_ms=%u readback_max_us=%u size=%ux%u",
                       backend == P111_LINEARIZER_NV12 ?
                           "screen-nv12" : "screen-rgba-bt601",
                       g_linearizer.readback_success,
