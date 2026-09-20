@@ -1,42 +1,59 @@
-# CarPlay private111 Direct Display V1 — HISTORICAL BRANCH
+# 上车前请先阅读
 
-Branch: `carplay-private111-direct-display-v1`
+当前分支：`carplay-private111-direct-display-v1`
 
-## Status
+## 当前定位
 
-This branch is retained for historical reference only.
+这是历史实验分支，已经被 V2 取代。
 
-V1 helped establish the private111 transport, H.264/stock-OMX boundary,
-displayable3/GLES sink, and Java-owned Context80 architecture, but it did **not**
-produce the confirmed usable physical VC first-light later achieved by the
-modified V2 branch.
+不建议再从本分支开始新的上车测试。
 
-Do not use V1 as the starting point for new vehicle tests.
+当前项目应使用：
 
-## Historical V1 route
+- `main`：正式开发；
+- `carplay-private111-direct-display-v2`：首次实车成功点亮备份；
+- 本 V1：仅用于历史回溯和代码比较。
+
+## V1 当时验证的内容
+
+V1 主要用于确认：
+
+- private type111 能否建立；
+- `ScreenStreamProcessData` 是否可以取得第二屏 H.264；
+- 原车 OMX decoded frame 是否能够旁路获取；
+- displayable3 / GLES 是否能够作为仪表出口；
+- Java/HMI Context80 是否适合作为唯一 Context 控制方。
+
+V1 的历史路线为：
 
 ```text
-CarPlay private type111
-  -> stock AirPlay framing / ScreenStreamProcessData
-  -> /carplay111_h264
-  -> stock Qualcomm OMX
-  -> decoded NV12 tap
-  -> /carplay111_decoded
-  -> CPU NV12 -> RGBA
-  -> GLES / displayable3
-  -> Java/HMI Context80
-  -> Virtual Cockpit
+private type111
+  → ScreenStreamProcessData
+  → /carplay111_h264
+  → 原车 OMX
+  → decoded NV12 tap
+  → /carplay111_decoded
+  → CPU NV12 → RGBA
+  → GLES / displayable3
+  → Java Context80
+  → Virtual Cockpit
 ```
 
-The important value of this branch is diagnostic history and comparison with
-the later V2 Screen-linearized path.
+## 为什么停止继续开发 V1
 
-## Branch guidance
+后续实车分析表明，真正需要解决的是 MHI2Q 原车 OMX / Screen decoded buffer 的内部布局问题。
 
-- Current development branch: `main`
-- Known-good vehicle first-light backup:
-  `carplay-private111-direct-display-v2`
-- This V1 branch: archive / regression reference only
+V2 改为从实际 private renderer 的 Screen window 做安全读取并线性化为标准 NV12，最终实现了可用的仪表物理点亮。
 
-The old `READY_FOR_VEHICLE_TEST` wording in V1-era release notes should be
-read as historical pre-test state, not as the current recommended package.
+因此 V1 不再承担新的功能开发任务。
+
+## 不要在本分支继续处理
+
+以下工作全部转到 `main`：
+
+- 隔一帧读一帧；
+- CarPlay 断开后的原车导航箭头状态恢复；
+- 多次连接 / 断开稳定性；
+- 后续性能优化。
+
+需要比较 V1 与 V2 差异时再使用本分支。
