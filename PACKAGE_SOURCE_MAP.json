@@ -9,7 +9,7 @@
   "Toolbox/GEM/mqb-carplayAltScreen.esd": "0ed97ef846f6cf87c7a737fbaa2e49df2e45fdaa410d319063b4e6de31a12663",
   "Toolbox/carplay_alt_screen/SOURCE_PROVENANCE.md": "e413947e829f25aa9162fe4aba719ba8686cf229531bc946104c625372c8a147",
   "Toolbox/carplay_alt_screen/hmi/API_COMPAT.txt": "73b87d406f1985919790a286642e5444e5ea98ff393b7f1248918a304511802a",
-  "Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt": "f9195021e4d13feedffa110708d5afe7995e9678a70870c3ac06d6bb2671824f",
+  "Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt": "3e6682259b1c215844cda91b5c5e72b3458af9d6d87b6b121974c89d18b11d28",
   "Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar": "1a7bd6b1e949972b4bdd88dcc65a7e6a593777a150eb718fbece2735ce9f50d8",
   "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java": "1b6b8d9ce432ebd5dcd569f6aa746d556d5052f7ff666acaaed9315104656080",
   "Toolbox/carplay_alt_screen/hmi/stubs/de/audi/atip/base/IFrameworkAccess.java": "e093d6e7ed0c0e641311a35aaa7ef6b04228808ae001eff29d821229023dfba6",
@@ -59,7 +59,7 @@
   "Toolbox/carplay_alt_screen/src/private111_direct_tap.h": "1c361002ee22983b8f85484c2e2886f1561fa14f049246c144c5726e7360db17",
   "Toolbox/carplay_alt_screen/src/qnxshim/errno.h": "494e2594e84a3b889939b7aba50d1d3d083942c71d0e7310c454e331b3aa5d8f",
   "Toolbox/carplay_alt_screen/src/qnxshim/sys/mman.h": "cb6050a260a9777bcdc4bcd7195939717287af55b096d5e488b5982b7f080dd1",
-  "Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so": "c9c70ada12d1f12eb0ff3d4f3e4aa6fdae4183524d5b278324a46e23ce17e366",
+  "Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so": "84059ef19dd48ff16a1c910d097bed5db5e25b752ba5503ed13c2e3759edb579",
   "Toolbox/scripts/altscreen_adaptive_diag.sh": "b03b772602413df25b0169854ce9105a748407220cf9ed6afcdf95fe8d91214b",
   "Toolbox/scripts/altscreen_boot_diag.sh": "3bbf60331d77a33e61cdd72ad84201a2b7098a623539b08e1f1ce88b638c8690",
   "Toolbox/scripts/altscreen_chain_test.sh": "21891f0f86996e5b32c42167d3e20de61dc0892cf70ec7fa3349b25f6b03ee17",
@@ -79,7 +79,7 @@
   "VERIFY-CONTEXT80-READBACK-V1.sh": "3f640553e585591cbb04eed0743dc8f6a10c9b842261370d2b6a75b671f9a208",
   "VERIFY-NATIVE-DIRECT-RELEASE.sh": "6d86fbb866ce3d76e032c8aed3dfc73112e6e8a7b339709ca59c21a6b06af75e",
   "CARPLAY-PRIVATE111-DIRECT-DISPLAY-V2.md": "8485f9cd1de57ad19030b8dd6f38c8fd59e9f98d2b52951cf42771706c4cca7d",
-  ".github/workflows/private111-direct-display-v2.yml": "9d326323da73a2fc92e1058a9eb8867b9fae258388cb0d7fe9378ada00f25289",
+  ".github/workflows/private111-direct-display-v2.yml": "0c114d8c4c7b25e7022315150f7a0e86c1523e4314c2ea583fc2ee640d52acd5",
   "Toolbox/carplay_alt_screen/src/qnxshim/sys/stat.h": "0ff8c15594c3c263aab3b702922c1aaf4a289aa060b810d870b30f4cbf261030",
   ".github/workflows/oem-layout-observer-v1.yml": "78bc0490f4e9b06bdb784102e89e198a32640cc2ce1a93c848f0c58553e775d4"
 }
