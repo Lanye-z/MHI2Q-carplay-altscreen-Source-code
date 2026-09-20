@@ -24,6 +24,11 @@ DST="$DST_DIR/oem-plane-census"
     echo "FAIL: observer BUILD_INFO mismatch"
     exit 3
 }
+grep -Fq 'mode=READ_ONLY' "$INFO" || { echo "FAIL: release is not marked read-only"; exit 3; }
+grep -Fq 'screen_context=WINDOW_MANAGER_CONTEXT' "$INFO" || {
+    echo "FAIL: release does not use the window-manager event observer"
+    exit 3
+}
 
 echo "OBSERVER_ONLY=YES"
 echo "CARPLAY_PROTOCOL_CHANGES=NONE"
@@ -54,3 +59,4 @@ mount -ur /mnt/app || true
 
 echo "OEM_PLANE_CENSUS_INSTALL=PASS target=$DST"
 echo "reboot_required=NO"
+echo "NEXT_ACTION=START_OBSERVER"
