@@ -31,25 +31,28 @@ OFFSET=0
 INODE=""
 DEST=""
 VOLUME=""
+TMP_DEST="$ROOT/tmp/MMI-Cockpit-Carplay/adaptive.log"
+[ -d "$ROOT/tmp/MMI-Cockpit-Carplay" ] || TMP_DEST="$ROOT/tmp/MMI-Cockpit-Carplay.adaptive.log"
+SD_DEST=""
+SD_DEST_VOLUME=""
 
 select_hook_source() {
-    for candidate in \
+    latest=$(ls -t \
+        "$VOLUME/MMI-Cockpit-Carplay/logs/altscreen_hook.log" \
         "$ROOT/tmp/MMI-Cockpit-Carplay/altscreen_hook.log" \
         "$ROOT/tmp/MMI-Cockpit-Carplay.altscreen_hook.log" \
-        "$ROOT/tmp/altscreen_hook.log"; do
-        [ -f "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
-    done
-    printf '%s\n' "$ROOT/tmp/MMI-Cockpit-Carplay/altscreen_hook.log"
+        "$ROOT/tmp/altscreen_hook.log" 2>/dev/null | head -n 1)
+    printf '%s\n' "${latest:-$ROOT/tmp/MMI-Cockpit-Carplay/altscreen_hook.log}"
 }
 
 find_volume() {
     VOLUME=""
     if [ "${ALTSCREEN_CHAIN_TESTING:-0}" = 1 ]; then
         candidate=${ALTSCREEN_CHAIN_VOLUME:-}
-        [ -d "$candidate/Toolbox" ] && VOLUME=$candidate
+        [ -n "$candidate" ] && [ -d "$candidate/Toolbox" ] && [ -d "$candidate/MMI-Cockpit-Carplay/state" ] && VOLUME=$candidate
     else
         for candidate in /net/mmx/fs/sda0 /net/mmx/fs/sda1 /net/mmx/fs/sdb0 /net/mmx/fs/sdb1 /fs/sda0 /fs/sda1 /fs/sdb0 /fs/sdb1; do
-            if [ -d "$candidate/Toolbox" ] && { [ -d "$candidate/MMI-Cockpit-Carplay/backup/original" ] || [ -d "$candidate/Backup/AltScreenChain/original" ]; }; then
+            if [ -d "$candidate/Toolbox" ] && [ -d "$candidate/MMI-Cockpit-Carplay/state" ]; then
                 VOLUME=$candidate
                 break
             fi
@@ -59,12 +62,18 @@ find_volume() {
 }
 
 init_dest() {
-    [ -n "$DEST" ] && [ -n "$VOLUME" ] && [ -d "$VOLUME/Toolbox" ] && return 0
-    find_volume || return 1
-    [ "${ALTSCREEN_CHAIN_TESTING:-0}" = 1 ] || mount -uw "$VOLUME" >/dev/null 2>&1 || true
-    dir="$VOLUME/MMI-Cockpit-Carplay/logs/adaptive"
-    ensure_dirs "$dir" 2>/dev/null || return 1
-    DEST="$dir/adaptive_$(date +%Y%m%d_%H%M%S)_$$.log"
+    find_volume || VOLUME=""
+    DEST="$TMP_DEST"
+    if [ -n "$VOLUME" ]; then
+        if [ "$SD_DEST_VOLUME" != "$VOLUME" ]; then SD_DEST=""; SD_DEST_VOLUME=$VOLUME; fi
+        [ "${ALTSCREEN_CHAIN_TESTING:-0}" = 1 ] || mount -uw "$VOLUME" >/dev/null 2>&1 || true
+        dir="$VOLUME/MMI-Cockpit-Carplay/logs/adaptive"
+        if ensure_dirs "$dir" 2>/dev/null; then
+            [ -n "$SD_DEST" ] || SD_DEST="$dir/adaptive_$(date +%Y%m%d_%H%M%S)_$$.log"
+            if ( : >> "$SD_DEST" ) 2>/dev/null; then DEST=$SD_DEST; fi
+        fi
+    fi
+    [ -s "$DEST" ] && return 0
     profile=$(cat "$VOLUME/MMI-Cockpit-Carplay/state/firmware_profile.txt" 2>/dev/null || echo UNKNOWN)
     train=""
     for rel in /net/rcc/dev/shmem/version.txt /dev/shmem/version.txt /net/mmx/dev/shmem/version.txt; do
@@ -73,8 +82,8 @@ init_dest() {
         train=$(sed -n '/Current train/p' "$path" | head -n 1)
         [ -n "$train" ] && break
     done
-    printf '%s ADAPTIVE_FAILSAFE_BEGIN profile=%s train=%s source=/tmp/MMI-Cockpit-Carplay/altscreen_hook.log payload_filter=STATUS_ONLY store_required=NO\n' \
-        "$(date +%Y%m%d_%H%M%S)" "$profile" "${train:-UNKNOWN}" > "$DEST" || { DEST=""; return 1; }
+    printf '%s ADAPTIVE_FAILSAFE_BEGIN profile=%s train=%s source=altscreen_hook.log payload_filter=STATUS_ONLY store_required=NO\n' \
+        "$(date +%Y%m%d_%H%M%S)" "$profile" "${train:-UNKNOWN}" > "$DEST" 2>/dev/null || { DEST=""; return 1; }
     for rel in /eso/lib/libairplay.so /eso/bin/apps/dio_manager /mnt/app/eso/bin/apps/dio_manager /armle/usr/lib/libNmeBaseClasses.so /mnt/app/armle/usr/lib/libNmeBaseClasses.so; do
         path="$ROOT$rel"
         [ -f "$path" ] || continue
@@ -85,9 +94,12 @@ init_dest() {
 }
 
 copy_delta() {
+    init_dest || return 0
     SOURCE=$(select_hook_source)
     [ -f "$SOURCE" ] || return 0
-    init_dest || return 0
+    if [ -f "$DEST" ] && [ "$(wc -c < "$DEST")" -ge 4194304 ]; then
+        : > "$DEST" 2>/dev/null || DEST="$TMP_DEST"
+    fi
     size=$(wc -c < "$SOURCE" 2>/dev/null || echo 0)
     inode=$(ls -i "$SOURCE" 2>/dev/null | awk '{print $1}')
     case "$size" in ''|*[!0-9]*) return 0 ;; esac
@@ -110,10 +122,20 @@ copy_delta() {
           /PHASE=PRIVATE111_BACKEND_INSTALL_RESULT/ ||
           /PHASE=RUNTIME_GEOMETRY_GATE/ ||
           /RUNTIME ready / { print }
-        ' >> "$DEST" 2>/dev/null || true
+        ' >> "$DEST" 2>/dev/null || {
+            DEST=$TMP_DEST
+            tail -c "+$((OFFSET + 1))" "$SOURCE" 2>/dev/null | awk '
+              /PHASE=AUG22_DYNAMIC_RESOLVER/ || /PHASE=STOCK_INTERNAL_REDIRECT/ ||
+              /PHASE=RUNTIME_PROCESS_IDENTITY/ || /PHASE=RUNTIME_SYMBOL_RESOLUTION/ ||
+              /PHASE=RUNTIME_PREREQUISITES/ || /PHASE=RUNTIME_ABI_IDENTITY/ ||
+              /PHASE=RUNTIME_FORWARDING_GATE/ || /PHASE=PRIVATE111_BACKEND_INSTALL_RESULT/ ||
+              /PHASE=RUNTIME_GEOMETRY_GATE/ || /RUNTIME ready / { print }
+            ' >> "$DEST" 2>/dev/null || return 0
+        }
         OFFSET=$size
     fi
     INODE=$inode
+    [ -z "$VOLUME" ] || /bin/sh "${0%/*}/altscreen_log_ring.sh" prune 2>/dev/null || true
 }
 
 [ -f "$ENABLED" ] || exit 0
