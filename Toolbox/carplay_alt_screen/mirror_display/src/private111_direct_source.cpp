@@ -34,6 +34,9 @@ Private111DirectSource::Private111DirectSource(bool verbose)
       h264_map_attempts_(0),
       frame_map_attempts_(0),
       sample_count_(0),
+      copy_races_(0),
+      last_consumer_progress_us_(0),
+      last_h264_progress_us_(0),
       h264_ready_(false),
       decoded_ready_(false),
       first_frame_logged_(false) {
@@ -283,9 +286,11 @@ void Private111DirectSource::log_h264_progress() {
                 (unsigned)h264_->idr_count, (unsigned)h264_->annexb_count);
     }
 
-    if (verbose_ && packets &&
-        (last_logged_h264_packets_ == 0 ||
-         packets - last_logged_h264_packets_ >= 256u)) {
+    const unsigned long long progress_now = now_us();
+    if (verbose_ && packets && progress_now &&
+        (!last_h264_progress_us_ || progress_now < last_h264_progress_us_ ||
+         progress_now - last_h264_progress_us_ >= 60000000ULL)) {
+        last_h264_progress_us_ = progress_now;
         last_logged_h264_packets_ = packets;
         fprintf(stderr,
                 "direct111: PHASE=H264_PROGRESS writer_pid=%u generation=%u "
@@ -334,6 +339,7 @@ bool Private111DirectSource::read_frame(VideoFrame *frame) {
     const uint32_t stride = frames_->stride;
     const uint32_t format = frames_->format;
     const uint32_t bytes = frames_->frame_bytes;
+    const p111_frame_timing_t timing = frames_->timing[slot < P111_FRAME_SLOTS ? slot : 0u];
 
     if (!active1 || !writer1 || !seq1) return false;
 
@@ -403,7 +409,9 @@ bool Private111DirectSource::read_frame(VideoFrame *frame) {
 
     const unsigned char *src =
         &frames_->data[(size_t)slot * P111_FRAME_SLOT_BYTES];
+    const unsigned long long copy_start_us = now_us();
     memcpy(local_frame_, src, bytes);
+    const unsigned long long copy_end_us = now_us();
     __sync_synchronize();
 
     const uint32_t writer2 = frames_->writer_pid;
@@ -415,6 +423,7 @@ bool Private111DirectSource::read_frame(VideoFrame *frame) {
     if (!active2 || !writer2 ||
         writer1 != writer2 || gen != gen2 || cookie != cookie2 ||
         seq1 != seq2 || slot != slot2) {
+        ++copy_races_;
         if (verbose_) {
             fprintf(stderr,
                     "direct111: PHASE=DECODED_FRAME_RACE retry=1 "
@@ -440,6 +449,15 @@ bool Private111DirectSource::read_frame(VideoFrame *frame) {
     frame->stride = (int)stride;
     frame->format = PIXEL_FORMAT_NV12;
     frame->timestamp_us = now_us();
+    frame->sequence = seq1;
+    frame->h264_sequence = timing.h264_seq;
+    frame->h264_rx_us32 = timing.h264_rx_us32;
+    frame->render_us32 = timing.render_us32;
+    frame->publish_us32 = timing.publish_us32;
+    frame->readback_us = timing.readback_us;
+    frame->copy_us = copy_start_us && copy_end_us >= copy_start_us &&
+                     copy_end_us - copy_start_us <= 5000000ULL
+                         ? (unsigned)(copy_end_us - copy_start_us) : 0u;
 
     const char *sample_env = getenv("ALT111_CONSUMER_SAMPLE_NV12");
     if (sample_env && *sample_env &&
@@ -482,7 +500,11 @@ bool Private111DirectSource::read_frame(VideoFrame *frame) {
                 (unsigned)seq1, (unsigned)width, (unsigned)height,
                 (unsigned)stride, (unsigned)bytes,
                 h264_ready_ ? "YES" : "NOT_YET");
-    } else if ((consumer_copy_count_ % 300u) == 0u) {
+    } else if (frame->timestamp_us &&
+               (!last_consumer_progress_us_ ||
+                frame->timestamp_us < last_consumer_progress_us_ ||
+                frame->timestamp_us - last_consumer_progress_us_ >= 60000000ULL)) {
+        last_consumer_progress_us_ = frame->timestamp_us;
         fprintf(stderr,
                 "direct111: PHASE=DECODED_CONSUMER_PROGRESS writer_pid=%u "
                 "generation=%u cookie=0x%08x copies=%u producer_frames=%u "
@@ -532,6 +554,9 @@ void Private111DirectSource::shutdown() {
     h264_map_attempts_ = 0;
     frame_map_attempts_ = 0;
     sample_count_ = 0;
+    copy_races_ = 0;
+    last_consumer_progress_us_ = 0;
+    last_h264_progress_us_ = 0;
     h264_ready_ = false;
     decoded_ready_ = false;
     first_frame_logged_ = false;
