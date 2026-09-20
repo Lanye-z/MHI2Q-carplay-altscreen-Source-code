@@ -192,11 +192,11 @@ static void out_iv9(FILE *out, struct api *a, scr_window_t w,
     rc = a->get_window_iv(w, prop, v);
     e = errno;
     if (rc == 0) {
-        fprintf(out, "%s=%d,%d,%d,%d,%d,%d,%d,%d,%d rc=0\\n",
+        fprintf(out, "%s=%d,%d,%d,%d,%d,%d,%d,%d,%d rc=0\n",
                 name, v[0], v[1], v[2], v[3], v[4],
                 v[5], v[6], v[7], v[8]);
     } else {
-        fprintf(out, "%s=NA rc=%d errno=%d\\n", name, rc, e);
+        fprintf(out, "%s=NA rc=%d errno=%d\n", name, rc, e);
     }
 }
 
