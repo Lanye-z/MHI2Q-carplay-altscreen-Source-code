@@ -21,6 +21,7 @@ STOP="$ROOT/Toolbox/scripts/stop_mmi_cockpit_carplay_test.sh"
 INSTALL="$ROOT/Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh"
 STATUS="$ROOT/Toolbox/scripts/status_mmi_cockpit_carplay_test.sh"
 CHAIN="$ROOT/Toolbox/scripts/altscreen_chain_test.sh"
+BOOT_DIAG="$ROOT/Toolbox/scripts/altscreen_boot_diag.sh"
 TOP="$ROOT/SHA256SUMS.txt"
 MAP="$ROOT/PACKAGE_SOURCE_MAP.json"
 
@@ -31,11 +32,11 @@ sha256_file(){
 }
 binary_strings(){ strings "$1" 2>/dev/null || grep -a -o '[[:print:]][[:print:]]*' "$1"; }
 
-for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$MAIN_CPP" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$STOP" "$INSTALL" "$STATUS" "$CHAIN"; do
+for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$MAIN_CPP" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$STOP" "$INSTALL" "$STATUS" "$CHAIN" "$BOOT_DIAG"; do
     [ -s "$f" ] || fail "missing/empty: $f"
 done
 
-for s in "$START" "$CTRL" "$LAUNCH" "$STOP"          "$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh"; do
+for s in "$START" "$CTRL" "$LAUNCH" "$STOP" "$BOOT_DIAG" "$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh"; do
     sh -n "$s" || fail "shell syntax: $s"
 done
 
@@ -140,6 +141,14 @@ grep -Fq 'readback_p50_ms=' "$TAP" ||
     fail "readback latency percentile diagnostics missing"
 grep -Fq 'PHASE=FRAME_LINEARIZER_SLOW' "$TAP" ||
     fail "slow synchronous readback diagnostic missing"
+grep -Fq 'P111_LINEARIZER_TARGET_INTERVAL_US 33333u' "$TAP" ||
+    fail "30fps time-based linearizer interval missing"
+grep -Fq 'rate_policy=time_30fps' "$TAP" ||
+    fail "linearizer first-frame log does not identify time-based 30fps policy"
+grep -Fq 'rate_skips=%u target_fps=30' "$TAP" ||
+    fail "linearizer progress does not expose rate-limit skips"
+grep -Fq 'next_readback_due_us' "$TAP" ||
+    fail "deadline-based linearizer scheduler missing"
 grep -Fq 'DIRECT111_TAP_STOP_STALE' "$TAP" ||
     fail "stale-stream teardown isolation missing"
 grep -Fq 'DIRECT111_TAP_STALE_CALLBACK' "$TAP" ||
@@ -259,6 +268,12 @@ grep -Fq 'CarPlay private111 Direct Display V2' "$STATUS" ||
     fail "STATUS still identifies the old V1 display path"
 grep -Fq 'FRAME_LINEARIZER_SLOW_EVENTS=' "$STATUS" ||
     fail "STATUS does not surface Screen readback latency evidence"
+grep -Fq 'select_controller_log_source' "$BOOT_DIAG" ||
+    fail "boot diagnostics do not locate mmi-mirror-controller.log"
+grep -Fq 'tmp_mmi-mirror-controller.log' "$BOOT_DIAG" ||
+    fail "normal boot diagnostics do not persist Java Context80 controller log"
+grep -Fq 'streams/mmi-mirror-controller.log' "$BOOT_DIAG" ||
+    fail "flat SD fallback does not persist Java Context80 controller log"
 if grep -Fq 'DISPLAY_PATH=WINDOW58_READBACK' "$CTRL"; then
     fail "controller still advertises retired Window58 readback"
 fi
