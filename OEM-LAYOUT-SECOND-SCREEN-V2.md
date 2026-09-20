@@ -55,12 +55,19 @@ The producer remains uncapped and the Private111 / OMX / SHM ABI is unchanged.
 The ListModel176-derived rectangles are treated as **map/source-local safe
 areas**, not as post-layout physical VC rectangles and not as GLES scale boxes.
 
-The renderer always keeps the native stream size:
+The two sizes must be kept distinct:
 
 ```
-renderer_scale=0
-displayable3=1440x455
+private111 / CarPlay coded canvas = runtime display geometry
+                                  = 1440x542 in the vehicle logs
+displayable3 sink/map plane       = 1440x455
+renderer_scale                    = 0 for OEM X-placement
 ```
+
+The measured ListModel geometry also reports the related 1440x540 cluster
+screen model. The hook therefore recognizes only the observed B9-family
+vertical extents 542 / 540 / 455 instead of silently requiring 455 at the
+CarPlay `/info` stage.
 
 The two independent geometry layers are:
 
@@ -111,17 +118,18 @@ The type111 display therefore advertises both Audi candidates at session setup:
 
 ```
 viewAreas[0]:
-  viewArea = full 1440x455
-  safeArea = 370,49,700x300       # FULL
+  viewArea = full runtime type111 canvas   # observed 1440x542
+  safeArea = 370,49,700x300                # FULL
 
 viewAreas[1]:
-  viewArea = full 1440x455
-  safeArea = 490,49,460x300       # SMALL
+  viewArea = full runtime type111 canvas   # observed 1440x542
+  safeArea = 490,49,460x300                # SMALL
 ```
 
-The coded type111 frame remains 1440x455 in both states. The second viewArea
-does not shrink the video; it gives iOS a second safe-area layout for the same
-map canvas.
+The coded type111 frame keeps the runtime-negotiated dimensions in both states;
+the second viewArea does not change stream resolution or shrink the video. It
+only gives iOS a second safe-area layout. The independent displayable3 sink
+continues to use its proven 1440x455 map plane.
 
 `initialViewArea` follows the VC state present when `/info` is built:
 
@@ -155,6 +163,10 @@ which publishes `view`, `layout_name`, `small_stage_dx` and
 ## 4. Same-session live switching
 
 FULL/SMALL no longer requires a CarPlay reconnect.
+
+Both view areas are predeclared even if Java's first HMI state file arrives
+slightly after `/info`; otherwise a cold start could accidentally advertise
+only one index and make later live switching impossible.
 
 The runtime path is:
 
