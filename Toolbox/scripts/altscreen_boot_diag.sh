@@ -72,6 +72,15 @@ select_mirror_autostart_source() {
     done
     printf '%s\n' "$ROOT/tmp/MMI-Cockpit-Carplay/mirror/autostart.log"
 }
+select_controller_log_source() {
+    for candidate in \
+        "$ROOT/tmp/mmi-mirror-controller.log" \
+        "$ROOT/tmp/MMI-Cockpit-Carplay/mmi-mirror-controller.log"; do
+        [ -f "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
+    done
+    # ClusterStateController writes this exact path on the vehicle.
+    printf '%s\n' "$ROOT/tmp/mmi-mirror-controller.log"
+}
 flat_plain_append() {
     cat "$1" >> "$2"
 }
@@ -124,13 +133,14 @@ run_flat_plaintext() {
     if command -v sloginfo >/dev/null 2>&1; then
         (exec sloginfo -w -t) > "$flat_system" 2>&1 & flat_slog_pid=$!
     fi
-    flat_hook_offset=0; flat_dio_offset=0; flat_entry_offset=0; flat_mirror_offset=0; flat_mirror_autostart_offset=0; flat_system_offset=0; flat_tick=0
+    flat_hook_offset=0; flat_dio_offset=0; flat_entry_offset=0; flat_mirror_offset=0; flat_mirror_autostart_offset=0; flat_controller_offset=0; flat_system_offset=0; flat_tick=0
     while [ -f "$ENABLED" ]; do
         flat_hook_offset=$(flat_capture_delta "$(select_hook_source)" "$flat_hook_offset" "$FLAT_DEST/streams/hook_tmp.log" "${FLAT_PREFIX}_hook.chunk")
         flat_dio_offset=$(flat_capture_delta "$ROOT/tmp/CinemoDioManager.log" "$flat_dio_offset" "$FLAT_DEST/streams/dio_tmp.log" "${FLAT_PREFIX}_dio.chunk")
         flat_entry_offset=$(flat_capture_delta "$(select_boot_entry_source)" "$flat_entry_offset" "$FLAT_DEST/streams/boot_entry.log" "${FLAT_PREFIX}_entry.chunk")
         flat_mirror_offset=$(flat_capture_delta "$(select_mirror_log_source)" "$flat_mirror_offset" "$FLAT_DEST/streams/mirror.log" "${FLAT_PREFIX}_mirror.chunk")
         flat_mirror_autostart_offset=$(flat_capture_delta "$(select_mirror_autostart_source)" "$flat_mirror_autostart_offset" "$FLAT_DEST/streams/mirror_autostart.log" "${FLAT_PREFIX}_mirror_autostart.chunk")
+        flat_controller_offset=$(flat_capture_delta "$(select_controller_log_source)" "$flat_controller_offset" "$FLAT_DEST/streams/mmi-mirror-controller.log" "${FLAT_PREFIX}_controller.chunk")
         flat_system_offset=$(flat_capture_delta "$flat_system" "$flat_system_offset" "$FLAT_DEST/streams/system.log" "${FLAT_PREFIX}_system.chunk")
         if [ -f "$flat_system" ] && [ "$(wc -c < "$flat_system")" -ge 8388608 ]; then
             flat_log_event "SYSTEM_RAW_TRIM possible_boundary_loss=1 limit_bytes=8388608"
@@ -346,6 +356,15 @@ runtime_logs() {
             mv "$mirror_autostart_output.new" "$mirror_autostart_output"
     elif [ ! -f "$mirror_autostart_output" ]; then
         echo "MISSING $mirror_autostart_source" > "$mirror_autostart_output"
+    fi
+
+    controller_source=$(select_controller_log_source)
+    controller_output="$SPOOL/tmp_mmi-mirror-controller.log"
+    if [ -f "$controller_source" ]; then
+        tail -c 1048576 "$controller_source" > "$controller_output.new" &&
+            mv "$controller_output.new" "$controller_output"
+    elif [ ! -f "$controller_output" ]; then
+        echo "MISSING $controller_source" > "$controller_output"
     fi
 }
 copy_snapshot() {
