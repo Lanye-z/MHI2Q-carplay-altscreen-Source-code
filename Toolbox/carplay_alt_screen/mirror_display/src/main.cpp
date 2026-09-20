@@ -12,7 +12,7 @@ static volatile sig_atomic_t g_stop = 0;
 static const unsigned kNoFramePollUs = 5000u;
 static const unsigned kDecodedStallReportUs = 120000u;
 static const char kBuildId[] =
-    "carplay-private111-direct-display-v2-source-driven-layout-v3";
+    "carplay-private111-direct-display-v2-source-driven-layout-live-v4";
 
 static const char *volatile_path(const char *key, const char *fallback) {
     const char *v = getenv(key);
@@ -271,7 +271,7 @@ static bool state_kv_int(const char *line, const char *key, int *out) {
 }
 
 /*
- * Session-latched OEM map-plane placement.
+ * Live OEM map-plane placement.
  *
  * The stock B9Sport SMALL stage translates map planes 33/58 by (-476,0).
  * Our displayable3 renderer keeps the same 1440x455 size and reproduces only
@@ -348,44 +348,78 @@ static OemMapPlacement load_session_map_placement() {
     return p;
 }
 
-static void apply_session_map_placement(ClusterVideoDisplay &display) {
-    const OemMapPlacement p = load_session_map_placement();
+static bool same_map_placement(const OemMapPlacement &a,
+                               const OemMapPlacement &b) {
+    return a.dx == b.dx && a.dy == b.dy &&
+           a.recognized == b.recognized &&
+           strcmp(a.view, b.view) == 0 &&
+           strcmp(a.layout, b.layout) == 0;
+}
 
+static bool reconcile_oem_map_placement(ClusterVideoDisplay &display,
+                                        const char *reason,
+                                        bool redraw_last_frame) {
+    static bool have_previous = false;
+    static OemMapPlacement previous;
+
+    const OemMapPlacement p = load_session_map_placement();
+    if (have_previous && same_map_placement(previous, p))
+        return false;
+
+    bool applied = false;
     if (!p.recognized) {
         display.set_fullscreen_destination();
         fprintf(stderr,
                 "direct111: PHASE=OEM_MAP_PLACEMENT "
-                "mode=fallback-fullscreen renderer_offset=0,0 "
-                "renderer_scale=0 session_latched=1\n");
-        return;
-    }
-
-    if (p.dx == 0 && p.dy == 0) {
+                "reason=%s mode=fallback-fullscreen renderer_offset=0,0 "
+                "renderer_scale=0 live_switch=1\n",
+                reason ? reason : "poll");
+        applied = true;
+    } else if (p.dx == 0 && p.dy == 0) {
         display.set_fullscreen_destination();
         fprintf(stderr,
                 "direct111: PHASE=OEM_MAP_PLACEMENT "
-                "mode=%s layout=%s renderer_offset=0,0 "
-                "renderer_scale=0 session_latched=1\n",
-                p.view, p.layout);
-        return;
-    }
-
-    if (display.set_destination_rect(p.dx, p.dy, 1440, 455)) {
+                "reason=%s mode=%s layout=%s renderer_offset=0,0 "
+                "renderer_scale=0 live_switch=1\n",
+                reason ? reason : "poll", p.view, p.layout);
+        applied = true;
+    } else if (display.set_destination_rect(p.dx, p.dy, 1440, 455)) {
         fprintf(stderr,
                 "direct111: PHASE=OEM_MAP_PLACEMENT "
-                "mode=%s layout=%s renderer_offset=%d,%d "
+                "reason=%s mode=%s layout=%s renderer_offset=%d,%d "
                 "size=1440x455 renderer_scale=0 natural_clip=1 "
-                "session_latched=1\n",
-                p.view, p.layout, p.dx, p.dy);
-        return;
+                "live_switch=1\n",
+                reason ? reason : "poll", p.view, p.layout, p.dx, p.dy);
+        applied = true;
+    } else {
+        display.set_fullscreen_destination();
+        fprintf(stderr,
+                "direct111: WARN PHASE=OEM_MAP_PLACEMENT "
+                "reason=%s mode=%s layout=%s requested_offset=%d,%d "
+                "apply_failed=1 fallback=fullscreen renderer_scale=0 "
+                "live_switch=1\n",
+                reason ? reason : "poll", p.view, p.layout, p.dx, p.dy);
+        applied = true;
     }
 
-    display.set_fullscreen_destination();
-    fprintf(stderr,
-            "direct111: WARN PHASE=OEM_MAP_PLACEMENT "
-            "mode=%s layout=%s requested_offset=%d,%d "
-            "apply_failed=1 fallback=fullscreen renderer_scale=0\n",
-            p.view, p.layout, p.dx, p.dy);
+    previous = p;
+    have_previous = true;
+
+    /*
+     * A layout change must be visible even while the decoded producer is
+     * temporarily idle. Re-draw the already-uploaded texture at the new
+     * destination immediately; the next fresh frame continues normally.
+     */
+    if (applied && redraw_last_frame && display.first_frame_presented()) {
+        display.refresh();
+        fprintf(stderr,
+                "direct111: PHASE=OEM_MAP_RERENDER reason=%s "
+                "view=%s layout=%s renderer_offset=%d,%d "
+                "last_frame_redrawn=1\n",
+                reason ? reason : "poll",
+                p.view, p.layout, p.dx, p.dy);
+    }
+    return applied;
 }
 
 static void load_consumed_gate(char *out, size_t cap) {
@@ -800,7 +834,7 @@ int main(int argc, char **argv) {
         source.shutdown();
         return 3;
     }
-    apply_session_map_placement(display);
+    (void)reconcile_oem_map_placement(display, "startup", false);
 
     if (!display.present_frame(frame)) {
         fprintf(stderr,
@@ -841,7 +875,7 @@ int main(int argc, char **argv) {
             "decoder_backend=stock-omx-tap h264_tap_independent=1 "
             "same_session_recovery=%d window58_readback=0 "
             "present_policy=source-driven no_success_sleep=1 "
-            "oem_map_placement=session-latched "
+            "oem_map_placement=live-hmi-state "
             "no_new_frame_poll_us=%u stall_report_after_ms=%u\n",
             recovered_current_session ? 1 : 0,
             kNoFramePollUs, kDecodedStallReportUs / 1000u);
@@ -853,9 +887,17 @@ int main(int argc, char **argv) {
     unsigned long stats_presented_base = display.frame_count();
     unsigned long long stats_start = now_us();
     unsigned long long next_ownership_probe_us = now_us() + 500000ULL;
+    unsigned long long next_layout_probe_us = now_us() + 50000ULL;
 
     while (!g_stop) {
         const unsigned long long frame_start = now_us();
+
+        if (!next_layout_probe_us ||
+            (frame_start && frame_start >= next_layout_probe_us)) {
+            (void)reconcile_oem_map_placement(
+                display, "hmi-state-change", true);
+            next_layout_probe_us = frame_start + 50000ULL;
+        }
         if (!next_ownership_probe_us ||
             (frame_start && frame_start >= next_ownership_probe_us)) {
             publish_displayable_state(display, &source, "periodic");
