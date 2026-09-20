@@ -78,6 +78,9 @@ if binary_strings "$BIN" | grep -Fq 'screen_read_window'; then
     fail "Screen readback must remain in hook, not sidecar"
 fi
 
+binary_strings "$HOOK" | grep -Fq 'rate_policy=time_30fps' ||
+    fail "universal hook binary is stale: rebuild/promote the 30fps time-based linearizer"
+
 grep -Fq 'window58_readback=disabled' "$INFO" ||
     fail "BUILD_INFO Window58 policy mismatch"
 grep -Fq 'mirror_sink=displayable3_gles' "$INFO" ||
