@@ -1,33 +1,42 @@
 ###########################################################################################
-# MMI-Cockpit-Carplay - CarPlay Second Screen / Context80 Readback V1
+# MMI-Cockpit-Carplay - OEM Plane 33/58 Census V1.1
 ###########################################################################################
 screen "MMI-Cockpit-Carplay" Customization
 
 keyValue
     value   String sys 0x00000000 0
-    label   "Readback flow: type111 -> Window58 -> screen_read_window -> GLES displayable3 -> Java Context80"
+    label   "OEM Plane 33/58 Census V1.1 - STOCK MAP ONLY / DO NOT START CARPLAY"
+    poll    0
+
+keyValue
+    value   String sys 0x00000000 0
+    label   "Switch Virtual Cockpit to the named OEM state, then run the matching CAPTURE action"
     poll    0
 
 script
-   value   sys 1 0x0100 "/eso/hmi/engdefs/scripts/mqb/install_mmi_cockpit_carplay_rx.sh"
-   label   "INSTALL"
+   value   sys 1 0x0100 "/eso/hmi/engdefs/scripts/mqb/install_oem_plane_census.sh"
+   label   "INSTALL OBSERVER"
 
 script
-   value   sys 1 0x0100 "/eso/hmi/engdefs/scripts/mqb/start_mmi_cockpit_carplay_rx_test.sh"
-   label   "START"
+   value   sys 1 0x0100 "/eso/hmi/engdefs/scripts/mqb/oem_plane_census_classic_full.sh"
+   label   "CAPTURE CLASSIC FULL"
 
 script
-   value   sys 1 0x0100 "/eso/hmi/engdefs/scripts/mqb/status_mmi_cockpit_carplay_test.sh"
-   label   "STATUS"
+   value   sys 1 0x0100 "/eso/hmi/engdefs/scripts/mqb/oem_plane_census_classic_small.sh"
+   label   "CAPTURE CLASSIC SMALL"
 
 script
-   value   sys 1 0x0100 "/eso/hmi/engdefs/scripts/mqb/finish_mmi_cockpit_carplay_test.sh"
-   label   "STORE LOGS + RESTORE"
+   value   sys 1 0x0100 "/eso/hmi/engdefs/scripts/mqb/oem_plane_census_sport_full.sh"
+   label   "CAPTURE SPORT FULL"
 
 script
-   value   sys 1 0x0100 "/eso/hmi/engdefs/scripts/mqb/stop_mmi_cockpit_carplay_test.sh"
-   label   "RESTORE ORIGINAL"
+   value   sys 1 0x0100 "/eso/hmi/engdefs/scripts/mqb/oem_plane_census_sport_small.sh"
+   label   "CAPTURE SPORT SMALL"
 
 script
-   value   sys 1 0x0100 "/eso/hmi/engdefs/scripts/mqb/force_start_mmi_cockpit_carplay_rx_test.sh"
-   label   "START (alias)"
+   value   sys 1 0x0100 "/eso/hmi/engdefs/scripts/mqb/status_oem_plane_census.sh"
+   label   "STATUS / SUMMARY"
+
+script
+   value   sys 1 0x0100 "/eso/hmi/engdefs/scripts/mqb/uninstall_oem_plane_census.sh"
+   label   "UNINSTALL OBSERVER"
