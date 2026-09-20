@@ -64,17 +64,24 @@ SCREEN_PROPERTY_OWNER_PID
 SCREEN_PROPERTY_USAGE
 SCREEN_PROPERTY_SOURCE_CLIP_POSITION
 SCREEN_PROPERTY_SOURCE_CLIP_SIZE
+SCREEN_PROPERTY_VIEWPORT_POSITION
+SCREEN_PROPERTY_VIEWPORT_SIZE
+SCREEN_PROPERTY_CLIP_POSITION
+SCREEN_PROPERTY_CLIP_SIZE
 SCREEN_PROPERTY_SCALE_FACTOR
 SCREEN_PROPERTY_SCALE_QUALITY
+SCREEN_PROPERTY_TRANSFORM
 SCREEN_PROPERTY_MANAGER_STRING
 ```
 
 It also attempts group handle/name, display handle/ID string, render-buffer count, and per-buffer
 `BUFFER_SIZE`, `FORMAT`, `STRIDE`, and planar offsets.
 
-QNX 6.5 does not expose a generic standard window `viewport` or `parent` property in the Screen API used here.
-Those fields are reported as unavailable rather than guessed. Unsupported/vendor properties are kept
-as `NA rc=... errno=...`; failure itself is useful evidence.
+QNX 6.5 exposes window viewport, clip and transformation-matrix getters, so V1.1 records all of them.
+`SCREEN_PROPERTY_SCALE_FACTOR` is the transform matrix's fixed-point precision, not by itself a resize
+ratio; the actual matrix is therefore recorded as `SCREEN_PROPERTY_TRANSFORM`. QNX 6.5 does not expose
+a generic standard window `parent` getter in this API, so parent is reported unavailable rather than
+guessed. Unsupported/vendor properties are kept as `NA rc=... errno=...`; failure itself is useful evidence.
 
 ## Build state
 
@@ -132,8 +139,8 @@ not depend on it.
 | Is Sport Small translation-only? | `POSITION` plus all size/source/crop properties |
 | Does Full/Small resize the map source/window? | Full vs Small `SIZE/SOURCE_SIZE/BUFFER_SIZE` |
 | Is 1440x455 a native Screen extent? | every size, source, clip and buffer field |
-| Is there hidden source clipping? | `SOURCE_CLIP_POSITION/SIZE` |
-| Is there a Screen scale setting? | `SCALE_FACTOR/SCALE_QUALITY` |
+| Is there hidden source/destination clipping? | `SOURCE_CLIP_*`, `CLIP_*`, `VIEWPORT_*` |
+| Is there a Screen transform/scale? | `TRANSFORM` plus `SCALE_FACTOR/SCALE_QUALITY` |
 | Is the object DisplayManager-owned? | `MANAGER_STRING`, group/display metadata |
 
 The experiment should not infer a transform from ListModel numbers. It records native properties and lets
