@@ -192,6 +192,7 @@ for marker in \
   'safe_physical=' \
   'renderer_offset=' \
   'runtime_switch=updateViewArea' \
+  'predeclared_even_if_hmi_late=' \
   'PHASE=ALT111_VIEWAREA_SUBMIT' \
   'PHASE=ALT111_VIEWAREA_TARGET' \
   'PHASE=ALT111_VIEWAREA_RESULT' \
