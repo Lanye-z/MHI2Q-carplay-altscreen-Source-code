@@ -1,3 +1,5 @@
+**实车状态：尚未完成本分支实车验证。** 当前已基于实车测得的四态几何加入双 `viewArea/safeArea`、同会话动态切换、Sport Small 偏移和 source-driven sink pacing，待上车验证实际布局与帧率效果。
+
 > [!IMPORTANT]
 > **当前状态与安全提示**
 >
