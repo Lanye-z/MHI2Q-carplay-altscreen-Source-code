@@ -20,7 +20,11 @@ public:
     void shutdown();
 
     bool is_ready() const { return ready_; }
+    bool first_frame_presented() const { return first_frame_presented_; }
     unsigned long frame_count() const { return frame_count_; }
+    bool sample_window_state(Mhi2qWindowState *state) const {
+        return backend_.sample_window_state(state);
+    }
 
 private:
     ClusterVideoDisplay(const ClusterVideoDisplay &);
