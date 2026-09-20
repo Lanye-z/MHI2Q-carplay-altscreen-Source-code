@@ -1,0 +1,43 @@
+name: OEM Plane 33/58 Census V1.1
+
+on:
+  push:
+    branches:
+      - experiment/oem-layout-second-screen-v1.1
+    paths:
+      - '.github/workflows/oem-plane-census-v1.1.yml'
+      - 'OEM-PLANE-CENSUS-V1.1.md'
+      - 'VERIFY-OEM-PLANE-CENSUS-V1.1.sh'
+      - 'Toolbox/GEM/mqb-carplayAltScreen.esd'
+      - 'Toolbox/carplay_alt_screen/plane_census/**'
+      - 'Toolbox/scripts/oem_plane_census_*.sh'
+      - 'Toolbox/scripts/install_oem_plane_census.sh'
+      - 'Toolbox/scripts/status_oem_plane_census.sh'
+      - 'Toolbox/scripts/uninstall_oem_plane_census.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-observer-only:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Host syntax check observer
+        run: |
+          set -euo pipefail
+          gcc -std=c99 -Wall -Wextra -fsyntax-only Toolbox/carplay_alt_screen/plane_census/src/plane_census.c
+      - name: Verify observer-only contract
+        run: |
+          set -euo pipefail
+          sh VERIFY-OEM-PLANE-CENSUS-V1.1.sh
+      - name: Confirm QNX release is not falsely implied
+        run: |
+          set -euo pipefail
+          rel=Toolbox/carplay_alt_screen/plane_census/release/oem-plane-census
+          if [ -e "$rel" ]; then
+            echo "QNX release binary is checked in; static verifier already inspected its markers."
+          else
+            echo "SOURCE_ONLY=YES QNX_ARMV7_BUILD_REQUIRED=YES"
+          fi
