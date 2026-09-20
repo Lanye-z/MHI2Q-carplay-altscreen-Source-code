@@ -44,6 +44,11 @@ static const char *hook_log_path() {
                          "/tmp/MMI-Cockpit-Carplay/altscreen_hook.log");
 }
 
+static const char *displayable_state_path() {
+    return volatile_path("ALT111_DISPLAYABLE_STATE_FILE",
+                         "/tmp/mmi-mirror-displayable3.state");
+}
+
 static unsigned long long now_us() {
     struct timeval tv;
     if (gettimeofday(&tv, 0) != 0) return 0;
@@ -53,6 +58,160 @@ static unsigned long long now_us() {
 
 static unsigned counter_delta(unsigned current, unsigned base) {
     return current >= base ? current - base : current;
+}
+
+static void sanitize_state_value(char *s) {
+    if (!s) return;
+    for (; *s; ++s) {
+        if (*s == '\n' || *s == '\r' || *s == '=')
+            *s = ' ';
+    }
+}
+
+static void publish_displayable_state(const ClusterVideoDisplay &display,
+                                      const Private111DirectSource *source,
+                                      const VideoFrame *frame,
+                                      const char *phase) {
+    Mhi2qWindowState state;
+    memset(&state, 0, sizeof(state));
+    (void)display.sample_window_state(&state);
+
+    char manager[sizeof(state.manager)];
+    strncpy(manager, state.manager, sizeof(manager) - 1u);
+    manager[sizeof(manager) - 1u] = 0;
+    sanitize_state_value(manager);
+
+    const unsigned long long ts_us = now_us();
+    const unsigned long long ts_ms = ts_us / 1000ULL;
+    const uint32_t generation = source ? source->generation() : 0u;
+    const uint32_t h264_packets = source ? source->h264_packets() : 0u;
+    const uint32_t decoded_frames = source ? source->producer_frames() : 0u;
+    const uint32_t sequence = frame ? frame->sequence : 0u;
+
+    const char *path = displayable_state_path();
+    char tmp[512];
+    const int tmp_n = snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    if (tmp_n > 0 && (size_t)tmp_n < sizeof(tmp)) {
+        FILE *f = fopen(tmp, "w");
+        if (f) {
+            fprintf(f,
+                    "schema=1\n"
+                    "observer=DISPLAYABLE3_OWNERSHIP_V1\n"
+                    "mode=OBSERVE_ONLY\n"
+                    "timestamp_ms=%llu\n"
+                    "phase=%s\n"
+                    "backend_ready=%d\n"
+                    "native_window_present=%d\n"
+                    "native_window=0x%lx\n"
+                    "kd_window=%d\n"
+                    "displayable=%d\n"
+                    "visible_valid=%d\n"
+                    "visible=%d\n"
+                    "manager_valid=%d\n"
+                    "manager=%s\n"
+                    "first_present=%d\n"
+                    "presented_frames=%lu\n"
+                    "generation=%u\n"
+                    "sequence=%u\n"
+                    "h264_packets=%u\n"
+                    "decoded_frames=%u\n",
+                    ts_ms,
+                    phase ? phase : "periodic",
+                    state.backend_ready ? 1 : 0,
+                    state.native_window_present ? 1 : 0,
+                    state.native_window_value,
+                    state.kd_window,
+                    state.displayable_id,
+                    state.visible_valid ? 1 : 0,
+                    state.visible,
+                    state.manager_valid ? 1 : 0,
+                    manager,
+                    display.first_frame_presented() ? 1 : 0,
+                    display.frame_count(),
+                    (unsigned)generation,
+                    (unsigned)sequence,
+                    (unsigned)h264_packets,
+                    (unsigned)decoded_frames);
+            if (fclose(f) == 0) {
+                if (rename(tmp, path) != 0) {
+                    unlink(path);
+                    if (rename(tmp, path) != 0)
+                        unlink(tmp);
+                }
+            } else {
+                unlink(tmp);
+            }
+        }
+    }
+
+    /*
+     * Log only transitions plus a 10 s heartbeat.  The state file itself is
+     * refreshed at 2 Hz so Java can correlate a Context80 drift with the
+     * physical displayable3 state without flooding the SD log.
+     */
+    static int have_previous = 0;
+    static int last_backend_ready = -1;
+    static int last_native_present = -1;
+    static int last_visible_valid = -1;
+    static int last_visible = -999;
+    static int last_manager_valid = -1;
+    static unsigned long last_native_window = 0;
+    static int last_kd_window = -999;
+    static char last_manager[96] = "";
+    static unsigned long long last_heartbeat_us = 0;
+
+    const int changed =
+        !have_previous ||
+        last_backend_ready != (state.backend_ready ? 1 : 0) ||
+        last_native_present != (state.native_window_present ? 1 : 0) ||
+        last_visible_valid != (state.visible_valid ? 1 : 0) ||
+        last_visible != state.visible ||
+        last_manager_valid != (state.manager_valid ? 1 : 0) ||
+        last_native_window != state.native_window_value ||
+        last_kd_window != state.kd_window ||
+        strcmp(last_manager, manager) != 0;
+    const int heartbeat =
+        !last_heartbeat_us ||
+        (ts_us >= last_heartbeat_us &&
+         ts_us - last_heartbeat_us >= 10000000ULL);
+
+    if (changed || heartbeat) {
+        fprintf(stderr,
+                "direct111: PHASE=DISPLAYABLE3_OWNERSHIP ts_ms=%llu "
+                "reason=%s backend_ready=%d native_present=%d "
+                "native=0x%lx kd=%d displayable=%d "
+                "visible_valid=%d visible=%d manager_valid=%d manager='%s' "
+                "first_present=%d presented=%lu gen=%u seq=%u "
+                "h264_packets=%u decoded_frames=%u observe_only=1\n",
+                ts_ms, changed ? "change" : "heartbeat",
+                state.backend_ready ? 1 : 0,
+                state.native_window_present ? 1 : 0,
+                state.native_window_value,
+                state.kd_window,
+                state.displayable_id,
+                state.visible_valid ? 1 : 0,
+                state.visible,
+                state.manager_valid ? 1 : 0,
+                manager,
+                display.first_frame_presented() ? 1 : 0,
+                display.frame_count(),
+                (unsigned)generation,
+                (unsigned)sequence,
+                (unsigned)h264_packets,
+                (unsigned)decoded_frames);
+        last_heartbeat_us = ts_us;
+    }
+
+    have_previous = 1;
+    last_backend_ready = state.backend_ready ? 1 : 0;
+    last_native_present = state.native_window_present ? 1 : 0;
+    last_visible_valid = state.visible_valid ? 1 : 0;
+    last_visible = state.visible;
+    last_manager_valid = state.manager_valid ? 1 : 0;
+    last_native_window = state.native_window_value;
+    last_kd_window = state.kd_window;
+    strncpy(last_manager, manager, sizeof(last_manager) - 1u);
+    last_manager[sizeof(last_manager) - 1u] = 0;
 }
 
 static void log_frame_present_timing(const VideoFrame &frame,
@@ -278,6 +437,7 @@ static void marker(bool on, const char *source, const char *mode) {
     if (!on) {
         unlink(ready);
         unlink(base);
+        unlink(displayable_state_path());
         return;
     }
 
@@ -565,6 +725,7 @@ int main(int argc, char **argv) {
             "displayable=3 output=1440x455 source=private111-decoded "
             "window58_readback=0\n");
 
+    publish_displayable_state(display, &source, &frame, "first-present");
     marker(true, "private111-decoded-shm", "direct-display");
     if (!activate_context80()) {
         marker(false, 0, 0);
@@ -601,9 +762,15 @@ int main(int argc, char **argv) {
     unsigned max_present_call_us = 0u;
     const unsigned long long frame_period_us =
         1000000ULL / (unsigned long long)kTargetFps;
+    unsigned long long next_ownership_probe_us = now_us() + 500000ULL;
 
     while (!g_stop) {
         const unsigned long long frame_start = now_us();
+        if (!next_ownership_probe_us ||
+            (frame_start && frame_start >= next_ownership_probe_us)) {
+            publish_displayable_state(display, &source, &frame, "periodic");
+            next_ownership_probe_us = frame_start + 500000ULL;
+        }
         if (frame_start && stats_start && frame_start >= stats_start &&
             frame_start - stats_start >= 60000000ULL) {
             clearerr(stderr);
@@ -726,6 +893,7 @@ int main(int argc, char **argv) {
     }
 
     const unsigned long presented_frames = display.frame_count();
+    publish_displayable_state(display, &source, &frame, "pre-shutdown");
     marker(false, 0, 0);
     restore_context80();
     display.shutdown();
