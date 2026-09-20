@@ -46,6 +46,515 @@ jobs:
           unzip -l "$JAR" | grep -Fq 'com/luka/carplay/cluster/ClusterStateController.class'
           unzip -l "$JAR" | grep -Fq 'com/luka/carplay/cluster/ClusterStateController$1.class'
           if unzip -l "$JAR" | grep -Eq 'META-INF/.*\.(SF|RSA|DSA)
+            exit 1
+          fi
+
+          javap -classpath "$JAR" -public -s             com.luka.carplay.cluster.ClusterStateController > "$BUILD/api-old.txt"
+
+          javac -encoding UTF-8 -source 1.3 -target 1.2             -d "$BUILD/classes" "$STUB" "$SRC"
+          test -s "$BUILD/classes/com/luka/carplay/cluster/ClusterStateController.class"
+          test -s "$BUILD/classes/com/luka/carplay/cluster/ClusterStateController\$1.class"
+
+          javap -classpath "$BUILD/classes" -public -s             com.luka.carplay.cluster.ClusterStateController > "$BUILD/api-new.txt"
+
+          python3 - "$BUILD/api-old.txt" "$BUILD/api-new.txt" <<'PY'
+          import pathlib, sys
+
+          def surface(path):
+              lines = pathlib.Path(path).read_text().splitlines()
+              out = []
+              i = 0
+              while i < len(lines):
+                  s = lines[i].strip()
+                  if s.startswith("public ") and not s.startswith("public final class") and s.endswith(";"):
+                      d = ""
+                      if i + 1 < len(lines) and lines[i + 1].strip().startswith("descriptor:"):
+                          d = lines[i + 1].strip()
+                          i += 1
+                      out.append(s + " | " + d)
+                  i += 1
+              return set(out)
+
+          old = surface(sys.argv[1])
+          new = surface(sys.argv[2])
+          missing = sorted(old - new)
+          if missing:
+              raise SystemExit("ERROR: controller drops public ABI:\n" + "\n".join(missing))
+          print("OEM_OBSERVER_PUBLIC_ABI=PASS old=%d new=%d" % (len(old), len(new)))
+          PY
+
+          cp "$JAR" "$BUILD/carplay_hook-basevideo3.jar"
+          jar uf "$BUILD/carplay_hook-basevideo3.jar" \
+            -C "$BUILD/classes" com/luka/carplay/cluster/ClusterStateController.class \
+            -C "$BUILD/classes" 'com/luka/carplay/cluster/ClusterStateController$1.class'
+
+          python3 - "$BUILD/carplay_hook-basevideo3.jar" <<'PY'
+          import collections, struct, sys, zipfile
+          p = sys.argv[1]
+          targets = [
+              'com/luka/carplay/cluster/ClusterStateController.class',
+              'com/luka/carplay/cluster/ClusterStateController$1.class',
+          ]
+          with zipfile.ZipFile(p) as z:
+              assert z.testzip() is None
+              names = z.namelist()
+              dup = [n for n,c in collections.Counter(names).items() if c != 1]
+              assert not dup, dup
+              for target in targets:
+                  b = z.read(target)
+                  assert b[:4] == b'\xca\xfe\xba\xbe', target
+                  assert struct.unpack('>HH', b[4:8]) == (0,46), target
+              b = z.read(targets[0])
+              for marker in [
+                  b'OEM_GEOMETRY_OBSERVER',
+                  b'carplay-oem-geometry.state',
+                  b'ListModel176',
+                  b'OBSERVE_ONLY',
+                  b'apply_to_carplay=0',
+                  b'apply_to_renderer=0',
+                  b'ListModel176 geometry failed sanity check',
+                  b'list_model_class=',
+                  b'UNRESOLVED_NAVIGATIONENV_SEAM',
+              ]:
+                  assert marker in b, marker
+          print('OEM_OBSERVER_CLASSFILES=PASS main_and_inner_major=46 observe_only=YES')
+          PY
+
+          cp "$BUILD/carplay_hook-basevideo3.jar" "$JAR"
+          {
+            echo "old_api:"
+            cat "$BUILD/api-old.txt"
+            echo
+            echo "new_api:"
+            cat "$BUILD/api-new.txt"
+          } > Toolbox/carplay_alt_screen/hmi/API_COMPAT.txt
+
+      - name: Refresh JAR identity and package hashes
+        run: |
+          set -euo pipefail
+          JAR=Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar
+          SIZE="$(wc -c < "$JAR" | tr -d ' ')"
+          CKSUM="$(cksum < "$JAR" | awk '{print $1}')"
+          SHA="$(sha256sum "$JAR" | awk '{print tolower($1)}')"
+          export SIZE CKSUM SHA
+
+          python3 <<'PY'
+          import hashlib, json, os, pathlib, re
+
+          root = pathlib.Path('.')
+          size = os.environ['SIZE']
+          cksum = os.environ['CKSUM']
+          sha = os.environ['SHA']
+
+          info = root / 'Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt'
+          text = info.read_text()
+          updates = {
+              'jar_size': size,
+              'jar_cksum': cksum,
+              'jar_sha256': sha,
+              'oem_geometry_observer': 'OEM_LAYOUT_OBSERVER_V1',
+              'oem_geometry_state': '/tmp/carplay-oem-geometry.state',
+              'oem_geometry_policy': 'OBSERVE_ONLY_NO_CARPLAY_OR_RENDERER_APPLY',
+              'oem_geometry_source': 'K1004_LISTMODEL176_ROW1',
+              'oem_geometry_build_status': 'COMPILED_OBSERVER_READY',
+          }
+          for key, value in updates.items():
+              pat = r'^' + re.escape(key) + r'=.*$'
+              line = key + '=' + value
+              if re.search(pat, text, flags=re.M):
+                  text = re.sub(pat, line, text, flags=re.M)
+              else:
+                  if text and not text.endswith('\n'):
+                      text += '\n'
+                  text += line + '\n'
+          info.write_text(text)
+
+          for rel in [
+              'Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh',
+              'Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh',
+              'Toolbox/scripts/status_mmi_cockpit_carplay_test.sh',
+          ]:
+              p = root / rel
+              if not p.exists():
+                  continue
+              t = p.read_text()
+              t = re.sub(r'^EXPECTED_SIZE=\d+$', 'EXPECTED_SIZE=' + size, t, flags=re.M)
+              t = re.sub(r'^EXPECTED_CKSUM=\d+$', 'EXPECTED_CKSUM=' + cksum, t, flags=re.M)
+              p.write_text(t)
+
+          package = root / 'PACKAGE_SOURCE_MAP.json'
+          if package.exists():
+              data = json.loads(package.read_text())
+              rels = [
+                  'Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar',
+                  'Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt',
+                  'Toolbox/carplay_alt_screen/hmi/API_COMPAT.txt',
+                  'Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java',
+                  '.github/workflows/oem-layout-observer-v1.yml',
+                  'Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh',
+                  'Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh',
+                  'Toolbox/scripts/status_mmi_cockpit_carplay_test.sh',
+              ]
+              for rel in list(data):
+                  p = root / rel
+                  if p.is_file():
+                      data[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
+              for rel in rels:
+                  p = root / rel
+                  if p.is_file():
+                      data[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
+              package.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n')
+
+          sums = root / 'SHA256SUMS.txt'
+          if sums.exists():
+              table = {}
+              for line in sums.read_text().splitlines():
+                  parts = line.split(None, 1)
+                  if len(parts) == 2:
+                      table[parts[1].strip()] = parts[0].lower()
+              for rel in list(table):
+                  p = root / rel
+                  if p.is_file():
+                      table[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
+              additions = [
+                  'Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar',
+                  'Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt',
+                  'Toolbox/carplay_alt_screen/hmi/API_COMPAT.txt',
+                  'Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java',
+                  '.github/workflows/oem-layout-observer-v1.yml',
+                  'PACKAGE_SOURCE_MAP.json',
+                  'Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh',
+                  'Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh',
+                  'Toolbox/scripts/status_mmi_cockpit_carplay_test.sh',
+              ]
+              for rel in additions:
+                  p = root / rel
+                  if p.is_file():
+                      table[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
+              sums.write_text(''.join('%s %s\n' % (table[k], k) for k in sorted(table)))
+          PY
+
+          echo "OEM_OBSERVER_JAR_SIZE=$SIZE"
+          echo "OEM_OBSERVER_JAR_CKSUM=$CKSUM"
+          echo "OEM_OBSERVER_JAR_SHA256=$SHA"
+
+      - name: Static observer contract
+        run: |
+          set -euo pipefail
+          SRC=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java
+          grep -Fq 'OEM_GEOMETRY_OBSERVER' "$SRC"
+          grep -Fq 'OEM_SCREEN_LAYOUT_MODEL_ID = 176' "$SRC"
+          grep -Fq 'mode=OBSERVE_ONLY' "$SRC"
+          grep -Fq 'apply_to_carplay=0' "$SRC"
+          grep -Fq 'apply_to_renderer=0' "$SRC"
+          grep -Fq 'tubeLeft - mapOffsetLeft' "$SRC"
+          grep -Fq 'screenWidth - tubeLeft - tubeRight' "$SRC"
+          grep -Fq 'screenWidth - tubeLeftKb - tubeRightKb' "$SRC"
+          grep -Fq 'Preserve a previously valid snapshot' "$SRC"
+          grep -Fq '26, 27' "$SRC"
+          grep -Fq 'oemGeometrySane' "$SRC"
+          grep -Fq 'if (compositeApplied)' "$SRC"
+          grep -Fq 'lastOemGeometrySignature = signature' "$SRC"
+          grep -Fq 'catch (Throwable ignored)' "$SRC"
+
+          python3 - "$SRC" <<'PY'
+          import pathlib, sys
+          text = pathlib.Path(sys.argv[1]).read_text()
+          loop = text.index('private static void runLoop()')
+          policy = text.index('pollContextPolicy();', loop)
+          hmi = text.index('pollHmiState();', loop)
+          if not policy < hmi:
+              raise SystemExit('ERROR: OEM/HMI observer precedes startup-critical context policy')
+          publish = text.index('if (writeAtomicState(OEM_GEOMETRY_STATE_FILE, text))')
+          sig = text.index('lastOemGeometrySignature = signature', publish)
+          if not publish < sig:
+              raise SystemExit('ERROR: geometry signature is committed before successful state publish')
+          print('OEM_OBSERVER_STARTUP_PRIORITY=PASS context_policy_before_hmi=YES')
+          print('OEM_OBSERVER_RETRY_CONTRACT=PASS signature_after_publish=YES')
+          PY
+
+          unzip -p Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar             com/luka/carplay/cluster/ClusterStateController.class | strings |             grep -Fq 'OEM_GEOMETRY_OBSERVER'
+
+          sh -n Toolbox/scripts/altscreen_boot_diag.sh
+          sh -n Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh
+          sh -n Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh
+          sh -n Toolbox/scripts/status_mmi_cockpit_carplay_test.sh
+          grep -Fq 'oem_geometry_build_status=COMPILED_OBSERVER_READY' Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt
+          grep -Fq 'oem_geometry_build_status=COMPILED_OBSERVER_READY' Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh
+          grep -Fq 'carplay-oem-geometry.log' Toolbox/scripts/altscreen_boot_diag.sh
+          grep -Fq 'carplay-oem-displaymanager-read-api.log' Toolbox/scripts/altscreen_boot_diag.sh
+          grep -Fq 'OEM_LAYOUT_OBSERVER_MODE=OBSERVE_ONLY' Toolbox/scripts/status_mmi_cockpit_carplay_test.sh
+
+          # The observer branch must continue satisfying the complete proven V2
+          # pixel/session/install contract; Java-only work may not silently
+          # mutate the native display chain.
+          sh VERIFY-NATIVE-DIRECT-RELEASE.sh
+
+          echo 'OEM_LAYOUT_OBSERVER_V1=PASS display_behavior_changed=NO auto_sd_collection=YES'
+
+      - name: Promote observer JAR on experiment branch
+        if: github.ref == 'refs/heads/experiment/oem-layout-second-screen'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add             Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar             Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt             Toolbox/carplay_alt_screen/hmi/API_COMPAT.txt             Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh             Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh             Toolbox/scripts/status_mmi_cockpit_carplay_test.sh             PACKAGE_SOURCE_MAP.json SHA256SUMS.txt
+          if ! git diff --cached --quiet; then
+            git commit -m "build(oem-layout): promote observer JAR [skip ci]"
+            git fetch origin experiment/oem-layout-second-screen
+            git rebase origin/experiment/oem-layout-second-screen
+            git push origin HEAD:experiment/oem-layout-second-screen
+          fi
+; then
+            echo 'ERROR: refusing to update signed JAR' >&2
+            exit 1
+          fi
+
+          javap -classpath "$JAR" -public -s             com.luka.carplay.cluster.ClusterStateController > "$BUILD/api-old.txt"
+
+          javac -encoding UTF-8 -source 1.3 -target 1.2             -d "$BUILD/classes" "$STUB" "$SRC"
+
+          javap -classpath "$BUILD/classes" -public -s             com.luka.carplay.cluster.ClusterStateController > "$BUILD/api-new.txt"
+
+          python3 - "$BUILD/api-old.txt" "$BUILD/api-new.txt" <<'PY'
+          import pathlib, sys
+
+          def surface(path):
+              lines = pathlib.Path(path).read_text().splitlines()
+              out = []
+              i = 0
+              while i < len(lines):
+                  s = lines[i].strip()
+                  if s.startswith("public ") and not s.startswith("public final class") and s.endswith(";"):
+                      d = ""
+                      if i + 1 < len(lines) and lines[i + 1].strip().startswith("descriptor:"):
+                          d = lines[i + 1].strip()
+                          i += 1
+                      out.append(s + " | " + d)
+                  i += 1
+              return set(out)
+
+          old = surface(sys.argv[1])
+          new = surface(sys.argv[2])
+          missing = sorted(old - new)
+          if missing:
+              raise SystemExit("ERROR: controller drops public ABI:\n" + "\n".join(missing))
+          print("OEM_OBSERVER_PUBLIC_ABI=PASS old=%d new=%d" % (len(old), len(new)))
+          PY
+
+          cp "$JAR" "$BUILD/carplay_hook-basevideo3.jar"
+          jar uf "$BUILD/carplay_hook-basevideo3.jar"             -C "$BUILD/classes" com/luka/carplay/cluster/ClusterStateController.class
+
+          python3 - "$BUILD/carplay_hook-basevideo3.jar" <<'PY'
+          import collections, struct, sys, zipfile
+          p = sys.argv[1]
+          target = 'com/luka/carplay/cluster/ClusterStateController.class'
+          with zipfile.ZipFile(p) as z:
+              assert z.testzip() is None
+              names = z.namelist()
+              dup = [n for n,c in collections.Counter(names).items() if c != 1]
+              assert not dup, dup
+              b = z.read(target)
+              assert b[:4] == b'\xca\xfe\xba\xbe'
+              assert struct.unpack('>HH', b[4:8]) == (0,46)
+              for marker in [
+                  b'OEM_GEOMETRY_OBSERVER',
+                  b'carplay-oem-geometry.state',
+                  b'ListModel176',
+                  b'OBSERVE_ONLY',
+                  b'apply_to_carplay=0',
+                  b'apply_to_renderer=0',
+              ]:
+                  assert marker in b, marker
+          print('OEM_OBSERVER_CLASSFILE=PASS major=46 observe_only=YES')
+          PY
+
+          cp "$BUILD/carplay_hook-basevideo3.jar" "$JAR"
+          {
+            echo "old_api:"
+            cat "$BUILD/api-old.txt"
+            echo
+            echo "new_api:"
+            cat "$BUILD/api-new.txt"
+          } > Toolbox/carplay_alt_screen/hmi/API_COMPAT.txt
+
+      - name: Refresh JAR identity and package hashes
+        run: |
+          set -euo pipefail
+          JAR=Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar
+          SIZE="$(wc -c < "$JAR" | tr -d ' ')"
+          CKSUM="$(cksum < "$JAR" | awk '{print $1}')"
+          SHA="$(sha256sum "$JAR" | awk '{print tolower($1)}')"
+          export SIZE CKSUM SHA
+
+          python3 <<'PY'
+          import hashlib, json, os, pathlib, re
+
+          root = pathlib.Path('.')
+          size = os.environ['SIZE']
+          cksum = os.environ['CKSUM']
+          sha = os.environ['SHA']
+
+          info = root / 'Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt'
+          text = info.read_text()
+          updates = {
+              'jar_size': size,
+              'jar_cksum': cksum,
+              'jar_sha256': sha,
+              'oem_geometry_observer': 'OEM_LAYOUT_OBSERVER_V1',
+              'oem_geometry_state': '/tmp/carplay-oem-geometry.state',
+              'oem_geometry_policy': 'OBSERVE_ONLY_NO_CARPLAY_OR_RENDERER_APPLY',
+              'oem_geometry_source': 'K1004_LISTMODEL176_ROW1',
+              'oem_geometry_build_status': 'COMPILED_OBSERVER_READY',
+          }
+          for key, value in updates.items():
+              pat = r'^' + re.escape(key) + r'=.*$'
+              line = key + '=' + value
+              if re.search(pat, text, flags=re.M):
+                  text = re.sub(pat, line, text, flags=re.M)
+              else:
+                  if text and not text.endswith('\n'):
+                      text += '\n'
+                  text += line + '\n'
+          info.write_text(text)
+
+          for rel in [
+              'Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh',
+              'Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh',
+              'Toolbox/scripts/status_mmi_cockpit_carplay_test.sh',
+          ]:
+              p = root / rel
+              if not p.exists():
+                  continue
+              t = p.read_text()
+              t = re.sub(r'^EXPECTED_SIZE=\d+$', 'EXPECTED_SIZE=' + size, t, flags=re.M)
+              t = re.sub(r'^EXPECTED_CKSUM=\d+$', 'EXPECTED_CKSUM=' + cksum, t, flags=re.M)
+              p.write_text(t)
+
+          package = root / 'PACKAGE_SOURCE_MAP.json'
+          if package.exists():
+              data = json.loads(package.read_text())
+              rels = [
+                  'Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar',
+                  'Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt',
+                  'Toolbox/carplay_alt_screen/hmi/API_COMPAT.txt',
+                  'Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java',
+                  '.github/workflows/oem-layout-observer-v1.yml',
+                  'Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh',
+                  'Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh',
+                  'Toolbox/scripts/status_mmi_cockpit_carplay_test.sh',
+              ]
+              for rel in list(data):
+                  p = root / rel
+                  if p.is_file():
+                      data[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
+              for rel in rels:
+                  p = root / rel
+                  if p.is_file():
+                      data[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
+              package.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n')
+
+          sums = root / 'SHA256SUMS.txt'
+          if sums.exists():
+              table = {}
+              for line in sums.read_text().splitlines():
+                  parts = line.split(None, 1)
+                  if len(parts) == 2:
+                      table[parts[1].strip()] = parts[0].lower()
+              for rel in list(table):
+                  p = root / rel
+                  if p.is_file():
+                      table[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
+              additions = [
+                  'Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar',
+                  'Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt',
+                  'Toolbox/carplay_alt_screen/hmi/API_COMPAT.txt',
+                  'Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java',
+                  '.github/workflows/oem-layout-observer-v1.yml',
+                  'PACKAGE_SOURCE_MAP.json',
+                  'Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh',
+                  'Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh',
+                  'Toolbox/scripts/status_mmi_cockpit_carplay_test.sh',
+              ]
+              for rel in additions:
+                  p = root / rel
+                  if p.is_file():
+                      table[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
+              sums.write_text(''.join('%s %s\n' % (table[k], k) for k in sorted(table)))
+          PY
+
+          echo "OEM_OBSERVER_JAR_SIZE=$SIZE"
+          echo "OEM_OBSERVER_JAR_CKSUM=$CKSUM"
+          echo "OEM_OBSERVER_JAR_SHA256=$SHA"
+
+      - name: Static observer contract
+        run: |
+          set -euo pipefail
+          SRC=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java
+          grep -Fq 'OEM_GEOMETRY_OBSERVER' "$SRC"
+          grep -Fq 'OEM_SCREEN_LAYOUT_MODEL_ID = 176' "$SRC"
+          grep -Fq 'mode=OBSERVE_ONLY' "$SRC"
+          grep -Fq 'apply_to_carplay=0' "$SRC"
+          grep -Fq 'apply_to_renderer=0' "$SRC"
+          grep -Fq 'tubeLeft - mapOffsetLeft' "$SRC"
+          grep -Fq 'screenWidth - tubeLeft - tubeRight' "$SRC"
+          grep -Fq 'screenWidth - tubeLeftKb - tubeRightKb' "$SRC"
+          grep -Fq 'Preserve a previously valid snapshot' "$SRC"
+          grep -Fq '26, 27' "$SRC"
+          grep -Fq 'oemGeometrySane' "$SRC"
+          grep -Fq 'if (compositeApplied)' "$SRC"
+          grep -Fq 'lastOemGeometrySignature = signature' "$SRC"
+          grep -Fq 'catch (Throwable ignored)' "$SRC"
+
+          python3 - "$SRC" <<'PY'
+          import pathlib, sys
+          text = pathlib.Path(sys.argv[1]).read_text()
+          loop = text.index('private static void runLoop()')
+          policy = text.index('pollContextPolicy();', loop)
+          hmi = text.index('pollHmiState();', loop)
+          if not policy < hmi:
+              raise SystemExit('ERROR: OEM/HMI observer precedes startup-critical context policy')
+          publish = text.index('if (writeAtomicState(OEM_GEOMETRY_STATE_FILE, text))')
+          sig = text.index('lastOemGeometrySignature = signature', publish)
+          if not publish < sig:
+              raise SystemExit('ERROR: geometry signature is committed before successful state publish')
+          print('OEM_OBSERVER_STARTUP_PRIORITY=PASS context_policy_before_hmi=YES')
+          print('OEM_OBSERVER_RETRY_CONTRACT=PASS signature_after_publish=YES')
+          PY
+
+          unzip -p Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar             com/luka/carplay/cluster/ClusterStateController.class | strings |             grep -Fq 'OEM_GEOMETRY_OBSERVER'
+
+          sh -n Toolbox/scripts/altscreen_boot_diag.sh
+          sh -n Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh
+          sh -n Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh
+          sh -n Toolbox/scripts/status_mmi_cockpit_carplay_test.sh
+          grep -Fq 'oem_geometry_build_status=COMPILED_OBSERVER_READY' Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt
+          grep -Fq 'oem_geometry_build_status=COMPILED_OBSERVER_READY' Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh
+          grep -Fq 'carplay-oem-geometry.log' Toolbox/scripts/altscreen_boot_diag.sh
+          grep -Fq 'carplay-oem-displaymanager-read-api.log' Toolbox/scripts/altscreen_boot_diag.sh
+          grep -Fq 'OEM_LAYOUT_OBSERVER_MODE=OBSERVE_ONLY' Toolbox/scripts/status_mmi_cockpit_carplay_test.sh
+
+          # The observer branch must continue satisfying the complete proven V2
+          # pixel/session/install contract; Java-only work may not silently
+          # mutate the native display chain.
+          sh VERIFY-NATIVE-DIRECT-RELEASE.sh
+
+          echo 'OEM_LAYOUT_OBSERVER_V1=PASS display_behavior_changed=NO auto_sd_collection=YES'
+
+      - name: Promote observer JAR on experiment branch
+        if: github.ref == 'refs/heads/experiment/oem-layout-second-screen'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add             Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar             Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt             Toolbox/carplay_alt_screen/hmi/API_COMPAT.txt             Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh             Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh             Toolbox/scripts/status_mmi_cockpit_carplay_test.sh             PACKAGE_SOURCE_MAP.json SHA256SUMS.txt
+          if ! git diff --cached --quiet; then
+            git commit -m "build(oem-layout): promote observer JAR [skip ci]"
+            git fetch origin experiment/oem-layout-second-screen
+            git rebase origin/experiment/oem-layout-second-screen
+            git push origin HEAD:experiment/oem-layout-second-screen
+          fi
+; then
             echo 'ERROR: refusing to update signed JAR' >&2
             exit 1
           fi
