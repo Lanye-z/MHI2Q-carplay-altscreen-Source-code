@@ -18,6 +18,10 @@ script
    label   "INSTALL OBSERVER"
 
 script
+   value   sys 1 0x0100 "/eso/hmi/engdefs/scripts/mqb/start_oem_plane_census.sh"
+   label   "START OBSERVER"
+
+script
    value   sys 1 0x0100 "/eso/hmi/engdefs/scripts/mqb/oem_plane_census_classic_full.sh"
    label   "CAPTURE CLASSIC FULL"
 
@@ -36,6 +40,10 @@ script
 script
    value   sys 1 0x0100 "/eso/hmi/engdefs/scripts/mqb/status_oem_plane_census.sh"
    label   "STATUS / SUMMARY"
+
+script
+   value   sys 1 0x0100 "/eso/hmi/engdefs/scripts/mqb/stop_oem_plane_census.sh"
+   label   "STOP OBSERVER"
 
 script
    value   sys 1 0x0100 "/eso/hmi/engdefs/scripts/mqb/uninstall_oem_plane_census.sh"
