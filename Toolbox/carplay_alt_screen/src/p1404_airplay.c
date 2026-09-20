@@ -559,17 +559,32 @@ static void alt_resolve_cluster_safe_area(uint32_t display_w,
 
     if (!out) return;
     memset(out, 0, sizeof(*out));
-    out->w = display_w;
-    out->h = display_h;
-    out->physical_x = 0;
-    out->physical_y = 0;
     out->renderer_dx = 0;
     out->renderer_dy = 0;
     strncpy(out->view, "FULL", sizeof(out->view) - 1u);
     out->view[sizeof(out->view) - 1u] = 0;
     strncpy(out->layout, "UNKNOWN", sizeof(out->layout) - 1u);
     out->layout[sizeof(out->layout) - 1u] = 0;
-    strncpy(out->source, "fullscreen-fallback", sizeof(out->source) - 1u);
+
+    /*
+     * /info can be requested before Java has published the first HMI snapshot.
+     * For the measured 1440x455 cluster, predeclare the known FULL safe region
+     * rather than falling back to a one-area/full-bleed shape that would make
+     * same-session FULL<->SMALL switching impossible later.
+     */
+    if (display_w == 1440u && display_h == 455u) {
+        out->x = 370u; out->y = 49u; out->w = 700u; out->h = 300u;
+        out->physical_x = 370;
+        out->physical_y = 49;
+        strncpy(out->source, "k1004-default-full-before-hmi",
+                sizeof(out->source) - 1u);
+    } else {
+        out->w = display_w;
+        out->h = display_h;
+        out->physical_x = 0;
+        out->physical_y = 0;
+        strncpy(out->source, "fullscreen-fallback", sizeof(out->source) - 1u);
+    }
     out->source[sizeof(out->source) - 1u] = 0;
 
     have_hmi = alt_load_hmi_layout(
@@ -691,6 +706,7 @@ void *alt_build_cluster_display(void) {
     struct alt_safe_rect cluster_safe;
     cf_obj dict = NULL, areas = NULL, adjacent = NULL, vs = NULL;
     int layout_known = 0;
+    int two_area_capable = 0;
     int initial_view_area = 0;
     /* Refresh on every display-info build so the request follows the current
      * target mode. If Screen temporarily refuses a second context, retain only
@@ -745,24 +761,28 @@ void *alt_build_cluster_display(void) {
     alt_resolve_cluster_safe_area(
         d->width_pixels, d->height_pixels, &cluster_safe);
 
-    layout_known =
-        strstr(cluster_safe.layout, "LayoutMIB2HighB9") != NULL &&
+    two_area_capable =
         d->width_pixels == 1440u && d->height_pixels == 455u;
+    layout_known =
+        two_area_capable &&
+        strstr(cluster_safe.layout, "LayoutMIB2HighB9") != NULL;
     initial_view_area =
         layout_known && !strcmp(cluster_safe.view, "SMALL") ? 1 : 0;
 
     /*
-     * Declare BOTH Audi FULL/SMALL candidates up front. Runtime layout changes
-     * can then use the standard AirPlay updateViewArea command without
-     * reconnecting or changing the coded type111 resolution.
+     * Declare BOTH Audi FULL/SMALL candidates up front on the measured
+     * 1440x455 target even if Java's first HMI-state file is a few hundred ms
+     * late. updateViewArea can only select an index that /info already
+     * declared; waiting for the HMI file here would re-introduce a reconnect
+     * requirement on cold start.
      */
     areas = make_cluster_layout_view_areas(
-        d->width_pixels, d->height_pixels, layout_known);
+        d->width_pixels, d->height_pixels, two_area_capable);
     if (!areas) {
         altscreen_log("ERROR ALTAREA failed to build cluster viewAreas");
         goto fail;
     }
-    if (layout_known) {
+    if (two_area_capable) {
         adjacent = make_i64_array_one(initial_view_area ? 0 : 1);
         if (!adjacent) goto fail;
     } else {
@@ -781,14 +801,15 @@ void *alt_build_cluster_display(void) {
 
     altscreen_log(
         "ALTAREA_LAYOUT_SAFE_V3 schema=viewAreas[array] viewAreaCount=%d "
-        "initialViewArea=%d adjacent=%d "
+        "initialViewArea=%d adjacent=%d predeclared_even_if_hmi_late=%d "
         "view=full:%ux%u safe_source=%u,%u,%ux%u "
         "safe_physical=%d,%d,%ux%u renderer_offset=%d,%d "
         "mode=%s layout=%s source=%s renderer_scale=0 "
         "runtime_switch=updateViewArea type111_transition_flags=omitted",
-        layout_known ? 2 : 1,
+        two_area_capable ? 2 : 1,
         initial_view_area,
-        layout_known ? (initial_view_area ? 0 : 1) : -1,
+        two_area_capable ? (initial_view_area ? 0 : 1) : -1,
+        two_area_capable ? 1 : 0,
         d->width_pixels, d->height_pixels,
         cluster_safe.x, cluster_safe.y,
         cluster_safe.w, cluster_safe.h,
