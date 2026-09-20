@@ -46,6 +46,9 @@ for marker in \
   'PHASE=DECODER_FIRST_FRAME' \
   'PHASE=NV12_CSC_READY' \
   'PHASE=DISPLAYABLE3_FIRST_PRESENT' \
+  '/tmp/mmi-mirror-displayable3.state' \
+  'DISPLAYABLE3_OWNERSHIP_V1' \
+  'PHASE=DISPLAYABLE3_OWNERSHIP' \
   'PHASE=DIRECT111_ACTIVE' \
   'window58_readback=0'
 do
