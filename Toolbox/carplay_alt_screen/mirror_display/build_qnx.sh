@@ -47,6 +47,8 @@ for marker in \
   'PHASE=NV12_CSC_READY' \
   'PHASE=DISPLAYABLE3_FIRST_PRESENT' \
   'PHASE=DIRECT111_ACTIVE' \
+  'PHASE=FRAME_PRESENT_TIMING' \
+  'PHASE=FRAME_CHAIN_HEALTH' \
   'window58_readback=0'
 do
   check_marker "$marker" || {
