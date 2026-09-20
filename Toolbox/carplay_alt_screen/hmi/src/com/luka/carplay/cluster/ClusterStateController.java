@@ -43,6 +43,8 @@ public final class ClusterStateController {
     private static final long CIRCUIT_BREAKER_MS = 2000L;
     private static final int CONTEXT_FAILURE_LIMIT = 3;
     private static final long DIAG_MAX_BYTES = 131072L;
+    private static final long SD_DIAG_SEGMENT_BYTES = 8L * 1024L * 1024L;
+    private static final int SD_DIAG_HISTORY = 3;
 
     private static final String HMI_STATE_FILE = "/tmp/mmi-mirror-hmi.state";
     /*
@@ -69,10 +71,20 @@ public final class ClusterStateController {
     private static final String CONTEXT_MODE_FILE = "/tmp/mmi-mirror-context.mode";
     private static final String STARTED_FILE = "/tmp/mmi-mirror-controller.started";
     private static final String DIAG_FILE = "/tmp/mmi-mirror-controller.log";
+    private static final String[] SD_VOLUMES = {
+        "/net/mmx/fs/sda0", "/net/mmx/fs/sda1",
+        "/net/mmx/fs/sdb0", "/net/mmx/fs/sdb1",
+        "/fs/sda0", "/fs/sda1", "/fs/sdb0", "/fs/sdb1"
+    };
     private static final String MODE_JAVA80 = "JAVA80";
 
     private static final Object LOCK = new Object();
     private static final Object DIAG_LOCK = new Object();
+    private static final byte[][] DIAG_QUEUE = new byte[128][];
+    private static int diagHead;
+    private static int diagTail;
+    private static boolean diagWriterStarted;
+    private static int diagDropped;
 
     private static volatile IFrameworkAccess frameworkAccess;
     private static volatile Thread worker;
@@ -1120,25 +1132,128 @@ public final class ClusterStateController {
         }
     }
 
-    private static void diag(String text) {
-        synchronized (DIAG_LOCK) {
-            FileOutputStream out = null;
-            try {
-                File f = new File(DIAG_FILE);
-                if (f.exists() && f.length() > DIAG_MAX_BYTES) {
-                    FileOutputStream reset = new FileOutputStream(f, false);
-                    reset.write(("--- log reset at " + nowMs() + " ---\n")
-                        .getBytes("UTF-8"));
-                    reset.close();
-                }
-                out = new FileOutputStream(f, true);
-                String line = nowMs() + " " + text + "\n";
-                out.write(line.getBytes("UTF-8"));
-                out.close();
-            } catch (Throwable ignored) {
-                try { if (out != null) out.close(); } catch (Throwable ignored2) {}
-            }
+    private static File sdDiagFile() {
+        for (int i = 0; i < SD_VOLUMES.length; ++i) {
+            String root = SD_VOLUMES[i];
+            if (new File(root + "/Toolbox").isDirectory()
+                && new File(root + "/MMI-Cockpit-Carplay/state").isDirectory()
+                && new File(root + "/MMI-Cockpit-Carplay/logs").isDirectory())
+                return new File(root
+                    + "/MMI-Cockpit-Carplay/logs/mmi-mirror-controller.log");
         }
+        return null;
+    }
+
+    private static boolean appendDiag(File file, byte[] line,
+                                      long limit, int history) {
+        FileOutputStream out = null;
+        try {
+            if (history > 0 && file.exists() && file.length() > limit) {
+                /*
+                 * Discard an oversized log left by an older unbounded build
+                 * before entering the bounded rotation contract.
+                 */
+                out = new FileOutputStream(file, false);
+                out.close();
+                out = null;
+            }
+            if (file.exists() && file.length() + line.length > limit) {
+                if (history == 0) {
+                    out = new FileOutputStream(file, false);
+                    out.write(("--- log reset at " + nowMs() + " ---\n")
+                        .getBytes("UTF-8"));
+                    out.close();
+                    out = null;
+                } else {
+                    for (int i = history - 1; i >= 0; --i) {
+                        File from = i == 0
+                            ? file
+                            : new File(file.getPath() + "." + (i - 1));
+                        File to = new File(file.getPath() + "." + i);
+                        if (!from.exists()) continue;
+                        if (to.exists() && !to.delete()) return false;
+                        if (!from.renameTo(to)) return false;
+                    }
+                }
+            }
+            out = new FileOutputStream(file, true);
+            out.write(line);
+            out.close();
+            return true;
+        } catch (Throwable ignored) {
+            try { if (out != null) out.close(); } catch (Throwable ignored2) {}
+            return false;
+        }
+    }
+
+    /*
+     * Diagnostics are evidence only.  The Context80/OEM observer thread only
+     * enqueues a bounded line; all SD discovery, rotation and file I/O happen
+     * on the daemon writer so logging failure cannot block the display policy.
+     */
+    private static void diag(String text) {
+        try {
+            if (text != null && text.length() > 2048)
+                text = text.substring(0, 2048);
+            byte[] line = (nowMs() + " " + text + "\n").getBytes("UTF-8");
+            synchronized (DIAG_LOCK) {
+                if (!diagWriterStarted) {
+                    Thread writer = new Thread(new Runnable() {
+                        public void run() { diagWriteLoop(); }
+                    }, "mmi-mirror-diagnostics");
+                    writer.setDaemon(true);
+                    writer.start();
+                    diagWriterStarted = true;
+                }
+                int next = (diagHead + 1) % DIAG_QUEUE.length;
+                if (next == diagTail) {
+                    ++diagDropped;
+                    return;
+                }
+                DIAG_QUEUE[diagHead] = line;
+                diagHead = next;
+                DIAG_LOCK.notifyAll();
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private static void diagWriteLoop() {
+        for (;;) {
+            byte[] line;
+            int dropped;
+            synchronized (DIAG_LOCK) {
+                while (diagTail == diagHead) {
+                    try {
+                        DIAG_LOCK.wait();
+                    } catch (InterruptedException ignored) {}
+                }
+                line = DIAG_QUEUE[diagTail];
+                DIAG_QUEUE[diagTail] = null;
+                diagTail = (diagTail + 1) % DIAG_QUEUE.length;
+                dropped = diagDropped;
+                diagDropped = 0;
+            }
+            if (dropped > 0) {
+                try {
+                    writeDiagLine((nowMs()
+                        + " DIAG_QUEUE_DROPPED count=" + dropped + "\n")
+                        .getBytes("UTF-8"));
+                } catch (Throwable ignored) {}
+            }
+            writeDiagLine(line);
+        }
+    }
+
+    private static void writeDiagLine(byte[] line) {
+        if (line == null) return;
+        try {
+            File sd = sdDiagFile();
+            if (sd != null
+                && appendDiag(sd, line, SD_DIAG_SEGMENT_BYTES,
+                              SD_DIAG_HISTORY))
+                return;
+            appendDiag(new File(DIAG_FILE), line, DIAG_MAX_BYTES, 0);
+        } catch (Throwable ignored) {}
     }
 
     private static String describe(Throwable t) {
