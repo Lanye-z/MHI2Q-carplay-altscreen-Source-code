@@ -670,14 +670,22 @@ int main(int argc, char **argv) {
             "displayable=3 output=1440x455 source=private111-decoded "
             "window58_readback=0\n");
 
-    publish_displayable_state(display, &source, &frame, "first-present");
     marker(true, "private111-decoded-shm", "direct-display");
     if (!activate_context80()) {
+        publish_displayable_state(display, &source, &frame,
+                                  "ctx80-activate-failed");
         marker(false, 0, 0);
         display.shutdown();
         source.shutdown();
         return 5;
     }
+
+    /*
+     * Keep observer I/O completely off the first-present -> Context80 critical
+     * path.  Normal startup acquires the proven Java context first, then takes
+     * the initial read-only displayable3 snapshot.
+     */
+    publish_displayable_state(display, &source, &frame, "ctx80-active");
 
     fprintf(stderr,
             "direct111: PHASE=DIRECT111_ACTIVE "
