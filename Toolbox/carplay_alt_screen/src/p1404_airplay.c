@@ -373,10 +373,20 @@ static cf_obj rect_dict(uint32_t w, uint32_t h, uint32_t x, uint32_t y) {
 }
 
 struct alt_safe_rect {
+    /* safeArea coordinates sent to CarPlay (source/canvas space). */
     uint32_t x;
     uint32_t y;
     uint32_t w;
     uint32_t h;
+
+    /* Same safe region after renderer translation, in physical VC space. */
+    uint32_t physical_x;
+    uint32_t physical_y;
+
+    /* Session-latched full-size map-plane translation. No scaling. */
+    int renderer_dx;
+    int renderer_dy;
+
     char view[16];
     char layout[128];
     char source[32];
@@ -416,6 +426,19 @@ static int alt_kv_u32(const char *line, const char *key, uint32_t *out) {
     return 1;
 }
 
+static int alt_kv_i32(const char *line, const char *key, int *out) {
+    char *end = NULL;
+    long value;
+    size_t n;
+    if (!line || !key || !out) return 0;
+    n = strlen(key);
+    if (strncmp(line, key, n) || line[n] != '=') return 0;
+    value = strtol(line + n + 1u, &end, 10);
+    if (end == line + n + 1u || value < -8192L || value > 8192L) return 0;
+    *out = (int)value;
+    return 1;
+}
+
 static int alt_safe_rect_valid(const struct alt_safe_rect *r,
                                uint32_t w, uint32_t h) {
     if (!r || !r->w || !r->h) return 0;
@@ -425,13 +448,18 @@ static int alt_safe_rect_valid(const struct alt_safe_rect *r,
 }
 
 static int alt_load_hmi_layout(char *view, size_t view_cap,
-                               char *layout, size_t layout_cap) {
+                               char *layout, size_t layout_cap,
+                               int *small_dx, int *small_dy) {
     FILE *f;
     char line[256];
     int have_view = 0, have_layout = 0;
-    if (!view || !view_cap || !layout || !layout_cap) return 0;
+    int have_dx = 0, have_dy = 0;
+    if (!view || !view_cap || !layout || !layout_cap ||
+        !small_dx || !small_dy) return 0;
     view[0] = 0;
     layout[0] = 0;
+    *small_dx = 0;
+    *small_dy = 0;
     f = fopen("/tmp/mmi-mirror-hmi.state", "r");
     if (!f) return 0;
     while (fgets(line, sizeof(line), f)) {
@@ -440,8 +468,23 @@ static int alt_load_hmi_layout(char *view, size_t view_cap,
             have_view = 1;
         else if (alt_kv_text(line, "layout_name", layout, layout_cap))
             have_layout = 1;
+        else if (alt_kv_i32(line, "small_stage_dx", small_dx))
+            have_dx = 1;
+        else if (alt_kv_i32(line, "small_stage_dy", small_dy))
+            have_dy = 1;
     }
     fclose(f);
+
+    /*
+     * The vehicle-tested B9Sport layout has the stock map-plane SMALL offset
+     * (-476,0). Prefer the live Layout values from Java, but keep this verified
+     * fallback so a temporarily older state writer cannot silently center the
+     * Sport SMALL map.
+     */
+    if (have_layout && strstr(layout, "LayoutMIB2HighB9Sport")) {
+        if (!have_dx) *small_dx = -476;
+        if (!have_dy) *small_dy = 0;
+    }
     return have_view && have_layout;
 }
 
@@ -449,25 +492,59 @@ static int alt_load_measured_k1004_safe_area(uint32_t display_w,
                                              uint32_t display_h,
                                              const char *view,
                                              const char *layout,
+                                             int small_dx,
+                                             int small_dy,
                                              struct alt_safe_rect *out) {
     struct alt_safe_rect r;
+    int64_t source_x, source_y;
     if (!view || !layout || !out) return 0;
     if (display_w != 1440u || display_h != 455u) return 0;
     if (!strstr(layout, "LayoutMIB2HighB9")) return 0;
 
     memset(&r, 0, sizeof(r));
     if (!strcmp(view, "SMALL")) {
-        r.x = 490u; r.y = 49u; r.w = 460u; r.h = 300u;
+        r.physical_x = 490u; r.physical_y = 49u;
+        r.w = 460u; r.h = 300u;
+        r.renderer_dx = small_dx;
+        r.renderer_dy = small_dy;
     } else if (!strcmp(view, "FULL")) {
-        r.x = 370u; r.y = 49u; r.w = 700u; r.h = 300u;
+        r.physical_x = 370u; r.physical_y = 49u;
+        r.w = 700u; r.h = 300u;
+        r.renderer_dx = 0;
+        r.renderer_dy = 0;
     } else {
         return 0;
     }
+
+    /*
+     * CarPlay safeArea is expressed in the phone's 1440x455 source canvas,
+     * while the OEM Sport SMALL rule translates the full map plane in the
+     * physical VC compositor. Compensate the source safeArea so that after:
+     *
+     *     physical = source + renderer_offset
+     *
+     * the important CarPlay UI still lands in the measured unobscured region.
+     * Sport SMALL: physical x=490, dx=-476 -> source x=966.
+     */
+    source_x = (int64_t)r.physical_x - (int64_t)r.renderer_dx;
+    source_y = (int64_t)r.physical_y - (int64_t)r.renderer_dy;
+    if (source_x < 0 || source_y < 0 ||
+        source_x + (int64_t)r.w > (int64_t)display_w ||
+        source_y + (int64_t)r.h > (int64_t)display_h) {
+        return 0;
+    }
+    r.x = (uint32_t)source_x;
+    r.y = (uint32_t)source_y;
+
     strncpy(r.view, view, sizeof(r.view) - 1u);
     r.view[sizeof(r.view) - 1u] = 0;
     strncpy(r.layout, layout, sizeof(r.layout) - 1u);
     r.layout[sizeof(r.layout) - 1u] = 0;
-    strncpy(r.source, "k1004-measured", sizeof(r.source) - 1u);
+    strncpy(r.source,
+            (r.renderer_dx || r.renderer_dy)
+                ? "k1004-measured-compensated"
+                : "k1004-measured",
+            sizeof(r.source) - 1u);
     r.source[sizeof(r.source) - 1u] = 0;
     *out = r;
     return 1;
@@ -478,6 +555,7 @@ static void alt_resolve_cluster_safe_area(uint32_t display_w,
                                           struct alt_safe_rect *out) {
     char view[16] = "";
     char layout[128] = "";
+    int small_dx = 0, small_dy = 0;
     struct alt_safe_rect r;
     int have_hmi;
 
@@ -485,6 +563,10 @@ static void alt_resolve_cluster_safe_area(uint32_t display_w,
     memset(out, 0, sizeof(*out));
     out->w = display_w;
     out->h = display_h;
+    out->physical_x = 0u;
+    out->physical_y = 0u;
+    out->renderer_dx = 0;
+    out->renderer_dy = 0;
     strncpy(out->view, "FULL", sizeof(out->view) - 1u);
     out->view[sizeof(out->view) - 1u] = 0;
     strncpy(out->layout, "UNKNOWN", sizeof(out->layout) - 1u);
@@ -493,10 +575,11 @@ static void alt_resolve_cluster_safe_area(uint32_t display_w,
     out->source[sizeof(out->source) - 1u] = 0;
 
     have_hmi = alt_load_hmi_layout(
-        view, sizeof(view), layout, sizeof(layout));
+        view, sizeof(view), layout, sizeof(layout), &small_dx, &small_dy);
 
     if (have_hmi && alt_load_measured_k1004_safe_area(
-            display_w, display_h, view, layout, &r)) {
+            display_w, display_h, view, layout,
+            small_dx, small_dy, &r)) {
         *out = r;
         return;
     }
@@ -599,13 +682,17 @@ void *alt_build_cluster_display(void) {
             !set_i64(dict, "initialViewArea", 0)) goto fail;
         cf_release_safe(areas); areas = NULL;
         altscreen_log(
-            "ALTAREA_LAYOUT_SAFE_V1 schema=viewAreas[array] "
+            "ALTAREA_LAYOUT_SAFE_V2 schema=viewAreas[array] "
             "initialViewArea=0 view=full:%ux%u "
-            "safe=%u,%u,%ux%u mode=%s layout=%s source=%s "
+            "safe_source=%u,%u,%ux%u safe_physical=%u,%u,%ux%u "
+            "renderer_offset=%d,%d mode=%s layout=%s source=%s "
             "renderer_scale=0",
             d->width_pixels, d->height_pixels,
             cluster_safe.x, cluster_safe.y,
             cluster_safe.w, cluster_safe.h,
+            cluster_safe.physical_x, cluster_safe.physical_y,
+            cluster_safe.w, cluster_safe.h,
+            cluster_safe.renderer_dx, cluster_safe.renderer_dy,
             cluster_safe.view, cluster_safe.layout,
             cluster_safe.source);
     } else {
