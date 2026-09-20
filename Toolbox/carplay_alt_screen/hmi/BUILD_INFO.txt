@@ -1,4 +1,4 @@
-mode=PRIVATE111_DIRECT_DISPLAY_V1
+mode=PRIVATE111_DIRECT_DISPLAY_V2
 controller=ClusterStateController
 class_target=Java_1.2_major_46
 context_owner=JAVA_ONLY
