@@ -8,6 +8,8 @@ on:
       - '.github/workflows/oem-layout-observer-v1.yml'
       - 'Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java'
       - 'Toolbox/carplay_alt_screen/hmi/stubs/**'
+      - 'Toolbox/carplay_alt_screen/mirror_display/src/**'
+      - 'Toolbox/carplay_alt_screen/tests/**'
       - 'Toolbox/scripts/altscreen_boot_diag.sh'
       - 'Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh'
       - 'Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh'
