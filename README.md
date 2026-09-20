@@ -1,7 +1,7 @@
 > [!IMPORTANT]
 > **历史实验分支**
 >
-> 本分支已经被 V2 取代，不建议继续作为新的上车测试版本。当前正式开发请使用 `main`；需要回到首次实车点亮基线时，请使用 `carplay-private111-direct-display-v2`。
+> 本分支是第一次上车的彩条版本；已经被 V2 取代，不建议继续作为新的上车测试版本。当前正式开发请使用 `main`；需要回到首次实车点亮基线时，请使用 `carplay-private111-direct-display-v2`。
 
 # MHI2Q CarPlay 第二屏直显 — V1 历史实验
 
