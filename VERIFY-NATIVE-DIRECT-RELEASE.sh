@@ -285,6 +285,10 @@ grep -Fq '*small_dx = -476;' "$AIRPLAY_SRC" ||
     fail "verified B9Sport SMALL -476 fallback missing"
 grep -Fq 'make_cluster_layout_view_areas' "$AIRPLAY_SRC" ||
     fail "type111 does not declare FULL+SMALL viewAreas"
+grep -Fq 'display_h == 542u || display_h == 540u || display_h == 455u' "$AIRPLAY_SRC" ||
+    fail "measured B9 canvas guard must include observed private111 1440x542"
+grep -Fq 'predeclared_even_if_hmi_late=%d' "$AIRPLAY_SRC" ||
+    fail "cold-start two-view-area predeclaration diagnostic missing"
 grep -Fq 'initialViewArea' "$AIRPLAY_SRC" ||
     fail "type111 initial view-area selection missing"
 grep -Fq 'adjacentViewAreas' "$AIRPLAY_SRC" ||
