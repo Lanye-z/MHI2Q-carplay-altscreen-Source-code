@@ -1,3 +1,44 @@
+<!-- ALTSCREEN-BRANCH-STATUS:BEGIN -->
+# AltScreen CarPlay / Virtual Cockpit status
+
+**Branch:** `main`  
+**Role:** Active vehicle-tested baseline
+
+This branch was fast-forwarded from `carplay-private111-direct-display-v2` at commit `23b3d242` on 2026-09-20. It is now the **active development branch**.
+
+The modified V2 path has been physically verified on the vehicle: the CarPlay private second-screen image reached the Virtual Cockpit and followed phone navigation. This is the first branch in the current experiment set with confirmed VC first-light.
+
+Use `main` for all follow-up fixes. Keep `carplay-private111-direct-display-v2` as the known-good backup baseline; `carplay-private111-direct-display-v1` is historical only.
+
+## Current vehicle observations
+
+- **Display path:** confirmed physical VC output on the modified V2 route.
+- **Performance follow-up:** keep the proven stock-OMX/Screen-linearizer architecture. The current optimization target is to deliberately process **every other decoded frame** ("skip one, read one") to reduce Screen read/publish load rather than introducing a new decoder or `screen_blit` path before it is needed.
+- **Lifecycle issue still to audit:** on one first-session disconnect, CarPlay returned to the stock map while no stock route was active, yet a navigation arrow appeared/remained. Treat this as a teardown/navigation-state cleanup issue; the successful physical display route itself remains proven.
+- **No other mandatory architecture change is currently established by the successful test.** Continue to collect logs before changing additional layers.
+
+## Proven route
+
+```text
+CarPlay private type111
+  -> stock OMX
+  -> stock private renderer
+  -> Screen linearization
+  -> /carplay111_decoded
+  -> sidecar
+  -> GLES / displayable3
+  -> Java Context80
+  -> Virtual Cockpit
+```
+
+Main110 remains intentionally outside the auxiliary display route.
+
+> The toolbox documentation below is inherited from the upstream MIB2 High toolbox. The branch-status section above describes the CarPlay/VC experiment in this repository.
+
+---
+
+<!-- ALTSCREEN-BRANCH-STATUS:END -->
+
 # MIB2 High toolbox
 The ultimate MIB2-HIGH toolbox for all your MIB2 High customization needs.
 
