@@ -36,7 +36,7 @@ JAR_TARGET_DIR=$(dirname -- "$JAR_TARGET")
 BACKUP="$VOLUME/MMI-Cockpit-Carplay/backup/basevideo3-hmi-original"
 BACKUP_TMP="$BACKUP.new.$$"
 EXPECTED_SIZE=149510
-EXPECTED_CKSUM=3031675963
+EXPECTED_CKSUM=180684234
 
 [ -f "$CONTROLLER" ] || { echo "FAIL: chain controller missing: $CONTROLLER"; exit 127; }
 [ -s "$JAR_SOURCE" ] || { echo "FAIL: Java80 HMI JAR missing: $JAR_SOURCE"; exit 1; }
