@@ -25,6 +25,12 @@ public:
     uint32_t h264_packets() const { return last_h264_packets_; }
     uint32_t h264_bytes() const { return last_h264_bytes_; }
     uint32_t decoded_frames() const { return last_frame_count_; }
+    uint32_t producer_frames() const { return frames_ ? frames_->frame_count : last_frame_count_; }
+    uint32_t decoded_drops() const { return frames_ ? frames_->drop_count : 0u; }
+    uint32_t h264_drops() const { return h264_ ? h264_->drop_count : 0u; }
+    uint32_t h264_wraps() const { return h264_ ? h264_->wrap_count : 0u; }
+    uint32_t consumer_copies() const { return consumer_copy_count_; }
+    uint32_t copy_races() const { return copy_races_; }
 
 private:
     Private111DirectSource(const Private111DirectSource &);
@@ -60,6 +66,9 @@ private:
     uint32_t h264_map_attempts_;
     uint32_t frame_map_attempts_;
     uint32_t sample_count_;
+    uint32_t copy_races_;
+    unsigned long long last_consumer_progress_us_;
+    unsigned long long last_h264_progress_us_;
 
     bool h264_ready_;
     bool decoded_ready_;
