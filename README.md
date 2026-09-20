@@ -35,7 +35,7 @@
 
 本次采集得到的 OEM 四态几何如下：
 
-| OEM 状态 | Layout class | 关键布局常量 | Active visible area |
+| OEM 状态 | Layout class | 关键布局常量 | 计算得到的安全可视区域 |
 | --- | --- | ---: | --- |
 | Sport Full | `LayoutMIB2HighB9Sport` | `layout_const_80=-476` | `x=370, y=49, 700×300` |
 | Sport Small | `LayoutMIB2HighB9Sport` | `layout_const_80=-476` | `x=490, y=49, 460×300` |
@@ -47,12 +47,14 @@
 ```text
 screen = 1440 × 540
 map raw/effective = 1440 × 455
-map offset = (0, 26)
-Full visible = (370, 49, 700, 300)
-Small visible = (490, 49, 460, 300)
+map origin/offset = (0, 26)
+Full safe visible area = (370, 49, 700, 300)
+Small safe visible area = (490, 49, 460, 300)
 ```
 
-这说明 **Full / Small 的主要差异是左右 tube 留出的可视宽度；Sport / Classic 在本次车上没有改变计算出的地图可视矩形，但可以通过 Layout class 与 `layout_const_80` 明确区分。** 因此，OEM geometry observer 的第一阶段目标已经完成，下一阶段可以基于这些实车参数研究 CarPlay canvas / safe area 与 OEM 可视区域之间的映射，而不再依赖猜测的 1440×445 / 455 / 542 常量。
+这里需要特别区分 **“地图平面尺寸”** 和 **“安全可视区域”**。`700×300` 与 `460×300` 不是地图本身的宽高，也不表示 Full / Small 会把地图 raster 缩放成 700 px / 460 px；它们是依据左右仪表圆环（tube）、顶部 reiterline、底部 infoline 以及 map offset 计算出的 **无遮挡/安全可视矩形**。本次日志中的地图平面仍为 `1440×455`。Full / Small 改变的是仪表布局下可供关键地图内容安全显示的区域，同时原厂还可能通过 layout 80/81 对地图 plane 做位置偏移。Sport / Classic 在本次车上得到相同的这组安全可视矩形，但 Layout class 与 `layout_const_80` 不同，因此不能据此认为两种 skin 的全部地图几何完全相同。
+
+这一解释也与 Luka 的 MHI2Q 逆向资料一致：原厂 `CombiMapController.positionMap()` 对 `MAP_MAIN/MAP_ALT` 处理的是 **map position**，在 small stage 时额外叠加 layout 80/81；而不是把地图宽度改为 700 或 460。因而 OEM geometry observer 的第一阶段结论应理解为：已经拿到了四态下的 **安全显示边界 + map origin/offset + layout 差异**，下一阶段再据此设计 CarPlay canvas / safe area 映射。
 
 当前已证明的显示链路为：
 
