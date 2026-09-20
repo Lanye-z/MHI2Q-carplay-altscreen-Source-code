@@ -13,6 +13,7 @@ export ALTSCREEN_CHAIN_VOLUME="$CARD"
 export ALTS_LOG_SEGMENT_BYTES=4096
 export ALTS_LOG_HISTORY_SLOTS=3
 
+echo "LOG_RING_HOST_TEST=STAGE sd_first"
 printf 'SD_FIRST\n' | sh "$SCRIPT" pipe mirror "$FALLBACK"
 grep -Fq SD_FIRST "$CARD/MMI-Cockpit-Carplay/logs/mirror.log" || {
     echo "LOG_RING_HOST_TEST=FAIL stage=sd_first_missing" >&2
@@ -23,6 +24,7 @@ grep -Fq SD_FIRST "$CARD/MMI-Cockpit-Carplay/logs/mirror.log" || {
     exit 1
 }
 
+echo "LOG_RING_HOST_TEST=STAGE concurrent_producers"
 # Multiple independent producers must not race the rotation cursor or exceed
 # one active file plus the declared number of fixed history slots.
 for producer in 1 2 3; do
@@ -35,6 +37,7 @@ for producer in 1 2 3; do
     ) &
 done
 wait
+echo "LOG_RING_HOST_TEST=STAGE concurrent_joined"
 for file in "$CARD"/MMI-Cockpit-Carplay/logs/mirror.log*; do
     [ -f "$file" ] || continue
     size=$(wc -c < "$file")
@@ -51,6 +54,7 @@ count=$(cat "$CARD"/MMI-Cockpit-Carplay/logs/mirror.log* "$FALLBACK" 2>/dev/null
     exit 1
 }
 
+echo "LOG_RING_HOST_TEST=STAGE fallback_fixtures"
 # Busy SD lock and absent card both fall back without an error exit.
 if [ -e "$CARD/MMI-Cockpit-Carplay/logs/.mirror.lock" ]; then
     echo "LOG_RING_HOST_TEST=FAIL stage=producer_lock_leaked_before_busy_fixture" >&2
@@ -74,6 +78,7 @@ grep -Fq NO_CARD_FALLBACK "$FALLBACK" || {
 }
 ALTSCREEN_CHAIN_VOLUME="$ROOT/missing" sh "$SCRIPT" line mirror "$ROOT/no-parent/fallback.log" NO_STORAGE
 
+echo "LOG_RING_HOST_TEST=STAGE prune"
 # Pruning may remove archives; it must keep the bounded direct ring.
 mkdir -p "$CARD/MMI-Cockpit-Carplay/logs/boots"
 dd if=/dev/zero of="$CARD/MMI-Cockpit-Carplay/logs/boots/old.log" bs=1024 count=8 2>/dev/null
