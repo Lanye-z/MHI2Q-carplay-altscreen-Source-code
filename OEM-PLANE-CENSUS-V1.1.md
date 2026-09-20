@@ -87,14 +87,14 @@ guessed. Unsupported/vendor properties are kept as `NA rc=... errno=...`; failur
 
 ## Build state
 
-The repository currently contains the observer **source and build recipe**. Before vehicle use, compile it
-with the QNX 6.5 ARMv7 toolchain:
+The repository contains the observer source, build recipe, and promoted release binary compiled with the
+QNX 6.5 ARMv7 toolchain:
 
 ```sh
 sh Toolbox/carplay_alt_screen/plane_census/build_qnx.sh
 ```
 
-A successful build creates:
+The promoted release contains:
 
 ```text
 Toolbox/carplay_alt_screen/plane_census/release/oem-plane-census
@@ -102,8 +102,13 @@ Toolbox/carplay_alt_screen/plane_census/release/BUILD_INFO.txt
 Toolbox/carplay_alt_screen/plane_census/release/SHA256SUMS
 ```
 
-Do not run INSTALL until that release binary has been built and inspected. Creating this branch does
-**not** mean the QNX binary has already been compiled.
+The release binary has passed the repository verifier, required-marker and forbidden Screen write API
+checks, ELF/readelf inspection, and SHA-256 consistency checks. It is ready for stock-map vehicle census;
+this is a build/static-verification milestone only and does **not** claim completed vehicle validation.
+
+```text
+vehicle_test_status=READY_FOR_STOCK_MAP_CENSUS
+```
 
 ## Recommended one-car capture sequence
 

@@ -9,7 +9,7 @@ CC="${CC:-$QNX_HOST/usr/bin/ntoarmv7-gcc}"
 [ -x "$CC" ] || { echo "ERROR: QNX ARMv7 compiler missing: $CC" >&2; exit 1; }
 
 mkdir -p "$ROOT/build" "$ROOT/release"
-"$CC" -O2 -Wall -Wextra -o "$ROOT/build/oem-plane-census" "$ROOT/src/plane_census.c" -ldl
+"$CC" -O2 -Wall -Wextra -o "$ROOT/build/oem-plane-census" "$ROOT/src/plane_census.c"
 
 BIN="$ROOT/build/oem-plane-census"
 STRINGS="${STRINGS:-}"

@@ -1,11 +1,11 @@
-**V1.1 当前状态：源码已准备，QNX 观察程序尚需编译。** 本分支专门用于原厂地图 plane 33/58 的四态只读采样；不要启动 CarPlay 实验链。详见 [OEM-PLANE-CENSUS-V1.1.md](OEM-PLANE-CENSUS-V1.1.md)。
+**V1.1 当前状态：QNX ARMv7 observer 已编译，release binary 已 promotion，静态校验已通过，可用于 stock-map vehicle census。** 本分支专门用于原厂地图 plane 33/58 的四态只读采样；不要启动 CarPlay 实验链。详见 [OEM-PLANE-CENSUS-V1.1.md](OEM-PLANE-CENSUS-V1.1.md)。
 
 > [!IMPORTANT]
 > **V1.1 是 STOCK MAP ONLY 观察分支。**
 >
 > 上车时只安装并启动独立的 `oem-plane-census` 观察程序，然后依次切换 Classic Full / Classic Small / Sport Full / Sport Small 并执行对应 CAPTURE。该程序通过 `SCREEN_WINDOW_MANAGER_CONTEXT` 的 CREATE/PROPERTY/POST/CLOSE 事件发现 33/58，再只读其 QNX Screen 属性；不修改 CarPlay `viewArea/safeArea`、不启动 private111、不切换 Context80、不写 Screen property。
 >
-> 当前仓库提交中还没有由本次会话实际编译出的 QNX ARMv7 release binary；请先运行 `Toolbox/carplay_alt_screen/plane_census/build_qnx.sh` 并校验 release 产物，再制作上车 SD 包。**下文“已完成实车验证”等描述属于基础分支的历史状态，不代表 V1.1 census observer 已完成实车验证。**
+> 当前仓库包含由 QNX 6.5 ARMv7 工具链实际编译并完成静态校验的 release binary。`vehicle_test_status=READY_FOR_STOCK_MAP_CENSUS`；该状态只表示可以开始原厂地图采样，**不代表 V1.1 census observer 已完成实车验证**。下文“已完成实车验证”等描述属于基础分支的历史状态。
 
 ---
 

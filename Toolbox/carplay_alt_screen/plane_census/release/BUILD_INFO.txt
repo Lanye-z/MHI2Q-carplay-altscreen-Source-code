@@ -1,0 +1,12 @@
+build_id=OEM_PLANE33_58_CENSUS_V1_1
+mode=READ_ONLY
+base_branch=experiment/oem-layout-second-screen
+carplay_protocol_changes=none
+screen_context=WINDOW_MANAGER_CONTEXT
+target_id_strings=33,58
+screen_property_writes=none
+foreign_window_lifecycle_changes=none
+event_source=WINDOW_MANAGER_EVENT_QUEUE
+context_switches=none
+binary_sha256=b9c8832857ec61e9cf0dda46254f3a545eb9e1d6e73ee455ce7eba1923fd1b5f
+vehicle_binary_status=BUILT_QNX_ARMV7
