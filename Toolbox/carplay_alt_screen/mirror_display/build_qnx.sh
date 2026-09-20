@@ -40,6 +40,10 @@ check_marker() {
 }
 
 for marker in \
+  'carplay-private111-direct-display-v2-source-driven-v2' \
+  'present_policy=source-driven' \
+  'no_success_sleep=1' \
+  'stall_report_after_ms=' \
   'carplay-private111-direct-display-v2' \
   'PHASE=H264_SHM_ATTACHED' \
   'PHASE=DECODED_SHM_WAIT_SIZE' \
@@ -77,5 +81,5 @@ do
   fi
 done
 
-echo "MIRROR_BUILD_ID=carplay-private111-direct-display-v2"
+echo "MIRROR_BUILD_ID=carplay-private111-direct-display-v2-source-driven-v2"
 echo "MIRROR_BUILD=PASS output=$ROOT/$BIN"

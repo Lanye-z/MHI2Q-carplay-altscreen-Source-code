@@ -184,6 +184,20 @@ write'
 }
 echo "QNX_ELF_INVARIANTS=PASS"
 
+for marker in \
+  'rate_policy=uncapped_source_callbacks' \
+  'ALTAREA_LAYOUT_SAFE_V1' \
+  '/tmp/mmi-mirror-hmi.state' \
+  '/tmp/carplay-oem-geometry.state' \
+  'renderer_scale=0'
+do
+  grep -a -Fq "$marker" "$SO" || {
+    echo "QNX_BUILD_FAIL missing runtime marker: $marker" >&2
+    exit 1
+  }
+done
+echo "QNX_LAYOUT_SAFEAREA_MARKERS=PASS"
+
 # Build metadata is release evidence and must be byte-stable across arbitrary
 # candidate directories. Normalize the private build root and avoid wall-clock,
 # host-kernel and absolute linker-path fields.
