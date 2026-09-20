@@ -44,7 +44,7 @@ EXPECTED_CKSUM=211533722
 grep -Fq 'oem_geometry_build_status=COMPILED_OBSERVER_READY' "$HMI_INFO" 2>/dev/null || {
     echo "FAIL: OEM observer source/JAR is not a compiled matched pair"
     grep -E '^(oem_geometry_build_status|jar_size|jar_cksum|jar_sha256)=' "$HMI_INFO" 2>/dev/null || true
-    echo "ACTION=RUN_OEM_LAYOUT_OBSERVER_BUILD_BEFORE_INSTALL"
+    echo "ACTION=RUN_COMBINED_LOGGING_OEM_BUILD_BEFORE_INSTALL"
     exit 1
 }
 [ -s "$MIRROR_INFO" ] || { echo "FAIL: V2 Mirror BUILD_INFO missing: $MIRROR_INFO"; exit 1; }
