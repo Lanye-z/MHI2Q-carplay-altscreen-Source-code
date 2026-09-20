@@ -129,8 +129,8 @@ fi
 if [ "$HOOK_PENDING" = 0 ]; then
     binary_strings "$HOOK" | grep -Fq 'rate_policy=uncapped_source_callbacks' ||
         fail "universal hook binary is stale: rebuild/promote uncapped source-callback readback"
-    binary_strings "$HOOK" | grep -Fq 'ALTAREA_LAYOUT_SAFE_V1' ||
-        fail "universal hook binary is stale: rebuilt CarPlay safeArea layout marker missing"
+    binary_strings "$HOOK" | grep -Fq 'ALTAREA_LAYOUT_SAFE_V2' ||
+        fail "universal hook binary is stale: rebuilt compensated CarPlay safeArea marker missing"
 fi
 
 grep -Fq 'window58_readback=disabled' "$INFO" ||
