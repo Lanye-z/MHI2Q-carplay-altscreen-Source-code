@@ -84,10 +84,10 @@ elif grep -Fq 'release_binary_status=V2_BINARY_STALE_LAYOUT_PROTOCOL_REBUILDS_RE
         binary_strings "$BIN" | grep -Fq "$marker" ||
             fail "previous clean V2 sidecar marker missing while awaiting source-driven rebuild: $marker"
     done
-    if binary_strings "$BIN" | grep -Fq 'carplay-private111-direct-display-v2-source-driven-layout-v3'; then
-        fail "BUILD_INFO says source/layout rebuild required but sidecar already contains new build id"
+    if binary_strings "$BIN" | grep -Fq 'carplay-private111-direct-display-v2-source-driven-layout-live-v4'; then
+        fail "BUILD_INFO says source/live-layout rebuild required but sidecar already contains new build id"
     fi
-    if binary_strings "$HOOK" | grep -Fq 'ALTAREA_LAYOUT_SAFE_V2'; then
+    if binary_strings "$HOOK" | grep -Fq 'ALTAREA_LAYOUT_SAFE_V3'; then
         fail "BUILD_INFO says safeArea hook rebuild required but hook already contains new marker"
     fi
 elif grep -Fq 'release_binary_status=V2_BINARY_STALE_OWNERSHIP_REBUILD_REQUIRED' "$INFO"; then
@@ -113,7 +113,7 @@ elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$INFO"; then
         grep -Fq 'hook_runtime_rebuild_required=no' "$INFO" ||
             fail "vehicle-ready V2 package must declare rebuilt hook runtime"
     fi
-    for marker in 'carplay-private111-direct-display-v2-source-driven-layout-v3' 'PHASE=DECODED_SHM_WAIT_SIZE' 'PHASE=SOURCE_SESSION' 'PHASE=GATE_RECOVER_CURRENT_SESSION' 'matching_identity_plus_frame_progress' 'packed_tight_required=1' 'stream111_request_or_phone_marker' 'STREAM_111_REQUESTED=YES' 'PHASE=PIPELINE_SOURCE_PRIMED' 'startup_frame_progress_required=2' 'PHASE=DISPLAYABLE3_FIRST_PRESENT' 'PHASE=DISPLAYABLE3_OWNERSHIP' 'DISPLAYABLE3_OWNERSHIP_V1' '/tmp/mmi-mirror-displayable3.state' 'PHASE=DIRECT111_ACTIVE' 'present_policy=source-driven'
+    for marker in 'carplay-private111-direct-display-v2-source-driven-layout-live-v4' 'PHASE=DECODED_SHM_WAIT_SIZE' 'PHASE=SOURCE_SESSION' 'PHASE=GATE_RECOVER_CURRENT_SESSION' 'matching_identity_plus_frame_progress' 'packed_tight_required=1' 'stream111_request_or_phone_marker' 'STREAM_111_REQUESTED=YES' 'PHASE=PIPELINE_SOURCE_PRIMED' 'startup_frame_progress_required=2' 'PHASE=DISPLAYABLE3_FIRST_PRESENT' 'PHASE=DISPLAYABLE3_OWNERSHIP' 'DISPLAYABLE3_OWNERSHIP_V1' '/tmp/mmi-mirror-displayable3.state' 'PHASE=DIRECT111_ACTIVE' 'present_policy=source-driven'
     do
         binary_strings "$BIN" | grep -Fq "$marker" ||
             fail "V2 sidecar marker missing: $marker"
@@ -129,8 +129,8 @@ fi
 if [ "$HOOK_PENDING" = 0 ]; then
     binary_strings "$HOOK" | grep -Fq 'rate_policy=uncapped_source_callbacks' ||
         fail "universal hook binary is stale: rebuild/promote uncapped source-callback readback"
-    binary_strings "$HOOK" | grep -Fq 'ALTAREA_LAYOUT_SAFE_V2' ||
-        fail "universal hook binary is stale: rebuilt compensated CarPlay safeArea marker missing"
+    binary_strings "$HOOK" | grep -Fq 'ALTAREA_LAYOUT_SAFE_V3' ||
+        fail "universal hook binary is stale: rebuilt live CarPlay view-area marker missing"
 fi
 
 grep -Fq 'window58_readback=disabled' "$INFO" ||
@@ -256,12 +256,12 @@ grep -Fq 'PHASE=PIPELINE_SOURCE_PRIMED' "$MAIN_CPP" ||
     fail "startup does not require decoded frame progress before displayable creation"
 grep -Fq 'startup_frame_progress_required=2' "$MAIN_CPP" ||
     fail "startup fresh-frame threshold marker missing"
-grep -Fq 'carplay-private111-direct-display-v2-source-driven-layout-v3' "$MAIN_CPP" ||
+grep -Fq 'carplay-private111-direct-display-v2-source-driven-layout-live-v4' "$MAIN_CPP" ||
     fail "source-driven/layout V2 sidecar build id missing"
 
-# ---- CarPlay protocol-level layout/safe-area + OEM map placement contract ----
-grep -Fq 'ALTAREA_LAYOUT_SAFE_V2' "$AIRPLAY_SRC" ||
-    fail "CarPlay cluster compensated safeArea marker missing"
+# ---- CarPlay protocol-level live layout/safe-area + OEM map placement contract ----
+grep -Fq 'ALTAREA_LAYOUT_SAFE_V3' "$AIRPLAY_SRC" ||
+    fail "CarPlay cluster live safeArea marker missing"
 grep -Fq '/tmp/mmi-mirror-hmi.state' "$AIRPLAY_SRC" ||
     fail "early HMI layout state input missing"
 if grep -Fq '/tmp/carplay-oem-geometry.state' "$AIRPLAY_SRC"; then
@@ -269,29 +269,61 @@ if grep -Fq '/tmp/carplay-oem-geometry.state' "$AIRPLAY_SRC"; then
 fi
 grep -Fq 'LayoutMIB2HighB9' "$AIRPLAY_SRC" ||
     fail "K1004 measured layout guard missing"
-grep -Fq 'r.physical_x = 370u; r.physical_y = 49u;' "$AIRPLAY_SRC" ||
-    fail "measured FULL physical safe region missing"
-grep -Fq 'r.physical_x = 490u; r.physical_y = 49u;' "$AIRPLAY_SRC" ||
-    fail "measured SMALL physical safe region missing"
-grep -Fq 'source_x = (int64_t)r.physical_x - (int64_t)r.renderer_dx;' "$AIRPLAY_SRC" ||
-    fail "safeArea source-coordinate compensation missing"
+grep -Fq 'r.x = 370u; r.y = 49u; r.w = 700u; r.h = 300u;' "$AIRPLAY_SRC" ||
+    fail "FULL map-local safeArea missing"
+grep -Fq 'r.x = 490u; r.y = 49u; r.w = 460u; r.h = 300u;' "$AIRPLAY_SRC" ||
+    fail "SMALL map-local safeArea missing"
+grep -Fq 'physical_x = (int64_t)r.x + (int64_t)r.renderer_dx;' "$AIRPLAY_SRC" ||
+    fail "physical safe-region translation is not source+renderer_offset"
+if grep -Fq 'r.physical_x - (int64_t)r.renderer_dx' "$AIRPLAY_SRC" ||
+   grep -Fq 'source x=966' "$AIRPLAY_SRC"; then
+    fail "retired Sport SMALL safeArea compensation still present"
+fi
 grep -Fq 'small_stage_dx' "$AIRPLAY_SRC" ||
     fail "hook does not consume OEM small-stage X offset"
 grep -Fq '*small_dx = -476;' "$AIRPLAY_SRC" ||
     fail "verified B9Sport SMALL -476 fallback missing"
-grep -Fq 'safe_source=%u,%u,%ux%u safe_physical=%u,%u,%ux%u' "$AIRPLAY_SRC" ||
-    fail "safeArea source/physical diagnostic marker missing"
+grep -Fq 'make_cluster_layout_view_areas' "$AIRPLAY_SRC" ||
+    fail "type111 does not declare FULL+SMALL viewAreas"
+grep -Fq 'initialViewArea' "$AIRPLAY_SRC" ||
+    fail "type111 initial view-area selection missing"
+grep -Fq 'adjacentViewAreas' "$AIRPLAY_SRC" ||
+    fail "type111 view-area adjacency missing"
+grep -Fq 'type111_transition_flags=omitted' "$AIRPLAY_SRC" ||
+    fail "type111 Apple SDK transition-flag gating not documented"
+grep -Fq 'updateViewArea' "$AIRPLAY_SRC" ||
+    fail "standard same-session updateViewArea command missing"
+grep -Fq 'PHASE=ALT111_VIEWAREA_SUBMIT' "$AIRPLAY_SRC" ||
+    fail "same-session view-area submit diagnostic missing"
+grep -Fq 'animationDurationMillis' "$AIRPLAY_SRC" ||
+    fail "updateViewArea animation-duration field missing"
+grep -Fq 'ALT111_EVENT_UPDATE_VIEW_AREA' "$NATIVE" ||
+    fail "native layout watcher does not drive the view-area event"
+grep -Fq 'PHASE=ALT111_VIEWAREA_TARGET' "$NATIVE" ||
+    fail "native HMI view-area target observer missing"
+grep -Fq 'PHASE=ALT111_VIEWAREA_RESULT' "$NATIVE" ||
+    fail "native view-area response/retry observer missing"
+grep -Fq 'usleep(100000u);' "$NATIVE" ||
+    fail "live CarPlay layout watcher must poll HMI state at 100ms"
 grep -Fq 'renderer_scale=0' "$AIRPLAY_SRC" ||
     fail "protocol safeArea path must explicitly keep renderer scaling disabled"
 
 grep -Fq 'PHASE=OEM_MAP_PLACEMENT' "$MAIN_CPP" ||
-    fail "session-latched OEM map placement marker missing"
+    fail "live OEM map placement marker missing"
+grep -Fq 'PHASE=OEM_MAP_RERENDER' "$MAIN_CPP" ||
+    fail "layout change does not redraw the current frame immediately"
+grep -Fq 'next_layout_probe_us' "$MAIN_CPP" ||
+    fail "sidecar live layout poll missing"
+grep -Fq '50000ULL' "$MAIN_CPP" ||
+    fail "sidecar live layout poll must be bounded to 50ms"
 grep -Fq 'small_stage_dx' "$MAIN_CPP" ||
     fail "sidecar does not consume OEM small-stage X offset"
 grep -Fq 'small_dx = -476;' "$MAIN_CPP" ||
     fail "sidecar verified B9Sport SMALL -476 fallback missing"
 grep -Fq 'display.set_destination_rect(p.dx, p.dy, 1440, 455)' "$MAIN_CPP" ||
     fail "sidecar full-size translated destination is missing"
+grep -Fq 'live_switch=1' "$MAIN_CPP" ||
+    fail "sidecar map placement is not marked live"
 grep -Fq 'renderer_scale=0' "$MAIN_CPP" ||
     fail "sidecar map placement must keep scaling disabled"
 grep -Fq 'natural_clip=1' "$MAIN_CPP" ||
