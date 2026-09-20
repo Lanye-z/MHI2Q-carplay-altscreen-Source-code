@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/time.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <pthread.h>
 
@@ -17,7 +18,9 @@ static int g_run_id_loaded;
 
 #define ALT_LOG_QUEUE_SLOTS 256u
 #define ALT_LOG_LINE_BYTES 768u
-#define ALT_LOG_MAX_BYTES (16L * 1024L * 1024L)
+#define ALT_LOG_TMP_MAX_BYTES (16L * 1024L * 1024L)
+#define ALT_LOG_SD_SEGMENT_BYTES (20L * 1024L * 1024L)
+#define ALT_LOG_SD_HISTORY_SLOTS 15u
 #define ALT_LOG_LOCK_SPINS 32
 struct alt_log_entry { char line[ALT_LOG_LINE_BYTES]; };
 static struct alt_log_entry g_log_queue[ALT_LOG_QUEUE_SLOTS];
@@ -25,9 +28,91 @@ static unsigned g_log_head;
 static unsigned g_log_tail;
 static volatile unsigned g_log_guard;
 static volatile unsigned long g_log_dropped;
+static volatile unsigned long g_tap_stop_events;
 static volatile unsigned g_log_accepting;
 static int g_log_thread_started;
 static int g_log_limit_hit;
+static unsigned g_log_sd_retry;
+
+/* Lifecycle signalling must not depend on recounting rotating log segments.
+ * This runs only on the asynchronous log writer, never on a CarPlay callback. */
+static int write_tap_stop_marker(const char *path, const char *line) {
+    char temporary[ALTSCREEN_PATH_MAX + 32];
+    FILE *marker;
+    int ok;
+    int n = snprintf(temporary, sizeof(temporary), "%s.tmp.%ld", path, (long)getpid());
+    if (n <= 0 || (size_t)n >= sizeof(temporary)) return 0;
+    marker = fopen(temporary, "w");
+    if (!marker) return 0;
+    ok = fputs(line, marker) != EOF;
+    if (fclose(marker) != 0) ok = 0;
+    if (ok && rename(temporary, path) == 0) return 1;
+    (void)unlink(temporary);
+    return 0;
+}
+
+static int publish_tap_stop_marker(unsigned long event) {
+    char path[ALTSCREEN_PATH_MAX];
+    char line[ALT_LOG_LINE_BYTES];
+    struct timeval tv;
+    unsigned long long stamp = 0;
+    if (gettimeofday(&tv, NULL) == 0)
+        stamp = (unsigned long long)tv.tv_sec * 1000000ULL + (unsigned long long)tv.tv_usec;
+    (void)snprintf(line, sizeof(line),
+                   "PHASE=DIRECT111_TAP_STOP event=%lu epoch_us=%llu pid=%ld run_id=%s\n",
+                   event, stamp, (long)getpid(), altscreen_run_id());
+    if (altscreen_state_path("direct111_tap_stop.state", path, sizeof(path)) &&
+        write_tap_stop_marker(path, line)) return 1;
+    if (write_tap_stop_marker("/tmp/MMI-Cockpit-Carplay/direct111_tap_stop.state", line)) return 1;
+    return write_tap_stop_marker("/tmp/direct111_tap_stop.state", line);
+}
+
+/* One active file plus 15 historical segments: at most 320 MiB on the SD.
+ * The writer thread owns rotation; CarPlay producer threads only enqueue. */
+static FILE *open_sd_log(const char *path) {
+    FILE *f;
+    if (!path) return NULL;
+    f = fopen(path, "a");
+    if (!f) return NULL;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
+    /* A pre-upgrade file may be unbounded. Do not keep it as a ring slot. */
+    if (ftell(f) > ALT_LOG_SD_SEGMENT_BYTES) {
+        fclose(f);
+        f = fopen(path, "w");
+    }
+    if (f && ftell(f) == 0)
+        (void)fprintf(f, "[ALTSCREEN] PHASE=HOOK_LOG_SEGMENT run_id=%s\n", altscreen_run_id());
+    return f;
+}
+
+static FILE *rotate_sd_log(FILE *current, const char *path) {
+    char history[ALTSCREEN_PATH_MAX + 16];
+    char candidate[ALTSCREEN_PATH_MAX + 16];
+    struct stat st;
+    int oldest_time = 0;
+    unsigned slot = 0u;
+    unsigned i;
+    int n;
+    if (!current || !path) return NULL;
+    fclose(current);
+    for (i = 0u; i < ALT_LOG_SD_HISTORY_SLOTS; ++i) {
+        n = snprintf(candidate, sizeof(candidate), "%s.%02u", path, i);
+        if (n <= 0 || (size_t)n >= sizeof(candidate)) return NULL;
+        if (stat(candidate, &st) != 0) { slot = i; break; }
+        if (i == 0u || st.st_mtime < oldest_time) {
+            oldest_time = st.st_mtime;
+            slot = i;
+        }
+    }
+    n = snprintf(history, sizeof(history), "%s.%02u", path, slot);
+    if (n <= 0 || (size_t)n >= sizeof(history)) return NULL;
+    (void)unlink(history);
+    if (rename(path, history) != 0) return NULL;
+    current = fopen(path, "w");
+    if (current)
+        (void)fprintf(current, "[ALTSCREEN] PHASE=HOOK_LOG_SEGMENT run_id=%s\n", altscreen_run_id());
+    return current;
+}
 
 /*
  * Cluster pixel geometry is deliberately unset here. The native adapter reads
@@ -92,9 +177,16 @@ static void *altscreen_log_writer(void *unused) {
     FILE *f = NULL;
     char line[ALT_LOG_LINE_BYTES];
     unsigned long reported_drops = 0;
+    int on_sd = 0;
+    unsigned long published_stop = 0;
     (void)unused;
     for (;;) {
         int have = 0;
+        unsigned long pending_stop = __sync_fetch_and_add(&g_tap_stop_events, 0UL);
+        if (pending_stop != published_stop) {
+            if (publish_tap_stop_marker(pending_stop)) published_stop = pending_stop;
+            else usleep(100000u);
+        }
         if (log_try_lock()) {
             if (g_log_tail != g_log_head) {
                 memcpy(line, g_log_queue[g_log_tail].line, sizeof(line));
@@ -107,13 +199,17 @@ static void *altscreen_log_writer(void *unused) {
             usleep(10000u);
             continue;
         }
-        if (!f) {
-            const char *volatile_path = altscreen_log_path();
-            const char *sd_path;
-            f = fopen(volatile_path, "a");
-            if (!f) {
-                sd_path = altscreen_sd_log_path();
-                if (sd_path && strcmp(sd_path, volatile_path) != 0) f = fopen(sd_path, "a");
+        if (!f || (!on_sd && (++g_log_sd_retry % 64u) == 0u)) {
+            const char *sd_path = altscreen_sd_log_path();
+            FILE *sd = open_sd_log(sd_path);
+            if (sd) {
+                if (f) fclose(f);
+                f = sd;
+                on_sd = 1;
+                g_log_limit_hit = 0;
+            } else if (!f) {
+                f = fopen(altscreen_log_path(), "a");
+                on_sd = 0;
             }
         }
         if (!f) {
@@ -124,18 +220,44 @@ static void *altscreen_log_writer(void *unused) {
             usleep(100000u);
             continue;
         }
-        if (g_log_limit_hit) {
+        if (!on_sd && g_log_limit_hit) {
             __sync_add_and_fetch(&g_log_dropped, 1UL);
             continue;
         }
-        if (ftell(f) >= ALT_LOG_MAX_BYTES) {
-            fprintf(f, "[ALTSCREEN] ERROR LOG_LIMIT_REACHED max_bytes=%ld run_id=%s evidence_incomplete=1\n",
-                    ALT_LOG_MAX_BYTES, altscreen_run_id());
-            fflush(f);
-            g_log_limit_hit = 1;
+        if (on_sd && ftell(f) + (long)strlen(line) >= ALT_LOG_SD_SEGMENT_BYTES) {
+            f = rotate_sd_log(f, altscreen_sd_log_path());
+            if (!f) {
+                on_sd = 0;
+                f = fopen(altscreen_log_path(), "a");
+            }
+        }
+        if (!f) {
+            __sync_add_and_fetch(&g_log_dropped, 1UL);
             continue;
         }
-        fputs(line, f);
+        if (!on_sd && ftell(f) >= ALT_LOG_TMP_MAX_BYTES) {
+            if (!g_log_limit_hit) {
+                fprintf(f, "[ALTSCREEN] ERROR LOG_LIMIT_REACHED max_bytes=%ld run_id=%s evidence_incomplete=1\n",
+                        ALT_LOG_TMP_MAX_BYTES, altscreen_run_id());
+                fflush(f);
+                g_log_limit_hit = 1;
+            }
+            __sync_add_and_fetch(&g_log_dropped, 1UL);
+            continue;
+        }
+        if (fputs(line, f) == EOF || fflush(f) == EOF) {
+            fclose(f);
+            f = NULL;
+            if (on_sd) {
+                on_sd = 0;
+                f = fopen(altscreen_log_path(), "a");
+                if (f && fputs(line, f) != EOF) (void)fflush(f);
+                else __sync_add_and_fetch(&g_log_dropped, 1UL);
+            } else {
+                __sync_add_and_fetch(&g_log_dropped, 1UL);
+            }
+            continue;
+        }
         if (g_log_dropped != reported_drops) {
             reported_drops = g_log_dropped;
             fprintf(f, "[ALTSCREEN] LOG_QUEUE_DROPPED total=%lu capacity=%u run_id=%s\n",
@@ -169,6 +291,12 @@ void altscreen_log(const char *fmt, ...) {
      * touching procfs, the SD card, pthread state, or the queue. The worker
      * re-reports every resolved binding after altscreen_init enables logging. */
     if (__sync_fetch_and_add(&g_log_accepting, 0u) == 0u) return;
+
+    /* This lifecycle signal is independent of the bounded evidence queue.
+     * Even when diagnostics are dropped, the async worker publishes a fresh
+     * marker without filesystem I/O on this producer thread. */
+    if (fmt && strstr(fmt, "PHASE=DIRECT111_TAP_STOP stream="))
+        __sync_add_and_fetch(&g_tap_stop_events, 1UL);
 
     /* Producers perform only bounded memory work. Disk latency and rotation are
      * isolated to altscreen_log_writer; contention/full queue increments a
@@ -209,8 +337,10 @@ void altscreen_init(void) {
     g_log_tail = 0;
     g_log_guard = 0;
     g_log_dropped = 0;
+    g_tap_stop_events = 0;
     g_log_thread_started = 0;
     g_log_limit_hit = 0;
+    g_log_sd_retry = 0;
     g_run_id_loaded = 0;
     g_run_id[0] = 0;
     (void)altscreen_prepare_volatile_root();
