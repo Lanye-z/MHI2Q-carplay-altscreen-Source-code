@@ -1,122 +1,78 @@
-# CarPlay private111 Direct Display V2 — READ FIRST
+# CarPlay private111 Direct Display — READ FIRST
 
-Branch: `carplay-private111-direct-display-v2`
+Branch: `main`
 
-## Final hardening applied — rebuild the QNX sidecar before vehicle use
+## Status
 
-The previous V2 QNX sidecar was successfully rebuilt and promoted, but a final
-static audit found additional lifecycle hardening that changes sidecar source:
-same-session abnormal recovery now requires **fresh decoded-frame progress**
-instead of trusting stale active flags, decoded-frame metadata must match the
-packed-tight NV12 ABI before rendering, normal reconnects use the repeated
-per-session `STREAM_111_REQUESTED=YES` gate, initial display creation requires
-two fresh frames from one SHM identity, and stale old-stream callbacks cannot
-switch producer ownership back to an old session.
+`main` was fast-forwarded from the vehicle-tested V2 line at commit
+`23b3d242248716c49d10812abb121f185e58b676` on 2026-09-20.
 
-Therefore the currently checked-in release ELF is intentionally marked stale
-until one more real QNX 6.5 ARMv7 rebuild is promoted.
+The modified V2 route has now achieved **confirmed physical Virtual Cockpit
+first-light**. The CarPlay private second-screen image was visible on the VC and
+followed the phone navigation image.
 
-Current expected metadata:
+Use `main` for all further development. The branch
+`carplay-private111-direct-display-v2` is retained as the known-good backup
+baseline. V1 is historical only.
 
-```text
-release_binary_status=V2_BINARY_STALE_HARDENING_REBUILD_REQUIRED
-vehicle_zip_status=NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED
-```
-
-## What is fixed in V2 source
-
-### 1. Decoded SHM SIGBUS hardening
-
-Both consumer map functions now:
+## Current proven route
 
 ```text
-shm_open
- -> fstat
- -> require st_size >= sizeof(expected SHM ABI)
- -> mmap
- -> validate magic/version/writer_pid
- -> retry if not ready
+CarPlay private type111
+  -> stock OMX
+  -> stock private renderer
+  -> Screen linearization
+  -> /carplay111_decoded
+  -> sidecar
+  -> CPU NV12 -> RGBA / GLES
+  -> displayable3
+  -> Java/HMI Context80
+  -> Virtual Cockpit
 ```
 
-The V2 crash location was in `map_frame()` at the
-`/carplay111_decoded` magic read, so decoded SHM is explicitly covered.
+Main110 remains outside this auxiliary display route.
 
-### 2. Producer reconnect/session reset
+## Vehicle-test observations
 
-A new private stream always resets the named SHM publication state, even if a
-new producer process again starts with numeric generation 1.
+The successful V2 run changes the project status from "software-chain only" to
+"physically proven on the vehicle".
 
-Session identity is no longer treated as generation alone:
+The current follow-up items are deliberately narrow:
+
+1. **Frame pacing / performance**
+   - Keep the working stock-OMX + Screen-linearizer route.
+   - The next optimization is to deliberately process every other decoded frame
+     ("skip one, read one") so Screen read/publish work is not attempted for
+     every rendered frame.
+   - Do not introduce a standalone decoder, `screen_blit`, or another display
+     architecture unless later evidence requires it.
+
+2. **Disconnect / stock-navigation cleanup**
+   - During one first-session disconnect, CarPlay returned to the stock map.
+   - No stock navigation route was active, but a navigation arrow
+     appeared/remained unexpectedly.
+   - Treat this as a lifecycle/state-cleanup issue around teardown and stock
+     navigation hand-back. It does not invalidate the proven private111 display
+     path.
+
+No other mandatory architecture change is currently established by the
+successful vehicle test.
+
+## Release identity
+
+The promoted V2 release metadata is the current baseline:
 
 ```text
-writer_pid + generation + stream_cookie
+release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2
+vehicle_zip_status=READY_FOR_VEHICLE_TEST
+v2_pending_hardening=none
 ```
 
-`writer_pid=0` is used during header transition and is published last after
-the new session header is ready.
+The older wording that the sidecar still required another QNX rebuild is no
+longer current for this promoted build.
 
-### 3. Same-session sidecar recovery
+## Development rule
 
-The launcher monitors abnormal sidecar exit before and after first present,
-with a bounded restart count.
-
-On an abnormal restart the sidecar may bypass an already-consumed phone gate
-**only after** validating an active, matching H264+decoded SHM session.
-Otherwise it waits for the next genuine `PHONE_REQUEST_111`.
-
-### 4. Raw vendor fallback removed
-
-A Screen readback failure never sends the original vendor OMX CPU pointer into
-`/carplay111_decoded`.
-
-Before first success it drops the auxiliary frame; after success it freezes the
-last good frame.
-
-### 5. Pixel and timing evidence
-
-The hook now logs separate readback and SHM-publish counts plus readback
-p50/p95/max latency.
-
-Optional diagnostic samples are off by default:
-
-```text
-ALT111_LINEARIZER_SAMPLE_NV12=1
-ALT111_CONSUMER_SAMPLE_NV12=1
-```
-
-Each writes at most three tight-NV12 frames under `/tmp`.
-
-## Architecture retained
-
-```text
-type111
- -> stock OMX
- -> stock renderer
- -> Screen linearizer
- -> /carplay111_decoded
- -> sidecar
- -> GLES / displayable3
- -> Java Context80
- -> VC
-```
-
-The MMI-proven displayable3/Java Context80 exit remains unchanged. The sidecar
-does not enumerate Window58 and does not call `screen_read_window`; readback
-remains in the private renderer hook.
-
-## Build after these source changes
-
-On a machine with the QNX 6.5 ARMv7 SDK:
-
-```sh
-./BUILD-MIRROR-QNX.sh
-```
-
-Then promote the resulting
-`Toolbox/carplay_alt_screen/mirror_display/build/carplay-alt111-mirror-display`
-to the release directory, change release status to
-`PRIVATE111_DIRECT_DISPLAY_V2`, refresh both SHA256 manifests, and rerun
-`VERIFY-NATIVE-DIRECT-RELEASE.sh`.
-
-Do not change the release status to vehicle-ready unless the rebuilt ELF
-contains the V2 markers checked by `build_qnx.sh`.
+Make future functional changes on `main` first. Keep changes small and
+observable so a regression can be compared directly against the V2 backup
+branch.
