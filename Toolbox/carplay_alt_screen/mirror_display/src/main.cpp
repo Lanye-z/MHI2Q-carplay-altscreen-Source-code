@@ -278,9 +278,9 @@ static bool state_kv_int(const char *line, const char *key, int *out) {
  * that translation.  Negative destination coordinates are intentionally left
  * to GLES clipping; there is no scale/crop-to-safe-area operation here.
  *
- * The hook independently compensates CarPlay safeArea into source coordinates,
- * so after this translation the phone's important UI lands in the measured
- * physical safe region.
+ * CarPlay safeArea remains map/source-local and moves with the full map plane.
+ * For Sport SMALL, source-safe x=490 plus renderer dx=-476 yields physical
+ * x=14; do not compensate the safeArea back toward the center.
  */
 static OemMapPlacement load_session_map_placement() {
     OemMapPlacement p;
