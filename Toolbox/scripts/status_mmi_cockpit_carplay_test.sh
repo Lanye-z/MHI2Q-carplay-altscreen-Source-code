@@ -31,8 +31,8 @@ JAVA_LOG="$DEVICE_ROOT/tmp/mmi-mirror-controller.log"
 MIRROR="$RUNTIME/bin/mirror"
 MIRROR_PID="$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/mirror/pid"
 MIRROR_LOG="$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/mirror/mirror.log"
-EXPECTED_SIZE=146356
-EXPECTED_CKSUM=825436705
+EXPECTED_SIZE=147236
+EXPECTED_CKSUM=1949776649
 
 file_size(){ n=$(wc -c < "$1" 2>/dev/null) || { echo 0; return; }; set -- $n; echo "${1:-0}"; }
 file_cksum(){ if command -v cksum >/dev/null 2>&1; then cksum < "$1" 2>/dev/null | awk '{print $1}'; else echo unavailable; fi; }
