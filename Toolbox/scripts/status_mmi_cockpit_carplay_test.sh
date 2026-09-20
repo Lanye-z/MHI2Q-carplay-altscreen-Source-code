@@ -34,6 +34,20 @@ OEM_DISPLAYMANAGER_API="$DEVICE_ROOT/tmp/carplay-oem-displaymanager-read-api.log
 MIRROR="$RUNTIME/bin/mirror"
 MIRROR_PID="$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/mirror/pid"
 MIRROR_LOG="$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/mirror/mirror.log"
+SD_VOLUME=""
+if [ "$TESTING" = 1 ]; then
+    SD_VOLUME=${ALTSCREEN_CHAIN_VOLUME:-}
+else
+    for candidate in /net/mmx/fs/sda0 /net/mmx/fs/sda1 /net/mmx/fs/sdb0 /net/mmx/fs/sdb1 /fs/sda0 /fs/sda1 /fs/sdb0 /fs/sdb1; do
+        [ -d "$candidate/Toolbox" ] && [ -d "$candidate/MMI-Cockpit-Carplay/state" ] && { SD_VOLUME=$candidate; break; }
+    done
+fi
+if [ -n "$SD_VOLUME" ]; then
+    recent=$(ls -t "$SD_VOLUME/MMI-Cockpit-Carplay/logs/mirror.log" "$MIRROR_LOG" 2>/dev/null | head -n 1)
+    [ -z "$recent" ] || MIRROR_LOG=$recent
+    recent=$(ls -t "$SD_VOLUME/MMI-Cockpit-Carplay/logs/mmi-mirror-controller.log" "$JAVA_LOG" 2>/dev/null | head -n 1)
+    [ -z "$recent" ] || JAVA_LOG=$recent
+fi
 EXPECTED_SIZE=147443
 EXPECTED_CKSUM=211533722
 
@@ -74,9 +88,11 @@ fi
 [ -x "$MIRROR/carplay-alt111-mirror-display" ] && echo "DIRECT_DISPLAY_BINARY=INSTALLED" || echo "DIRECT_DISPLAY_BINARY=MISSING"
 
 HOOK_LOG=""
-for candidate in "$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/altscreen_hook.log" "$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay.altscreen_hook.log" "$DEVICE_ROOT/tmp/altscreen_hook.log"; do
-    [ -f "$candidate" ] && { HOOK_LOG=$candidate; break; }
-done
+if [ -n "$SD_VOLUME" ]; then
+    HOOK_LOG=$(ls -t "$SD_VOLUME/MMI-Cockpit-Carplay/logs/altscreen_hook.log" "$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/altscreen_hook.log" "$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay.altscreen_hook.log" "$DEVICE_ROOT/tmp/altscreen_hook.log" 2>/dev/null | head -n 1)
+else
+    HOOK_LOG=$(ls -t "$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/altscreen_hook.log" "$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay.altscreen_hook.log" "$DEVICE_ROOT/tmp/altscreen_hook.log" 2>/dev/null | head -n 1)
+fi
 
 H264_SHM=0
 FRAME_SHM=0
@@ -181,7 +197,8 @@ else
     echo "JAVA_CTX80_ACTUAL=UNKNOWN log_missing=1"
 fi
 
-# OEM layout observer is intentionally diagnostic-only in this branch.
+
+# OEM layout observer remains diagnostic-only on this branch.
 echo "OEM_LAYOUT_OBSERVER_MODE=OBSERVE_ONLY apply_to_carplay=0 apply_to_renderer=0"
 if [ -f "$OEM_GEOMETRY_STATE" ]; then
     echo "OEM_GEOMETRY_STATE_BEGIN"
