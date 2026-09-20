@@ -44,7 +44,8 @@ jobs:
           STUB=Toolbox/carplay_alt_screen/hmi/stubs/de/audi/atip/base/IFrameworkAccess.java
           BUILD="$RUNNER_TEMP/oem-layout-observer-v1"
           MAIN_CLASS=com/luka/carplay/cluster/ClusterStateController.class
-          INNER_CLASS='com/luka/carplay/cluster/ClusterStateController$1.class'
+          INNER_CLASS_1='com/luka/carplay/cluster/ClusterStateController$1.class'
+          INNER_CLASS_2='com/luka/carplay/cluster/ClusterStateController$2.class'
 
           rm -rf "$BUILD"
           mkdir -p "$BUILD/classes"
@@ -54,7 +55,10 @@ jobs:
 
           unzip -Z1 "$JAR" > "$BUILD/jar-list.txt"
           grep -Fxq "$MAIN_CLASS" "$BUILD/jar-list.txt"
-          grep -Fxq "$INNER_CLASS" "$BUILD/jar-list.txt"
+          grep -Fxq "$INNER_CLASS_1" "$BUILD/jar-list.txt"
+          # $2 is introduced by the asynchronous diagnostics writer in the
+          # merged logging source and is expected after rebuild, not necessarily
+          # in the pre-migration JAR.
           if grep -Eq 'META-INF/.*\.(SF|RSA|DSA)$' "$BUILD/jar-list.txt"; then
             echo 'ERROR: refusing to update signed JAR' >&2
             exit 1
@@ -68,7 +72,8 @@ jobs:
             -d "$BUILD/classes" "$STUB" "$SRC"
 
           test -s "$BUILD/classes/$MAIN_CLASS"
-          test -s "$BUILD/classes/$INNER_CLASS"
+          test -s "$BUILD/classes/$INNER_CLASS_1"
+          test -s "$BUILD/classes/$INNER_CLASS_2"
 
           javap -classpath "$BUILD/classes" -public -s \
             com.luka.carplay.cluster.ClusterStateController \
@@ -116,7 +121,8 @@ jobs:
           cp "$JAR" "$BUILD/carplay_hook-basevideo3.jar"
           jar uf "$BUILD/carplay_hook-basevideo3.jar" \
             -C "$BUILD/classes" "$MAIN_CLASS" \
-            -C "$BUILD/classes" "$INNER_CLASS"
+            -C "$BUILD/classes" "$INNER_CLASS_1" \
+            -C "$BUILD/classes" "$INNER_CLASS_2"
 
           python3 - "$BUILD/carplay_hook-basevideo3.jar" <<'PY'
           import collections
@@ -128,6 +134,7 @@ jobs:
           targets = [
               "com/luka/carplay/cluster/ClusterStateController.class",
               "com/luka/carplay/cluster/ClusterStateController$1.class",
+              "com/luka/carplay/cluster/ClusterStateController$2.class",
           ]
           markers = [
               b"OEM_GEOMETRY_OBSERVER",
@@ -139,6 +146,8 @@ jobs:
               b"ListModel176 geometry failed sanity check",
               b"list_model_class=",
               b"UNRESOLVED_NAVIGATIONENV_SEAM",
+              b"DIAG_QUEUE_DROPPED",
+              b"mmi-mirror-diagnostics",
           ]
 
           with zipfile.ZipFile(jar) as zf:
@@ -219,6 +228,8 @@ jobs:
               "oem_geometry_policy": "OBSERVE_ONLY_NO_CARPLAY_OR_RENDERER_APPLY",
               "oem_geometry_source": "K1004_LISTMODEL176_ROW1",
               "oem_geometry_build_status": "COMPILED_OBSERVER_READY",
+              "logging_build_status": "COMPILED_HMI_READY",
+              "diag_logging": "ASYNC_BOUNDED_QUEUE_SD_RING_TMP_FALLBACK",
           }
           for key, value in updates.items():
               pattern = r"^" + re.escape(key) + r"=.*$"
@@ -334,6 +345,9 @@ jobs:
           grep -Fq 'if (compositeApplied)' "$SRC"
           grep -Fq 'lastOemGeometrySignature = signature' "$SRC"
           grep -Fq 'catch (Throwable ignored)' "$SRC"
+          grep -Fq 'DIAG_QUEUE_DROPPED' "$SRC"
+          grep -Fq 'SD_DIAG_SEGMENT_BYTES' "$SRC"
+          grep -Fq 'mmi-mirror-diagnostics' "$SRC"
 
           python3 - "$SRC" "$INFO" <<'PY'
           import pathlib
@@ -372,6 +386,8 @@ jobs:
               raise SystemExit("ERROR: HMI mode metadata is not V2")
           if values.get("oem_geometry_build_status") != "COMPILED_OBSERVER_READY":
               raise SystemExit("ERROR: observer build status is not ready")
+          if values.get("logging_build_status") != "COMPILED_HMI_READY":
+              raise SystemExit("ERROR: HMI logging build status is not ready")
           if values.get("oem_geometry_policy") != "OBSERVE_ONLY_NO_CARPLAY_OR_RENDERER_APPLY":
               raise SystemExit("ERROR: observer policy drift")
 
@@ -453,6 +469,12 @@ jobs:
               % (expected_size, expected_cksum)
           )
           PY
+
+          # Upstream logging fixtures: SD rotation/fallback, TAP_STOP marker
+          # semantics, and decoded SHM v2 timing math.
+          sh Toolbox/carplay_alt_screen/tests/test_log_ring.sh
+          sh Toolbox/carplay_alt_screen/tests/test_stop_marker_watch.sh
+          sh Toolbox/carplay_alt_screen/tests/test_frame_telemetry.sh
 
           # Re-run the complete proven V2 native/display/session contract.
           sh VERIFY-NATIVE-DIRECT-RELEASE.sh
