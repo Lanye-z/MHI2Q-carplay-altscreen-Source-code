@@ -20,6 +20,7 @@ extern long ftell(FILE *stream);
 extern int snprintf(char *s, size_t n, const char *fmt, ...);
 extern int vsnprintf(char *s, size_t n, const char *fmt, __builtin_va_list ap);
 extern int sprintf(char *s, const char *fmt, ...);
+extern int rename(const char *old_path, const char *new_path);
 extern FILE *popen(const char *command, const char *mode);
 extern int pclose(FILE *stream);
 /* Standard streams are intentionally undeclared: a null FILE* is not a QNX
