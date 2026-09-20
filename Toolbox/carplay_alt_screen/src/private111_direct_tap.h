@@ -19,10 +19,8 @@ void p111_h264_tap_write(void *stream, const void *data, size_t bytes);
 /* Publish a known-linear NV12 frame into /carplay111_decoded.
  * Returns non-zero only when a new SHM frame was actually committed. */
 int p111_frame_tap_write(void *stream, const unsigned char *buffer,
-                          uint32_t width, uint32_t height,
-                          uint32_t format, uint32_t usage,
-                          uint32_t render_us32, uint32_t readback_us,
-                          uint32_t h264_rx_us32, uint32_t h264_seq);
+                         uint32_t width, uint32_t height,
+                         uint32_t format, uint32_t usage);
 
 /*
  * V2 preferred path. Call this only after stock CScreenRender::render() has

@@ -1,99 +1,117 @@
 # 上车前请先阅读
 
-当前分支：`experiment/oem-layout-second-screen`
+当前分支：`main`
 
-## 当前用途
+## 当前定位
 
-本分支基于已经实车点亮的 V2 显示链，同时叠加两组**尚待统一编译和实车验证**的增强：
+`main` 是现在唯一的正式开发主线。
 
-1. `OEM_LAYOUT_OBSERVER_V1`：只读采集原厂 ListModel176 / Layout / DisplayManager 几何证据，不应用到 CarPlay 或 renderer。
-2. yuedizhibo 日志与遥测增强：SD 优先的有界日志、逐帧 decode/present 时间、60 秒链路健康统计、独立 TAP_STOP 状态标记和日志轮转。
+它已经同步到 2026-09-19 实车成功点亮的 V2 路线，并在此基础上继续处理后续优化和生命周期问题。
 
-## 显示链保持不变
+目前已经实车确认：
+
+- CarPlay private type111 第二屏能够建立；
+- 原车 OMX 能够继续作为解码器使用；
+- 原车 private renderer 后的画面能够通过 QNX Screen 读取并线性化；
+- `/carplay111_decoded` 能够向 sidecar 提供标准 NV12；
+- GLES / displayable3 能够完成仪表画面输出；
+- Java/HMI Context80 能够接管并显示到 Virtual Cockpit；
+- 仪表画面会随手机端 CarPlay 导航内容变化。
+
+## 当前显示路线
 
 ```text
 private type111
-→ stock OMX
-→ stock private renderer
-→ QNX Screen linearizer
-→ /carplay111_decoded (SHM v2)
-→ sidecar
-→ CPU NV12→RGBA
-→ GLES / displayable3
-→ Java Context80
-→ Virtual Cockpit
+  → 原车 OMX
+  → 原车 private renderer
+  → QNX Screen 线性化
+  → /carplay111_decoded
+  → sidecar
+  → CPU NV12 → RGBA
+  → GLES / displayable3
+  → Java Context80
+  → Virtual Cockpit
 ```
 
-Main110 仍保持原车路径。
+Main110 保持原车路径，不经过上述辅助显示链路。
 
-## 帧率策略
+## 上车测试顺序
 
-当前必须保持：
+建议严格按照以下顺序：
 
 ```text
-producer / Screen readback: uncapped source callbacks
-sidecar presentation:       30 fps
+iPhone 保持断开
+        ↓
+INSTALL
+        ↓
+完整重启车机
+        ↓
+START
+        ↓
+再次完整重启车机
+        ↓
+连接 iPhone / CarPlay
+        ↓
+启动支持仪表第二屏的导航路线
+        ↓
+观察 Virtual Cockpit
+        ↓
+STATUS
+        ↓
+保存日志
 ```
 
-禁止重新引入 `P111_LINEARIZER_TARGET_INTERVAL_US`、`next_readback_due_us` 或 `rate_limit_skips` 一类 producer 限速器。
+不要在一次测试中同时加入新的 decoder、`screen_blit`、新的 Context 或新的显示出口。
 
-## 新增日志
+## 当前两个主要待办
 
-SD 优先写入：
+### 1. 隔一帧读一帧
+
+现阶段优先降低辅助显示链路的 Screen 读取频率。
+
+目标是：
 
 ```text
-MMI-Cockpit-Carplay/logs/altscreen_hook.log*
-MMI-Cockpit-Carplay/logs/mirror.log*
-MMI-Cockpit-Carplay/logs/mmi-mirror-controller.log*
-MMI-Cockpit-Carplay/logs/boots/
+原车每帧照常显示
+我们的辅助链路只处理 1、3、5、7... 帧
 ```
 
-关键遥测：
+这样可以减少 Screen readback、SHM 发布、CSC 和 GLES 的额外负载。
+
+### 2. CarPlay 断开后原车导航箭头残留
+
+一次测试中出现：
+
+- CarPlay 已断开；
+- 仪表已经回到原车地图；
+- 原车没有活动导航；
+- 但仪表仍出现导航箭头。
+
+后续重点检查 teardown、Context 释放以及原车导航状态恢复过程。
+
+## 成功标记
+
+日志中应尽量看到：
 
 ```text
-FRAME_DECODE_TIMING
-FRAME_PRESENT_TIMING
-FRAME_CHAIN_HEALTH
-LOG_QUEUE_DROPPED
-DIAG_QUEUE_DROPPED
-PHASE=HOOK_LOG_SEGMENT
+PHASE=FRAME_LINEARIZER_FIRST_FRAME
+PHASE=FRAME_LINEARIZER_PROGRESS
+PHASE=DECODED_SHM_ATTACHED
+PHASE=DECODER_FIRST_FRAME
+PHASE=DISPLAYABLE3_FIRST_PRESENT result=OK
+CTX80_OBSERVED actual=80
+PHASE=DIRECT111_ACTIVE
+PHYSICAL_ROUTE_READY=SOFTWARE_CHAIN_COMPLETE
 ```
 
-生命周期停止不再依赖扫描大日志，而使用 `direct111_tap_stop.state` 的原子状态变化。
+最终判据仍然是：
 
-详细设计见：
+> Virtual Cockpit 实际出现正确的 CarPlay 第二屏画面。
 
-- `Toolbox/carplay_alt_screen/LOGGING_DESIGN.md`
-- `Toolbox/carplay_alt_screen/LOGGING_STATIC_ANALYSIS.md`
-- `OEM-LAYOUT-OBSERVER-V1.md`
+## 分支说明
 
-## OEM observer
+- `main`：当前开发主线；
+- `carplay-private111-direct-display-v2`：首次实车成功点亮备份；
+- `carplay-private111-direct-display-v1`：历史实验分支。
 
-本分支仍保持：
-
-```text
-apply_to_carplay=0
-apply_to_renderer=0
-```
-
-因此当前版本**不会**根据原厂 geometry 改变 CarPlay safeArea、viewArea、displayable3 位置或视频尺寸。
-
-## 当前发布状态
-
-源码已经完成日志增强与 OEM observer 的融合，但二进制尚未统一重建。
-
-预期当前状态为：
-
-```text
-HMI:
-oem_geometry_build_status=SOURCE_CHANGED_REBUILD_REQUIRED
-logging_build_status=SOURCE_CHANGED_REBUILD_REQUIRED
-
-QNX:
-release_binary_status=V2_BINARY_STALE_LOGGING_REBUILD_REQUIRED
-vehicle_zip_status=NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED
-```
-
-**此状态下不要下载 ZIP 上车。**
-
-下一步应先重建 Java 1.2 HMI JAR，再重建 QNX hook/sidecar，刷新全部 size/cksum/SHA256 和 manifest，最后运行 `VERIFY-NATIVE-DIRECT-RELEASE.sh`。
+出现回归时，优先和 V2 备份分支对比。

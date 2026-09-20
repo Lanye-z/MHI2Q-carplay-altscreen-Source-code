@@ -35,8 +35,8 @@ JAR_TARGET="$DEVICE_ROOT/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar"
 JAR_TARGET_DIR=$(dirname -- "$JAR_TARGET")
 BACKUP="$VOLUME/MMI-Cockpit-Carplay/backup/basevideo3-hmi-original"
 BACKUP_TMP="$BACKUP.new.$$"
-EXPECTED_SIZE=151141
-EXPECTED_CKSUM=2709689163
+EXPECTED_SIZE=147443
+EXPECTED_CKSUM=211533722
 
 [ -f "$CONTROLLER" ] || { echo "FAIL: chain controller missing: $CONTROLLER"; exit 127; }
 [ -s "$JAR_SOURCE" ] || { echo "FAIL: Java80 HMI JAR missing: $JAR_SOURCE"; exit 1; }
@@ -44,7 +44,7 @@ EXPECTED_CKSUM=2709689163
 grep -Fq 'oem_geometry_build_status=COMPILED_OBSERVER_READY' "$HMI_INFO" 2>/dev/null || {
     echo "FAIL: OEM observer source/JAR is not a compiled matched pair"
     grep -E '^(oem_geometry_build_status|jar_size|jar_cksum|jar_sha256)=' "$HMI_INFO" 2>/dev/null || true
-    echo "ACTION=RUN_COMBINED_LOGGING_OEM_BUILD_BEFORE_INSTALL"
+    echo "ACTION=RUN_OEM_LAYOUT_OBSERVER_BUILD_BEFORE_INSTALL"
     exit 1
 }
 [ -s "$MIRROR_INFO" ] || { echo "FAIL: V2 Mirror BUILD_INFO missing: $MIRROR_INFO"; exit 1; }

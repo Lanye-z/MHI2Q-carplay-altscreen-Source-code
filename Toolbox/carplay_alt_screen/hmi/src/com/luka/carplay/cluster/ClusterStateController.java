@@ -36,9 +36,6 @@ public final class ClusterStateController {
 
     private static final long POLL_MS = 100L;
     private static final long OEM_PROBE_MS = 500L;
-    private static final long OWNERSHIP_PROBE_MS = 500L;
-    private static final long OWNERSHIP_HEARTBEAT_MS = 10000L;
-    private static final long DISPLAYABLE_STATE_STALE_MS = 3000L;
     private static final long RECONCILE_MS = 250L;
     private static final long BOUNCE_MS = 180L;
     private static final long VERIFY_STEP_MS = 50L;
@@ -46,8 +43,6 @@ public final class ClusterStateController {
     private static final long CIRCUIT_BREAKER_MS = 2000L;
     private static final int CONTEXT_FAILURE_LIMIT = 3;
     private static final long DIAG_MAX_BYTES = 131072L;
-    private static final long SD_DIAG_SEGMENT_BYTES = 8L * 1024L * 1024L;
-    private static final int SD_DIAG_HISTORY = 3;
 
     private static final String HMI_STATE_FILE = "/tmp/mmi-mirror-hmi.state";
     /*
@@ -71,25 +66,13 @@ public final class ClusterStateController {
     private static final int OEM_MISSING = Integer.MIN_VALUE;
     private static final String BASEVIDEO_ACTIVE_FILE = "/tmp/mmi-mirror-active";
     private static final String BASEVIDEO_READY_FILE = "/tmp/mmi-mirror-basevideo.ready";
-    private static final String DISPLAYABLE3_STATE_FILE =
-        "/tmp/mmi-mirror-displayable3.state";
     private static final String CONTEXT_MODE_FILE = "/tmp/mmi-mirror-context.mode";
     private static final String STARTED_FILE = "/tmp/mmi-mirror-controller.started";
     private static final String DIAG_FILE = "/tmp/mmi-mirror-controller.log";
-    private static final String[] SD_VOLUMES = {
-        "/net/mmx/fs/sda0", "/net/mmx/fs/sda1",
-        "/net/mmx/fs/sdb0", "/net/mmx/fs/sdb1",
-        "/fs/sda0", "/fs/sda1", "/fs/sdb0", "/fs/sdb1"
-    };
     private static final String MODE_JAVA80 = "JAVA80";
 
     private static final Object LOCK = new Object();
     private static final Object DIAG_LOCK = new Object();
-    private static final byte[][] DIAG_QUEUE = new byte[128][];
-    private static int diagHead;
-    private static int diagTail;
-    private static boolean diagWriterStarted;
-    private static int diagDropped;
 
     private static volatile IFrameworkAccess frameworkAccess;
     private static volatile Thread worker;
@@ -106,11 +89,8 @@ public final class ClusterStateController {
     private static String lastOemGeometrySignature = "";
     private static String lastOemProbeStatus = "";
     private static String lastOemModelAccess = "UNRESOLVED";
-    private static String lastOwnershipSignature = "";
     private static long oemGeometryRevision;
     private static long lastOemProbeMs;
-    private static long lastOwnershipProbeMs;
-    private static long lastOwnershipHeartbeatMs;
     private static long lastReconcileMs;
     private static boolean displayManagerApiProbed;
     private static int contextWriteFailures;
@@ -199,122 +179,11 @@ public final class ClusterStateController {
                  * ctx80 acquisition/reconcile.
                  */
                 pollContextPolicy();
-                pollOwnershipDiagnostics();
                 pollHmiState();
             } catch (Throwable t) {
                 diag("ERROR poll failed: " + describe(t));
             }
             sleep(POLL_MS);
-        }
-    }
-
-    /*
-     * COLD_START_OWNERSHIP_DIAG_V1
-     *
-     * Observation only.  This correlates Java's terminal1 Context80 view with
-     * the sidecar's read-only displayable3 snapshot.  It deliberately does not
-     * gate Private111, switch any additional context, enumerate Screen windows,
-     * or reapply displayable3.  The collected evidence is intended to choose a
-     * future OEM_READY predicate and to distinguish Context drift from a
-     * displayable/layer ownership loss.
-     */
-    private static void pollOwnershipDiagnostics() {
-        long now = nowMs();
-        if (lastOwnershipProbeMs != 0L
-            && now - lastOwnershipProbeMs < OWNERSHIP_PROBE_MS)
-            return;
-        lastOwnershipProbeMs = now;
-
-        Object dm = displayManager();
-        int actual = currentContext(dm);
-        boolean baseActive = new File(BASEVIDEO_ACTIVE_FILE).exists();
-        boolean baseReady = new File(BASEVIDEO_READY_FILE).exists();
-
-        String state = readSmallState(DISPLAYABLE3_STATE_FILE, 4096);
-        long stateTs = stateLong(state, "timestamp_ms", -1L);
-        long stateAge = stateTs >= 0L && now >= stateTs ? now - stateTs : -1L;
-        int backendReady = (int)stateLong(state, "backend_ready", -1L);
-        int nativePresent = (int)stateLong(state, "native_window_present", -1L);
-        int visibleValid = (int)stateLong(state, "visible_valid", -1L);
-        int visible = (int)stateLong(state, "visible", -1L);
-        int firstPresent = (int)stateLong(state, "first_present", -1L);
-        long presented = stateLong(state, "presented_frames", -1L);
-        long generation = stateLong(state, "generation", -1L);
-        long sequence = stateLong(state, "sequence", -1L);
-        String nativeWindow = stateValue(state, "native_window", "?");
-        String kdWindow = stateValue(state, "kd_window", "?");
-        String manager = stateValue(state, "manager", "?");
-        boolean stale = state.length() == 0
-            || stateAge < 0L || stateAge > DISPLAYABLE_STATE_STALE_MS;
-
-        String signature =
-            actual + "/" + (ownershipIntent ? "1" : "0")
-            + "/" + (compositeApplied ? "1" : "0")
-            + "/" + (carPlaySessionActive ? "1" : "0")
-            + "/" + (rgiPresentationActive ? "1" : "0")
-            + "/" + (baseActive ? "1" : "0")
-            + "/" + (baseReady ? "1" : "0")
-            + "/" + backendReady + "/" + nativePresent
-            + "/" + visibleValid + "/" + visible
-            + "/" + firstPresent + "/" + nativeWindow
-            + "/" + kdWindow + "/" + manager
-            + "/" + generation + "/" + sequence
-            + "/" + oemGeometryRevision
-            + "/" + lastOemProbeStatus;
-
-        boolean changed = !signature.equals(lastOwnershipSignature);
-        boolean heartbeat = lastOwnershipHeartbeatMs == 0L
-            || now - lastOwnershipHeartbeatMs >= OWNERSHIP_HEARTBEAT_MS;
-        if (!changed && !heartbeat) return;
-
-        if (changed) lastOwnershipSignature = signature;
-        if (heartbeat) lastOwnershipHeartbeatMs = now;
-
-        diag("OWNERSHIP_SNAPSHOT reason=" + (changed ? "change" : "heartbeat")
-            + " ctx=" + actual + " desired=80"
-            + " ownership=" + (ownershipIntent ? "1" : "0")
-            + " composite=" + (compositeApplied ? "1" : "0")
-            + " cp=" + (carPlaySessionActive ? "1" : "0")
-            + " rgi=" + (rgiPresentationActive ? "1" : "0")
-            + " base=" + (baseActive ? "1" : "0")
-            + "/" + (baseReady ? "1" : "0")
-            + " display_state_age_ms=" + stateAge
-            + " display_state_stale=" + (stale ? "1" : "0")
-            + " backend_ready=" + backendReady
-            + " native_present=" + nativePresent
-            + " native=" + nativeWindow
-            + " kd=" + kdWindow
-            + " visible_valid=" + visibleValid
-            + " visible=" + visible
-            + " first_present=" + firstPresent
-            + " presented=" + presented
-            + " gen=" + generation
-            + " seq=" + sequence
-            + " manager=" + sanitizeStateValue(manager)
-            + " oem_rev=" + oemGeometryRevision
-            + " oem_status=" + sanitizeStateValue(lastOemProbeStatus)
-            + " observe_only=1");
-
-        if (changed && compositeApplied && actual >= 0
-            && actual != CTX_COMPOSITE) {
-            diag("OWNERSHIP_SUSPECT kind=CONTEXT_DRIFT"
-                + " actual=" + actual + " desired=80"
-                + " display_visible=" + visible
-                + " gen=" + generation + " seq=" + sequence);
-        }
-        if (changed && compositeApplied && actual == CTX_COMPOSITE
-            && visibleValid == 1 && visible == 0) {
-            diag("OWNERSHIP_SUSPECT kind=CTX80_WITH_DISPLAYABLE_HIDDEN"
-                + " actual=80 display_visible=0"
-                + " native=" + nativeWindow + " kd=" + kdWindow
-                + " gen=" + generation + " seq=" + sequence);
-        }
-        if (changed && compositeApplied && stale) {
-            diag("OWNERSHIP_SUSPECT kind=DISPLAYABLE_STATE_STALE"
-                + " actual=" + actual
-                + " state_age_ms=" + stateAge
-                + " base=" + (baseActive ? "1" : "0")
-                + "/" + (baseReady ? "1" : "0"));
         }
     }
 
@@ -1215,50 +1084,6 @@ public final class ClusterStateController {
         diag("observer: " + status);
     }
 
-    private static String readSmallState(String path, int maxBytes) {
-        FileInputStream in = null;
-        try {
-            File f = new File(path);
-            if (!f.exists() || maxBytes <= 0) return "";
-            in = new FileInputStream(f);
-            byte[] buf = new byte[maxBytes];
-            int n = in.read(buf);
-            in.close();
-            in = null;
-            if (n <= 0) return "";
-            return new String(buf, 0, n, "UTF-8");
-        } catch (Throwable t) {
-            try { if (in != null) in.close(); } catch (Throwable ignored) {}
-            return "";
-        }
-    }
-
-    private static String stateValue(String text, String key,
-                                     String fallback) {
-        if (text == null || key == null) return fallback;
-        String prefix = key + "=";
-        int from = 0;
-        while (from < text.length()) {
-            int end = text.indexOf('\n', from);
-            if (end < 0) end = text.length();
-            if (text.startsWith(prefix, from)) {
-                String value = text.substring(from + prefix.length(), end);
-                return sanitizeStateValue(value);
-            }
-            from = end + 1;
-        }
-        return fallback;
-    }
-
-    private static long stateLong(String text, String key, long fallback) {
-        try {
-            return Long.parseLong(stateValue(text, key,
-                                            Long.toString(fallback)));
-        } catch (Throwable ignored) {
-            return fallback;
-        }
-    }
-
     private static String readContextMode() {
         BufferedReader reader = null;
         try {
@@ -1295,128 +1120,25 @@ public final class ClusterStateController {
         }
     }
 
-    private static File sdDiagFile() {
-        for (int i = 0; i < SD_VOLUMES.length; ++i) {
-            String root = SD_VOLUMES[i];
-            if (new File(root + "/Toolbox").isDirectory()
-                && new File(root + "/MMI-Cockpit-Carplay/state").isDirectory()
-                && new File(root + "/MMI-Cockpit-Carplay/logs").isDirectory())
-                return new File(root
-                    + "/MMI-Cockpit-Carplay/logs/mmi-mirror-controller.log");
-        }
-        return null;
-    }
-
-    private static boolean appendDiag(File file, byte[] line,
-                                      long limit, int history) {
-        FileOutputStream out = null;
-        try {
-            if (history > 0 && file.exists() && file.length() > limit) {
-                /*
-                 * Discard an oversized log left by an older unbounded build
-                 * before entering the bounded rotation contract.
-                 */
-                out = new FileOutputStream(file, false);
-                out.close();
-                out = null;
-            }
-            if (file.exists() && file.length() + line.length > limit) {
-                if (history == 0) {
-                    out = new FileOutputStream(file, false);
-                    out.write(("--- log reset at " + nowMs() + " ---\n")
-                        .getBytes("UTF-8"));
-                    out.close();
-                    out = null;
-                } else {
-                    for (int i = history - 1; i >= 0; --i) {
-                        File from = i == 0
-                            ? file
-                            : new File(file.getPath() + "." + (i - 1));
-                        File to = new File(file.getPath() + "." + i);
-                        if (!from.exists()) continue;
-                        if (to.exists() && !to.delete()) return false;
-                        if (!from.renameTo(to)) return false;
-                    }
-                }
-            }
-            out = new FileOutputStream(file, true);
-            out.write(line);
-            out.close();
-            return true;
-        } catch (Throwable ignored) {
-            try { if (out != null) out.close(); } catch (Throwable ignored2) {}
-            return false;
-        }
-    }
-
-    /*
-     * Diagnostics are evidence only.  The Context80/OEM observer thread only
-     * enqueues a bounded line; all SD discovery, rotation and file I/O happen
-     * on the daemon writer so logging failure cannot block the display policy.
-     */
     private static void diag(String text) {
-        try {
-            if (text != null && text.length() > 2048)
-                text = text.substring(0, 2048);
-            byte[] line = (nowMs() + " " + text + "\n").getBytes("UTF-8");
-            synchronized (DIAG_LOCK) {
-                if (!diagWriterStarted) {
-                    Thread writer = new Thread(new Runnable() {
-                        public void run() { diagWriteLoop(); }
-                    }, "mmi-mirror-diagnostics");
-                    writer.setDaemon(true);
-                    writer.start();
-                    diagWriterStarted = true;
-                }
-                int next = (diagHead + 1) % DIAG_QUEUE.length;
-                if (next == diagTail) {
-                    ++diagDropped;
-                    return;
-                }
-                DIAG_QUEUE[diagHead] = line;
-                diagHead = next;
-                DIAG_LOCK.notifyAll();
-            }
-        } catch (Throwable ignored) {}
-    }
-
-    private static void diagWriteLoop() {
-        for (;;) {
-            byte[] line;
-            int dropped;
-            synchronized (DIAG_LOCK) {
-                while (diagTail == diagHead) {
-                    try {
-                        DIAG_LOCK.wait();
-                    } catch (InterruptedException ignored) {}
-                }
-                line = DIAG_QUEUE[diagTail];
-                DIAG_QUEUE[diagTail] = null;
-                diagTail = (diagTail + 1) % DIAG_QUEUE.length;
-                dropped = diagDropped;
-                diagDropped = 0;
-            }
-            if (dropped > 0) {
-                try {
-                    writeDiagLine((nowMs()
-                        + " DIAG_QUEUE_DROPPED count=" + dropped + "\n")
+        synchronized (DIAG_LOCK) {
+            FileOutputStream out = null;
+            try {
+                File f = new File(DIAG_FILE);
+                if (f.exists() && f.length() > DIAG_MAX_BYTES) {
+                    FileOutputStream reset = new FileOutputStream(f, false);
+                    reset.write(("--- log reset at " + nowMs() + " ---\n")
                         .getBytes("UTF-8"));
-                } catch (Throwable ignored) {}
+                    reset.close();
+                }
+                out = new FileOutputStream(f, true);
+                String line = nowMs() + " " + text + "\n";
+                out.write(line.getBytes("UTF-8"));
+                out.close();
+            } catch (Throwable ignored) {
+                try { if (out != null) out.close(); } catch (Throwable ignored2) {}
             }
-            writeDiagLine(line);
         }
-    }
-
-    private static void writeDiagLine(byte[] line) {
-        if (line == null) return;
-        try {
-            File sd = sdDiagFile();
-            if (sd != null
-                && appendDiag(sd, line, SD_DIAG_SEGMENT_BYTES,
-                              SD_DIAG_HISTORY))
-                return;
-            appendDiag(new File(DIAG_FILE), line, DIAG_MAX_BYTES, 0);
-        } catch (Throwable ignored) {}
     }
 
     private static String describe(Throwable t) {

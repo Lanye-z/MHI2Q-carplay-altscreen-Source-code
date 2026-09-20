@@ -48,41 +48,21 @@ capture() (
     [ -f "$source" ] || exit 0
     offset=0; seq=0; old_inode=""
     if [ -f "$LIVE/$name.cursor" ]; then read -r offset seq old_inode < "$LIVE/$name.cursor"; fi
-    target="$LIVE/${name}_${seq}.log"
     size=$(wc -c < "$source")
     inode=$(ls -i "$source" | awk '{print $1}')
     if [ "$offset" -gt "$size" ] || { [ -n "$old_inode" ] && [ "$inode" != "$old_inode" ]; }; then
         event "SOURCE_RESET stream=$name previous_offset=$offset size=$size"
         offset=0
     fi
-    if [ $((size - offset)) -gt 8388608 ]; then
-        event "SOURCE_BACKLOG_TRIM stream=$name previous_offset=$offset size=$size limit_bytes=8388608"
-        offset=$((size - 8388608))
-    fi
     if [ "$size" -gt "$offset" ]; then
         tail -c "+$((offset + 1))" "$source" > "$LIVE/$name.chunk" || exit 0
         bytes=$(wc -c < "$LIVE/$name.chunk")
-        local_target="$LIVE/${name}_${seq}.log"
-        target=$local_target
-        volume=$(cat "$SPOOL/volume.path" 2>/dev/null || true)
-        if [ -n "$volume" ] && [ -d "$volume/Toolbox" ]; then
-            sd_dir="$volume/MMI-Cockpit-Carplay/logs/boots/${SPOOL##*/}/streams"
-            if ensure_dirs "$sd_dir" 2>/dev/null &&
-               ( : >> "$sd_dir/${name}_${seq}.log" ) 2>/dev/null; then
-                target="$sd_dir/${name}_${seq}.log"
-            fi
-        fi
-        if ! cat "$LIVE/$name.chunk" >> "$target" 2>/dev/null; then
-            [ "$target" = "$local_target" ] && exit 0
-            cat "$LIVE/$name.chunk" >> "$local_target" 2>/dev/null || exit 0
-        fi
+        cat "$LIVE/$name.chunk" >> "$LIVE/${name}_${seq}.log" || exit 0
         offset=$((offset + bytes))
         rm -f "$LIVE/$name.chunk"
     fi
-    # Roll by segment; the local fallback keeps only three recent segments.
-    segment="$LIVE/${name}_${seq}.log"
-    [ -f "$target" ] && segment=$target
-    if [ -f "$segment" ] && [ "$(wc -c < "$segment")" -ge 4194304 ]; then
+    # Roll local storage by segment; SD receives each segment under its own name.
+    if [ -f "$LIVE/${name}_${seq}.log" ] && [ "$(wc -c < "$LIVE/${name}_${seq}.log")" -ge 4194304 ]; then
         seq=$((seq + 1))
         if [ "$seq" -ge 3 ]; then
             old=$((seq - 3))
@@ -118,19 +98,13 @@ select_boot_entry_source() {
 # unavailable. It never copies protocol payloads: only routing/resolver/gate
 # verdicts emitted by our own code are eligible.
 persist_adaptive_status() (
+    source=$(select_hook_source)
+    [ -f "$source" ] || exit 0
     VOLUME=$(cat "$SPOOL/volume.path" 2>/dev/null || true)
     [ -n "$VOLUME" ] && [ -d "$VOLUME/Toolbox" ] || exit 0
-    source=$(ls -t "$VOLUME/MMI-Cockpit-Carplay/logs/altscreen_hook.log" \
-        "$ROOT/tmp/MMI-Cockpit-Carplay/altscreen_hook.log" \
-        "$ROOT/tmp/MMI-Cockpit-Carplay.altscreen_hook.log" \
-        "$ROOT/tmp/altscreen_hook.log" 2>/dev/null | head -n 1)
-    [ -f "$source" ] || exit 0
     dest="$VOLUME/MMI-Cockpit-Carplay/logs/boots/${SPOOL##*/}"
     ensure_dirs "$dest" 2>/dev/null || exit 0
     target="$dest/adaptive_status.log"
-    if [ -f "$target" ] && [ "$(wc -c < "$target")" -ge 1048576 ]; then
-        : > "$target" 2>/dev/null || exit 0
-    fi
     cursor="$LIVE/adaptive_status.cursor"
     offset=0; old_inode=""
     if [ -f "$cursor" ]; then read -r offset old_inode < "$cursor"; fi
@@ -180,7 +154,6 @@ flush() {
         cursor="$LIVE/.${base}.sd_cursor"
         copied=0
         [ ! -f "$cursor" ] || copied=$(cat "$cursor" 2>/dev/null || echo 0)
-        [ -f "$target" ] || copied=0
         case "$copied" in ''|*[!0-9]*) copied=0 ;; esac
         size=$(wc -c < "$source")
         [ "$size" -ge "$copied" ] || copied=0
@@ -199,8 +172,6 @@ flush() {
     done
 }
 cycle() {
-    # Replay older /tmp fallback segments before adding new SD-first records.
-    flush
     capture "$(select_hook_source)" hook_tmp
     capture "$ROOT/tmp/CinemoDioManager.log" dio_tmp
     capture "$(select_boot_entry_source)" boot_entry
@@ -209,7 +180,6 @@ cycle() {
     capture "$LIVE/system_source.raw" system
     persist_adaptive_status
     flush
-    /bin/sh "${0%/*}/altscreen_log_ring.sh" prune 2>/dev/null || true
     # The native reader is append-only. Bound its temporary capture; any race at
     # this emergency trim is explicitly recorded, never advertised as lossless.
     if [ -f "$LIVE/system_source.raw" ] && [ "$(wc -c < "$LIVE/system_source.raw")" -ge 8388608 ]; then

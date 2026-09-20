@@ -65,29 +65,12 @@ typedef struct {
 
 #define P111_FRAME_SHM_NAME      "/carplay111_decoded"
 #define P111_FRAME_SHM_MAGIC     0x50313146u /* P11F */
-#define P111_FRAME_SHM_VERSION   2u
+#define P111_FRAME_SHM_VERSION   1u
 #define P111_FRAME_SLOTS         3u
 #define P111_FRAME_SLOT_BYTES    (2u * 1024u * 1024u)
 
 #define P111_FRAME_FORMAT_NV12   1u
 #define P111_FRAME_FLAG_ACTIVE   0x00000001u
-
-static inline uint32_t p111_timing_delta_us32(uint32_t later, uint32_t earlier) {
-    const uint32_t delta = later - earlier;
-    return later && earlier && delta <= 5000000u ? delta : 0u;
-}
-
-/* v2 timing belongs to the slot and is committed before sequence is published.
- * All times are gettimeofday microseconds modulo 2^32; zero means unavailable.
- * h264_rx is the latest compressed packet seen at render callback entry, so
- * its delta is a decode-path proxy rather than exact packet-to-picture time. */
-typedef struct {
-    volatile uint32_t h264_rx_us32;
-    volatile uint32_t h264_seq;
-    volatile uint32_t render_us32;
-    volatile uint32_t readback_us;
-    volatile uint32_t publish_us32;
-} p111_frame_timing_t;
 
 typedef struct {
     volatile uint32_t magic;
@@ -108,8 +91,6 @@ typedef struct {
     volatile uint32_t frame_count;
     volatile uint32_t drop_count;
     volatile uint32_t last_copy_bytes;
-
-    p111_frame_timing_t timing[P111_FRAME_SLOTS];
 
     uint8_t data[P111_FRAME_SLOTS * P111_FRAME_SLOT_BYTES];
 } p111_frame_shm_t;

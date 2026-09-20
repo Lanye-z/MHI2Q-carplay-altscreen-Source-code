@@ -36,8 +36,8 @@ RUNTIME="$DEVICE_ROOT/mnt/app/root/carplay-altscreen"
 STATE="$RUNTIME/state"
 ENABLED="$STATE/basevideo3.enabled"
 JAR="$DEVICE_ROOT/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar"
-EXPECTED_SIZE=151141
-EXPECTED_CKSUM=2709689163
+EXPECTED_SIZE=147443
+EXPECTED_CKSUM=211533722
 ACTIVE="$DEVICE_ROOT/tmp/mmi-mirror-active"
 READY="$DEVICE_ROOT/tmp/mmi-mirror-basevideo.ready"
 STARTED="$DEVICE_ROOT/tmp/mmi-mirror-controller.started"
@@ -133,13 +133,7 @@ if [ -f /mnt/app/root/carplay-altscreen/state/basevideo3.enabled ]; then
     mkdir -p /tmp/MMI-Cockpit-Carplay/mirror >/dev/null 2>&1 || true
     rm -f /tmp/mmi-mirror-basevideo.ready >/dev/null 2>&1 || true
     touch /tmp/mmi-mirror-active >/dev/null 2>&1 || true
-    ( /mnt/app/root/carplay-altscreen/bin/mirror/start_vehicle.sh 2>&1 | {
-        if [ -f /mnt/app/root/carplay-altscreen/bin/altscreen_log_ring.sh ]; then
-            /bin/sh /mnt/app/root/carplay-altscreen/bin/altscreen_log_ring.sh pipe mirror /tmp/MMI-Cockpit-Carplay/mirror_autostart.log
-        else
-            cat >> /tmp/MMI-Cockpit-Carplay/mirror_autostart.log 2>/dev/null || cat > /dev/null
-        fi
-    } ) &
+    /mnt/app/root/carplay-altscreen/bin/mirror/start_vehicle.sh >>/tmp/MMI-Cockpit-Carplay/mirror_autostart.log 2>&1 &
 fi
 # END ALT111 BASEVIDEO3 AUTOSTART
 BASEVIDEO3_BOOT

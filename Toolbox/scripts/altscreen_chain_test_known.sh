@@ -45,20 +45,6 @@ if [ "${ALTS_DIAG_CAPTURED:-0}" != 1 ]; then
         journal="$journal_root/tmp/altscreen_$journal_id"
         echo "DIAGNOSTICS_TMP_DIRECTORY_UNAVAILABLE fallback=flat_file"
     fi
-    journal_tmp=$journal
-    if [ "${ALTSCREEN_CHAIN_TESTING:-0}" = 1 ]; then
-        journal_candidates=${ALTSCREEN_CHAIN_VOLUME:-}
-    else
-        journal_candidates='/net/mmx/fs/sda0 /net/mmx/fs/sda1 /net/mmx/fs/sdb0 /net/mmx/fs/sdb1 /fs/sda0 /fs/sda1 /fs/sdb0 /fs/sdb1'
-    fi
-    for journal_candidate in $journal_candidates; do
-        if [ -d "$journal_candidate/Toolbox" ] && [ -d "$journal_candidate/MMI-Cockpit-Carplay/state" ] &&
-           ensure_dirs "$journal_candidate/MMI-Cockpit-Carplay/logs/operations" 2>/dev/null &&
-           ( : >> "$journal_candidate/MMI-Cockpit-Carplay/logs/operations/$journal_id" ) 2>/dev/null; then
-            journal="$journal_candidate/MMI-Cockpit-Carplay/logs/operations/$journal_id"
-            break
-        fi
-    done
     if ! (printf 'OP_BEGIN action=%s script=%s\n' "${1:-}" "$0" > "$journal") 2>/dev/null; then
         echo "WARN: diagnostic journal unavailable; continuing requested operation"
         ALTS_DIAG_CAPTURED=1; export ALTS_DIAG_CAPTURED
@@ -75,18 +61,14 @@ if [ "${ALTS_DIAG_CAPTURED:-0}" != 1 ]; then
     fi
     journal_rc=$?
     printf 'OP_END action=%s rc=%s\n' "${1:-}" "$journal_rc" >> "$journal"
-    if [ -f "$journal" ] && [ "$(wc -c < "$journal")" -gt 4194304 ]; then
-        tail -c 4194304 "$journal" > "$journal.trim" 2>/dev/null && mv "$journal.trim" "$journal" 2>/dev/null || true
-    fi
     journal_volume=$(sed -n 's/^DIAGNOSTICS_VOLUME=//p' "$journal" | tail -1)
-    if [ "$journal" = "$journal_tmp" ] && [ -n "$journal_volume" ] && [ -d "$journal_volume/Toolbox" ]; then
-        journal_target="$journal_volume/MMI-Cockpit-Carplay/logs/operations/$journal_id"
+    if [ -n "$journal_volume" ] && [ -d "$journal_volume/Toolbox" ]; then
+        journal_target="$journal_volume/MMI-Cockpit-Carplay/logs/operations/$journal_id.log"
         if ensure_dirs "${journal_target%/*}" 2>/dev/null; then
             cp "$journal" "$journal_target.new" 2>/dev/null &&
                 mv "$journal_target.new" "$journal_target" 2>/dev/null || rm -f "$journal_target.new"
         fi
     fi
-    /bin/sh "${ALTSCREEN_CONTROLLER_ENTRY%/*}/altscreen_log_ring.sh" prune 2>/dev/null || true
     cat "$journal"
     exit "$journal_rc"
 fi
@@ -748,6 +730,9 @@ install_boot_diagnostics() (
         mkdir -p "$ALTS_VOLATILE" 2>/dev/null || true
     fi
     [ -d "$ALTS_VOLATILE" ] || ALTS_BOOT_ENTRY=/tmp/MMI-Cockpit-Carplay.boot_entry.log
+    if ( : >> "$ALTS_BOOT_ENTRY" ) 2>/dev/null; then
+        exec >> "$ALTS_BOOT_ENTRY" 2>&1
+    fi
     echo "BOOT_ENTRY pid=$$"
     alts_boot_wait=0
     while [ ! -f /mnt/app/root/carplay-altscreen/bin/altscreen_boot_diag.sh ] && [ "$alts_boot_wait" -lt 60 ]; do
@@ -759,13 +744,7 @@ install_boot_diagnostics() (
         /bin/sh /mnt/app/root/carplay-altscreen/bin/altscreen_boot_diag.sh
         echo "BOOT_HELPER_EXIT rc=$?"
     else echo "BOOT_HELPER_MISSING after_seconds=120"; fi
-) 2>&1 < /dev/null | {
-    if [ -f /mnt/app/root/carplay-altscreen/bin/altscreen_log_ring.sh ]; then
-        /bin/sh /mnt/app/root/carplay-altscreen/bin/altscreen_log_ring.sh pipe boot-entry /tmp/MMI-Cockpit-Carplay.boot_entry.log
-    else
-        cat >> /tmp/MMI-Cockpit-Carplay.boot_entry.log 2>/dev/null || cat > /dev/null
-    fi
-} &
+) > /dev/null 2>&1 < /dev/null &
 # END ALTSCREEN DIAGNOSTICS
 BOOT_BLOCK
     # Place before executable startup statements, including any early exit.
@@ -984,9 +963,6 @@ cmd_collect() {
     REPORT_TMP="$COLLECT_TMP_PREFIX.report"
     collect_details > "$REPORT_TMP" 2>&1
     collect_rc=$?
-    if [ -f "$REPORT_TMP" ] && [ "$(wc -c < "$REPORT_TMP")" -gt 4194304 ]; then
-        tail -c 4194304 "$REPORT_TMP" > "$REPORT_TMP.trim" && mv "$REPORT_TMP.trim" "$REPORT_TMP"
-    fi
     cat "$REPORT_TMP"
     REPORT="$SESSION/collection_report.txt.log"
     if ! copy_snapshot "$REPORT_TMP" "$REPORT.new" 2>/dev/null || ! mv "$REPORT.new" "$REPORT"; then
@@ -1030,7 +1006,7 @@ collect_details() {
         say "MISSING_COMMAND pfctl; active firewall rules not inspected"
     fi
     print_log() {
-        for cand in "$@"; do
+        for cand in "$1" "$2" "$3"; do
             [ -n "$cand" ] || continue
             if [ -f "$cand" ]; then
                 say "LOG_BEGIN $cand"
@@ -1043,16 +1019,12 @@ collect_details() {
         say "MISSING $1"
         return 1
     }
-    print_log "$LOG_ROOT/altscreen_hook.log" \
-              "$(p /tmp/MMI-Cockpit-Carplay/altscreen_hook.log)" \
+    print_log "$(p /tmp/MMI-Cockpit-Carplay/altscreen_hook.log)" \
               "$(p /tmp/MMI-Cockpit-Carplay.altscreen_hook.log)" \
               "$(p /tmp/altscreen_hook.log)" || true
     print_log "$(p /tmp/CinemoDioManager.log)" "" "" || true
-    print_log "$LOG_ROOT/boot-entry.log" \
-              "$(p /tmp/MMI-Cockpit-Carplay/boot_entry.log)" \
+    print_log "$(p /tmp/MMI-Cockpit-Carplay/boot_entry.log)" \
               "$(p /tmp/MMI-Cockpit-Carplay.boot_entry.log)" "" || true
-    print_log "$LOG_ROOT/mirror.log" "$(p /tmp/MMI-Cockpit-Carplay/mirror/mirror.log)" "" || true
-    print_log "$LOG_ROOT/mmi-mirror-controller.log" "$(p /tmp/mmi-mirror-controller.log)" "" || true
     for operation in "$(p /tmp)"/altscreen_operation_*.log; do
         [ -f "$operation" ] || continue
         print_log "$operation" "" "" || true

@@ -578,10 +578,6 @@ cmd_status(){
 cmd_collect(){
     cmd_status
     for candidate in \
-        "$LOG_ROOT/altscreen_hook.log" \
-        "$LOG_ROOT/mirror.log" \
-        "$LOG_ROOT/mmi-mirror-controller.log" \
-        "$LOG_ROOT/boot-entry.log" \
         "$(p /tmp/MMI-Cockpit-Carplay/altscreen_hook.log)" \
         "$(p /tmp/MMI-Cockpit-Carplay.altscreen_hook.log)" \
         "$(p /tmp/altscreen_hook.log)" \

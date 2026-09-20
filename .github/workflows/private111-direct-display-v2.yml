@@ -3,19 +3,20 @@ name: CarPlay private111 Direct Display V2
 on:
   push:
     branches:
-      - experiment/oem-layout-second-screen
+      - carplay-private111-direct-display-v2
     paths:
       - '.github/workflows/private111-direct-display-v2.yml'
-      - 'Toolbox/carplay_alt_screen/mirror_display/src/**'
-      - 'Toolbox/carplay_alt_screen/mirror_display/Makefile'
-      - 'Toolbox/carplay_alt_screen/mirror_display/build_qnx.sh'
       - 'Toolbox/carplay_alt_screen/src/**'
-      - 'Toolbox/carplay_alt_screen/tests/**'
+      - 'Toolbox/carplay_alt_screen/mirror_display/**'
+      - 'Toolbox/carplay_alt_screen/hmi/**'
       - 'Toolbox/scripts/**'
+      - 'CARPLAY-PRIVATE111-DIRECT-DISPLAY-V2.md'
+      - 'READ-ME-FIRST.md'
       - 'VERIFY-NATIVE-DIRECT-RELEASE.sh'
   workflow_dispatch:
+
 concurrency:
-  group: experiment-oem-layout-logging-qnx-v2
+  group: private111-direct-display-v2
   cancel-in-progress: true
 
 permissions:
@@ -27,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: experiment/oem-layout-second-screen
+          ref: carplay-private111-direct-display-v2
           fetch-depth: 0
 
       - name: Install ARM inspection tools
@@ -51,9 +52,6 @@ jobs:
             'PHASE=FRAME_LINEARIZER_PIXMAP' \
             'PHASE=FRAME_LINEARIZER_FALLBACK' \
             'PHASE=FRAME_LINEARIZER_FIRST_FRAME' \
-            'rate_policy=uncapped_source_callbacks' \
-            'sink_target_fps=30' \
-            'PHASE=FRAME_DECODE_TIMING' \
             'PHASE=H264_TAP_SESSION_RESET' \
             'PHASE=FRAME_TAP_SESSION_RESET' \
             'PHASE=DIRECT111_TAP_STALE_CALLBACK' \
@@ -66,15 +64,6 @@ jobs:
           do
             strings "$out/libcarplay_altscreen.so" | grep -Fq "$marker"
           done
-
-          if grep -Fq 'P111_LINEARIZER_TARGET_INTERVAL_US' Toolbox/carplay_alt_screen/src/private111_direct_tap.c ||
-             grep -Fq 'next_readback_due_us' Toolbox/carplay_alt_screen/src/private111_direct_tap.c ||
-             grep -Fq 'rate_limit_skips' Toolbox/carplay_alt_screen/src/private111_direct_tap.c; then
-            echo "DIRECT111_V2_FAIL producer-side rate limiter reintroduced" >&2
-            exit 1
-          fi
-
-          grep -Fq 'static const unsigned kTargetFps = 30;' Toolbox/carplay_alt_screen/mirror_display/src/main.cpp
 
           arm-linux-gnueabihf-readelf -d "$out/libcarplay_altscreen.so" | grep -q 'libc.so.3'
           arm-linux-gnueabihf-readelf -d "$out/libcarplay_altscreen.so" | grep -q 'libm.so.2'
@@ -101,7 +90,6 @@ jobs:
 
           native = Path('Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c').read_text()
           tap = Path('Toolbox/carplay_alt_screen/src/private111_direct_tap.c').read_text()
-          log_core = Path('Toolbox/carplay_alt_screen/src/altscreen_core.c').read_text()
           header = Path('Toolbox/carplay_alt_screen/src/private111_direct_tap.h').read_text()
           side = Path('Toolbox/carplay_alt_screen/mirror_display/src/main.cpp').read_text()
           source = Path('Toolbox/carplay_alt_screen/mirror_display/src/private111_direct_source.cpp').read_text()
@@ -161,22 +149,11 @@ jobs:
           assert 'STREAM_111_REQUESTED=YES' in side
           assert 'PIPELINE_SOURCE_PRIMED' in side
           assert 'startup_frame_progress_required=2' in side
-          assert 'PHASE=DISPLAYABLE3_OWNERSHIP' in side
-          assert 'DISPLAYABLE3_OWNERSHIP_V1' in side
-          assert '/tmp/mmi-mirror-displayable3.state' in side
-          backend = Path('Toolbox/carplay_alt_screen/mirror_display/src/mhi2q_backend.cpp').read_text()
-          assert 'sample_window_state' in backend
-          assert 'screen_get_window_property_iv_' in backend
-          assert 'screen_get_window_property_cv_' in backend
           assert 'MIRROR_ABNORMAL_RESTART=SCHEDULED' in launch
           assert 'ALT111_RECOVER_CURRENT_SESSION=1' in launch
           assert 'MAX_ABNORMAL_RESTARTS' in launch
           assert 'phase=before_first_present' in launch
-          assert 'tap_stop_changed' in launch
-          assert 'direct111_tap_stop.state' in launch
-          assert '__sync_add_and_fetch(&g_tap_stop_events, 1UL)' in log_core
-          assert 'publish_tap_stop_marker(pending_stop)' in log_core
-          assert 'make_diagnostics_nonblocking(STDERR_FILENO)' in side
+          assert "grep -c 'PHASE=DIRECT111_TAP_STOP stream='" in launch
           assert 'RECOVERY_LOCK=' in release_stop
           assert 'stop_guard=RETAINED' in release_stop
           assert 'PACKAGE_MODE=CARPLAY_PRIVATE111_DIRECT_DISPLAY_V2' in install
@@ -201,15 +178,9 @@ jobs:
             Toolbox/carplay_alt_screen/mirror_display/src/gl_renderer.cpp
           g++ -std=c++98 -Wall -Wextra -Werror -fsyntax-only \
             -IToolbox/carplay_alt_screen/mirror_display/src \
-            Toolbox/carplay_alt_screen/mirror_display/src/mhi2q_backend.cpp
-          g++ -std=c++98 -Wall -Wextra -Werror -fsyntax-only \
-            -IToolbox/carplay_alt_screen/mirror_display/src \
-            Toolbox/carplay_alt_screen/mirror_display/src/cluster_video_display.cpp
-          g++ -std=c++98 -Wall -Wextra -Werror -fsyntax-only \
-            -IToolbox/carplay_alt_screen/mirror_display/src \
             -IToolbox/carplay_alt_screen/src \
             Toolbox/carplay_alt_screen/mirror_display/src/main.cpp
-          echo "DIRECT111_V2_SIDECAR_SOURCE=PASS all_translation_units=YES"
+          echo "DIRECT111_V2_SIDECAR_SOURCE=PASS"
 
       - name: Check vehicle scripts
         run: |
@@ -226,13 +197,6 @@ jobs:
             sh -n "$f"
           done
           echo "DIRECT111_V2_SHELL=PASS"
-
-      - name: Host logging fixtures
-        run: |
-          set -euo pipefail
-          sh Toolbox/carplay_alt_screen/tests/test_log_ring.sh
-          sh Toolbox/carplay_alt_screen/tests/test_stop_marker_watch.sh
-          sh Toolbox/carplay_alt_screen/tests/test_frame_telemetry.sh
 
       - name: Verify source-only V2 is not falsely vehicle-ready
         run: |
@@ -258,11 +222,6 @@ jobs:
               exit 1
             fi
             echo "DIRECT111_V2_DISPLAY_BINARY=STALE_V2_HARDENING_REBUILD_REQUIRED"
-          elif grep -Fq 'release_binary_status=V2_BINARY_STALE_LOGGING_REBUILD_REQUIRED' "$info"; then
-            grep -Fq 'vehicle_zip_status=NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED' "$info"
-            strings "$bin" | grep -Fq 'carplay-private111-direct-display-v2'
-            strings "$bin" | grep -Fq 'matching_identity_plus_frame_progress'
-            echo "DIRECT111_V2_DISPLAY_BINARY=STALE_V2_LOGGING_REBUILD_REQUIRED"
           elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$info"; then
             # promoted phase: binary must carry the V2 build id and be vehicle-ready
             grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$info"
@@ -277,9 +236,6 @@ jobs:
             strings "$bin" | grep -Fq 'PHASE=PIPELINE_SOURCE_PRIMED'
             strings "$bin" | grep -Fq 'startup_frame_progress_required=2'
             strings "$bin" | grep -Fq 'PHASE=DISPLAYABLE3_FIRST_PRESENT'
-            strings "$bin" | grep -Fq 'PHASE=DISPLAYABLE3_OWNERSHIP'
-            strings "$bin" | grep -Fq 'DISPLAYABLE3_OWNERSHIP_V1'
-            strings "$bin" | grep -Fq '/tmp/mmi-mirror-displayable3.state'
             strings "$bin" | grep -Fq 'PHASE=DIRECT111_ACTIVE'
             if strings "$bin" | grep -Fq 'screen_read_window'; then
               echo "DIRECT111_V2_FAIL Screen readback must remain in hook, not sidecar" >&2
@@ -292,7 +248,7 @@ jobs:
           fi
 
       - name: Promote validated V2 universal hook
-        if: github.ref == 'refs/heads/experiment/oem-layout-second-screen'
+        if: github.ref == 'refs/heads/carplay-private111-direct-display-v2'
         run: |
           set -euo pipefail
           out="$RUNNER_TEMP/private111-direct-v2-hook"
@@ -374,10 +330,6 @@ jobs:
               'Toolbox/carplay_alt_screen/src/qnxshim/sys/stat.h',
               'Toolbox/carplay_alt_screen/mirror_display/src/private111_direct_source.h',
               'Toolbox/carplay_alt_screen/mirror_display/src/private111_direct_source.cpp',
-              'Toolbox/carplay_alt_screen/mirror_display/src/cluster_video_display.h',
-              'Toolbox/carplay_alt_screen/mirror_display/src/cluster_video_display.cpp',
-              'Toolbox/carplay_alt_screen/mirror_display/src/mhi2q_backend.h',
-              'Toolbox/carplay_alt_screen/mirror_display/src/mhi2q_backend.cpp',
               'Toolbox/carplay_alt_screen/mirror_display/src/main.cpp',
               'Toolbox/carplay_alt_screen/mirror_display/build_qnx.sh',
               'Toolbox/carplay_alt_screen/mirror_display/VENDORED_SOURCE.txt',
@@ -433,9 +385,9 @@ jobs:
 
           if ! git diff --cached --quiet; then
             git commit -m "build(direct111-v2): promote Screen-linearizer runtime [skip ci]"
-            git fetch origin "+refs/heads/experiment/oem-layout-second-screen:refs/remotes/origin/experiment/oem-layout-second-screen"
-            git rebase origin/experiment/oem-layout-second-screen
-            git push origin HEAD:experiment/oem-layout-second-screen
+            git fetch origin "+refs/heads/carplay-private111-direct-display-v2:refs/remotes/origin/carplay-private111-direct-display-v2"
+            git rebase origin/carplay-private111-direct-display-v2
+            git push origin HEAD:carplay-private111-direct-display-v2
           fi
 
           echo "DIRECT111_V2_HOOK_PROMOTED_SHA256=$HOOK_SHA"

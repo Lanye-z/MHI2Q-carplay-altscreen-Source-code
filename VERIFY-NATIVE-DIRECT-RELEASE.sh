@@ -9,7 +9,6 @@ REL="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS"
 NATIVE="$ROOT/Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c"
 TAP="$ROOT/Toolbox/carplay_alt_screen/src/private111_direct_tap.c"
 SOURCE="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/private111_direct_source.cpp"
-SHM="$ROOT/Toolbox/carplay_alt_screen/src/private111_direct_shm.h"
 BACKEND_H="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/mhi2q_backend.h"
 BACKEND_CPP="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/mhi2q_backend.cpp"
 CLUSTER_CPP="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/cluster_video_display.cpp"
@@ -25,8 +24,6 @@ CHAIN="$ROOT/Toolbox/scripts/altscreen_chain_test.sh"
 BOOT_DIAG="$ROOT/Toolbox/scripts/altscreen_boot_diag.sh"
 TOP="$ROOT/SHA256SUMS.txt"
 MAP="$ROOT/PACKAGE_SOURCE_MAP.json"
-HMI_JAR="$ROOT/Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar"
-HMI_INFO="$ROOT/Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt"
 
 fail(){ echo "PRIVATE111_DIRECT_VERIFY=FAIL: $*" >&2; exit 1; }
 sha256_file(){
@@ -35,15 +32,16 @@ sha256_file(){
 }
 binary_strings(){ strings "$1" 2>/dev/null || grep -a -o '[[:print:]][[:print:]]*' "$1"; }
 
-for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$SHM" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$MAIN_CPP" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$STOP" "$INSTALL" "$STATUS" "$CHAIN" "$BOOT_DIAG"; do
+for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$MAIN_CPP" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$STOP" "$INSTALL" "$STATUS" "$CHAIN" "$BOOT_DIAG"; do
     [ -s "$f" ] || fail "missing/empty: $f"
 done
 
-for s in "$START" "$CTRL" "$LAUNCH" "$STOP"          "$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh"; do
+for s in "$START" "$CTRL" "$LAUNCH" "$STOP" "$BOOT_DIAG" "$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh"; do
     sh -n "$s" || fail "shell syntax: $s"
 done
 
 SOURCE_ONLY=0
+HOOK_PENDING=0
 if grep -Fq 'release_binary_status=V1_BINARY_STALE_V2_SOURCE_REBUILD_REQUIRED' "$INFO"; then
     SOURCE_ONLY=1
     grep -Fq 'vehicle_zip_status=NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED' "$INFO" ||
@@ -65,34 +63,35 @@ elif grep -Fq 'release_binary_status=V2_BINARY_STALE_HARDENING_REBUILD_REQUIRED'
     if binary_strings "$BIN" | grep -Fq 'matching_identity_plus_frame_progress'; then
         fail "BUILD_INFO says hardening rebuild required but binary already contains final recovery marker"
     fi
-elif grep -Fq 'release_binary_status=V2_BINARY_STALE_LOGGING_REBUILD_REQUIRED' "$INFO"; then
-    SOURCE_ONLY=1
-    grep -Fq 'vehicle_zip_status=NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED' "$INFO" ||
-        fail "logging source changes must not be marked vehicle-ready before rebuild"
-    for marker in 'carplay-private111-direct-display-v2' 'matching_identity_plus_frame_progress' 'PHASE=DISPLAYABLE3_FIRST_PRESENT'; do
-        binary_strings "$BIN" | grep -Fq "$marker" ||
-            fail "previous V2 sidecar marker missing while awaiting logging rebuild: $marker"
-    done
 elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$INFO"; then
-    grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$INFO" ||
-        fail "rebuilt V2 sidecar is not marked vehicle-ready"
-    for marker in 'carplay-private111-direct-display-v2' 'PHASE=DECODED_SHM_WAIT_SIZE' 'PHASE=SOURCE_SESSION' 'PHASE=GATE_RECOVER_CURRENT_SESSION' 'matching_identity_plus_frame_progress' 'packed_tight_required=1' 'stream111_request_or_phone_marker' 'STREAM_111_REQUESTED=YES' 'PHASE=PIPELINE_SOURCE_PRIMED' 'startup_frame_progress_required=2' 'PHASE=DISPLAYABLE3_FIRST_PRESENT' 'PHASE=DISPLAYABLE3_OWNERSHIP' 'DISPLAYABLE3_OWNERSHIP_V1' '/tmp/mmi-mirror-displayable3.state' 'PHASE=DIRECT111_ACTIVE'
+    if grep -Fq 'vehicle_zip_status=NOT_READY_HOOK_REBUILD_REQUIRED' "$INFO"; then
+        HOOK_PENDING=1
+        grep -Fq 'hook_runtime_rebuild_required=yes' "$INFO" ||
+            fail "hook-pending package must declare hook_runtime_rebuild_required=yes"
+        grep -Fq 'hook_runtime_policy=uncapped_source_callbacks' "$INFO" ||
+            fail "hook-pending package does not declare uncapped source callback policy"
+    else
+        grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$INFO" ||
+            fail "rebuilt V2 package has unknown vehicle-ready state"
+        grep -Fq 'hook_runtime_rebuild_required=no' "$INFO" ||
+            fail "vehicle-ready V2 package must declare rebuilt hook runtime"
+    fi
+    for marker in 'carplay-private111-direct-display-v2' 'PHASE=DECODED_SHM_WAIT_SIZE' 'PHASE=SOURCE_SESSION' 'PHASE=GATE_RECOVER_CURRENT_SESSION' 'matching_identity_plus_frame_progress' 'packed_tight_required=1' 'stream111_request_or_phone_marker' 'STREAM_111_REQUESTED=YES' 'PHASE=PIPELINE_SOURCE_PRIMED' 'startup_frame_progress_required=2' 'PHASE=DISPLAYABLE3_FIRST_PRESENT' 'PHASE=DIRECT111_ACTIVE'
     do
         binary_strings "$BIN" | grep -Fq "$marker" ||
             fail "V2 sidecar marker missing: $marker"
     done
-    for marker in 'PHASE=FRAME_PRESENT_TIMING' 'PHASE=FRAME_CHAIN_HEALTH'; do
-        binary_strings "$BIN" | grep -Fq "$marker" ||
-            fail "V2 telemetry marker missing: $marker"
-    done
-    binary_strings "$HOOK" | grep -Fq 'PHASE=FRAME_DECODE_TIMING' ||
-        fail "hook per-frame decode timing marker missing"
 else
     fail "unknown sidecar release state"
 fi
 
 if binary_strings "$BIN" | grep -Fq 'screen_read_window'; then
     fail "Screen readback must remain in hook, not sidecar"
+fi
+
+if [ "$HOOK_PENDING" = 0 ]; then
+    binary_strings "$HOOK" | grep -Fq 'rate_policy=uncapped_source_callbacks' ||
+        fail "universal hook binary is stale: rebuild/promote uncapped source-callback readback"
 fi
 
 grep -Fq 'window58_readback=disabled' "$INFO" ||
@@ -105,12 +104,6 @@ grep -Fq 'private111_session_end_policy=hook_DIRECT111_TAP_STOP_watchdog' "$INFO
     fail "BUILD_INFO private111 session-end policy mismatch"
 grep -Fq 'private111_session_restart=enabled_while_basevideo_demand_active' "$INFO" ||
     fail "BUILD_INFO private111 restart policy mismatch"
-grep -Fq 'decoded_shm_version=2' "$INFO" ||
-    fail "BUILD_INFO decoded SHM telemetry version mismatch"
-grep -Fq 'P111_FRAME_SHM_VERSION   2u' "$SHM" ||
-    fail "decoded SHM telemetry ABI version mismatch"
-grep -Fq 'p111_frame_timing_t timing[P111_FRAME_SLOTS]' "$SHM" ||
-    fail "decoded SHM per-slot timing contract missing"
 
 grep -Fq 'p111_frame_tap_write_window(stream, stock_window' "$NATIVE" ||
     fail "V2 Screen linearizer is not wired after stock render"
@@ -165,28 +158,16 @@ grep -Fq 'readback_p50_ms=' "$TAP" ||
 grep -Fq 'PHASE=FRAME_LINEARIZER_SLOW' "$TAP" ||
     fail "slow synchronous readback diagnostic missing"
 grep -Fq 'rate_policy=uncapped_source_callbacks' "$TAP" ||
-    fail "hook source must remain uncapped at producer callbacks"
+    fail "hook source is not configured for uncapped source callbacks"
 grep -Fq 'sink_target_fps=30' "$TAP" ||
-    fail "hook diagnostics must declare independent 30fps sink"
+    fail "hook diagnostics do not preserve the independent 30fps sink policy"
 if grep -Fq 'P111_LINEARIZER_TARGET_INTERVAL_US' "$TAP" ||
    grep -Fq 'next_readback_due_us' "$TAP" ||
    grep -Fq 'rate_limit_skips' "$TAP"; then
-    fail "producer-side readback rate limiter must remain absent"
+    fail "producer-side readback rate limiter still remains"
 fi
 grep -Fq 'static const unsigned kTargetFps = 30;' "$MAIN_CPP" ||
-    fail "sidecar presentation pacing must remain 30fps"
-grep -Fq 'PHASE=DISPLAYABLE3_OWNERSHIP' "$MAIN_CPP" ||
-    fail "displayable3 ownership transition diagnostics missing"
-grep -Fq 'DISPLAYABLE3_OWNERSHIP_V1' "$MAIN_CPP" ||
-    fail "displayable3 ownership observer identity missing"
-grep -Fq '/tmp/mmi-mirror-displayable3.state' "$MAIN_CPP" ||
-    fail "displayable3 ownership state file missing"
-grep -Fq 'sample_window_state' "$BACKEND_CPP" ||
-    fail "read-only displayable3 window-state sampler missing"
-grep -Fq 'screen_get_window_property_iv_' "$BACKEND_CPP" ||
-    fail "displayable3 visible-state readback missing"
-grep -Fq 'screen_get_window_property_cv_' "$BACKEND_CPP" ||
-    fail "displayable3 manager-state readback missing"
+    fail "sidecar 30fps presentation pacing must remain unchanged"
 grep -Fq 'DIRECT111_TAP_STOP_STALE' "$TAP" ||
     fail "stale-stream teardown isolation missing"
 grep -Fq 'DIRECT111_TAP_STALE_CALLBACK' "$TAP" ||
@@ -252,7 +233,7 @@ if grep -Fq 'PHASE=DECODED_SOURCE_LOST' "$MAIN_CPP"; then
 fi
 
 # ---- Session lifecycle contract: freeze temporary stalls, release on real teardown ----
-grep -Fq 'DIRECT111_TAP_STOP' "$LAUNCH" ||
+grep -Fq 'PHASE=DIRECT111_TAP_STOP' "$LAUNCH" ||
     fail "launcher does not observe explicit private111 teardown"
 grep -Fq 'MIRROR_LIFECYCLE_WATCH=STARTED' "$LAUNCH" ||
     fail "launcher lifecycle watcher missing"
@@ -264,25 +245,8 @@ grep -Fq 'ALT111_RECOVER_CURRENT_SESSION=1' "$LAUNCH" ||
     fail "launcher does not request validated same-session recovery"
 grep -Fq 'phase=before_first_present' "$LAUNCH" ||
     fail "launcher does not honor private111 teardown before first present"
-grep -Fq 'tap_stop_changed' "$LAUNCH" &&
-grep -Fq 'direct111_tap_stop.state' "$LAUNCH" &&
-grep -Fq 'publish_tap_stop_marker' "$ROOT/Toolbox/carplay_alt_screen/src/altscreen_core.c" &&
-grep -Fq '__sync_add_and_fetch(&g_tap_stop_events, 1UL)' "$ROOT/Toolbox/carplay_alt_screen/src/altscreen_core.c" ||
-    fail "launcher must observe the exact asynchronous stop marker"
-grep -Fq 'make_diagnostics_nonblocking(STDERR_FILENO)' "$MAIN_CPP" ||
-    fail "sidecar diagnostics must not block the frame loop"
-grep -Fq 'append_sd_line' "$ROOT/Toolbox/scripts/altscreen_log_ring.sh" ||
-    fail "SD-first shell ring missing"
-grep -Fq 'select_controller_log_source' "$BOOT_DIAG" ||
-    fail "boot diagnostics do not collect Java controller logs"
-grep -Fq 'carplay-oem-geometry.log' "$BOOT_DIAG" ||
-    fail "boot diagnostics do not collect OEM geometry history"
-grep -Fq 'carplay-oem-displaymanager-read-api.log' "$BOOT_DIAG" ||
-    fail "boot diagnostics do not collect OEM DisplayManager metadata"
-grep -Fq 'OEM_LAYOUT_OBSERVER_MODE=OBSERVE_ONLY' "$STATUS" ||
-    fail "status does not expose OEM observer state"
-grep -Fq 'oem_geometry_build_status=COMPILED_OBSERVER_READY' "$INSTALL" ||
-    fail "installer lacks compiled observer source/JAR gate"
+grep -Fq "grep -c 'PHASE=DIRECT111_TAP_STOP stream='" "$LAUNCH" ||
+    fail "launcher teardown counter can be polluted by stale teardown markers"
 grep -Fq 'ALT111_MIRROR_RESTART_REASON=private111_session_end' "$LAUNCH" ||
     fail "launcher next-session autorestart missing"
 grep -Fq 'stop.requested' "$LAUNCH" ||
@@ -323,6 +287,12 @@ grep -Fq 'CarPlay private111 Direct Display V2' "$STATUS" ||
     fail "STATUS still identifies the old V1 display path"
 grep -Fq 'FRAME_LINEARIZER_SLOW_EVENTS=' "$STATUS" ||
     fail "STATUS does not surface Screen readback latency evidence"
+grep -Fq 'select_controller_log_source' "$BOOT_DIAG" ||
+    fail "boot diagnostics do not locate mmi-mirror-controller.log"
+grep -Fq 'tmp_mmi-mirror-controller.log' "$BOOT_DIAG" ||
+    fail "normal boot diagnostics do not persist Java Context80 controller log"
+grep -Fq 'streams/mmi-mirror-controller.log' "$BOOT_DIAG" ||
+    fail "flat SD fallback does not persist Java Context80 controller log"
 if grep -Fq 'DISPLAY_PATH=WINDOW58_READBACK' "$CTRL"; then
     fail "controller still advertises retired Window58 readback"
 fi
@@ -362,27 +332,6 @@ map_hook_sha=$(sed -n 's/.*"Toolbox\/carplay_alt_screen\/universal\/libcarplay_a
 [ -n "$map_hook_sha" ] && [ "$hook_sha" = "$map_hook_sha" ] ||
     fail "package map hook mismatch"
 
-if [ "$SOURCE_ONLY" = 0 ]; then
-    binary_strings "$HOOK" | grep -Fq 'PHASE=HOOK_LOG_SEGMENT' ||
-        fail "promoted hook lacks SD ring marker"
-    binary_strings "$HOOK" | grep -Fq 'direct111_tap_stop.state' ||
-        fail "promoted hook lacks stop state marker"
-    [ -s "$HMI_JAR" ] && [ -s "$HMI_INFO" ] || fail "rebuilt HMI JAR/metadata missing"
-    jar_size=$(wc -c < "$HMI_JAR" | awk '{print $1}')
-    jar_cksum=$(cksum < "$HMI_JAR" | awk '{print $1}')
-    jar_sha=$(sha256_file "$HMI_JAR")
-    grep -Fqx "jar_size=$jar_size" "$HMI_INFO" &&
-    grep -Fqx "jar_cksum=$jar_cksum" "$HMI_INFO" &&
-    grep -Fqx "jar_sha256=$jar_sha" "$HMI_INFO" &&
-    grep -Fqx "universal_runtime_sha256=$hook_sha" "$HMI_INFO" ||
-        fail "HMI metadata does not match promoted JAR/hook"
-    for hmi_script in "$INSTALL" "$START" "$STATUS"; do
-        grep -Fqx "EXPECTED_SIZE=$jar_size" "$hmi_script" &&
-        grep -Fqx "EXPECTED_CKSUM=$jar_cksum" "$hmi_script" ||
-            fail "HMI size/cksum gate stale: $hmi_script"
-    done
-fi
-
 echo "PRIVATE111_DIRECT_VERIFY=PASS"
 echo "pipeline=type111->H264Tap->stockOMX->stockPost->ScreenLinearizer->NV12SHM->CPU_CSC_GLES->displayable3->Java80"
 echo "sidecar_sha256=$bin_sha"
@@ -395,6 +344,8 @@ echo "raw_vendor_fallback=DISABLED"
 echo "same_session_recovery=VALIDATED_SHM_ONLY"
 if [ "$SOURCE_ONLY" = 1 ]; then
     echo "vehicle_zip_status=NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED"
+elif [ "$HOOK_PENDING" = 1 ]; then
+    echo "vehicle_zip_status=NOT_READY_HOOK_REBUILD_REQUIRED"
 else
     echo "vehicle_zip_status=READY_FOR_VEHICLE_TEST"
 fi

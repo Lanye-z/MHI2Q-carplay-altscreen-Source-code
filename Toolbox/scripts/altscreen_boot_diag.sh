@@ -40,12 +40,13 @@ while ! (date +%Y >/dev/null && printf '%s' ready | wc -c >/dev/null &&
     sleep 2 || exit 1
 done
 select_hook_source() {
-    latest=$(ls -t \
-        "$VOLUME/MMI-Cockpit-Carplay/logs/altscreen_hook.log" \
+    for candidate in \
         "$ROOT/tmp/MMI-Cockpit-Carplay/altscreen_hook.log" \
         "$ROOT/tmp/MMI-Cockpit-Carplay.altscreen_hook.log" \
-        "$ROOT/tmp/altscreen_hook.log" 2>/dev/null | head -n 1)
-    printf '%s\n' "${latest:-$ROOT/tmp/MMI-Cockpit-Carplay/altscreen_hook.log}"
+        "$ROOT/tmp/altscreen_hook.log"; do
+        [ -f "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
+    done
+    printf '%s\n' "$ROOT/tmp/MMI-Cockpit-Carplay/altscreen_hook.log"
 }
 select_boot_entry_source() {
     for candidate in \
@@ -56,15 +57,15 @@ select_boot_entry_source() {
     printf '%s\n' "$ROOT/tmp/MMI-Cockpit-Carplay/boot_entry.log"
 }
 select_mirror_log_source() {
-    latest=$(ls -t \
-        "$VOLUME/MMI-Cockpit-Carplay/logs/mirror.log" \
+    for candidate in \
         "$ROOT/tmp/MMI-Cockpit-Carplay/mirror/mirror.log" \
-        "$ROOT/tmp/MMI-Cockpit-Carplay.mirror.log" 2>/dev/null | head -n 1)
-    printf '%s\n' "${latest:-$ROOT/tmp/MMI-Cockpit-Carplay/mirror/mirror.log}"
+        "$ROOT/tmp/MMI-Cockpit-Carplay.mirror.log"; do
+        [ -f "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
+    done
+    printf '%s\n' "$ROOT/tmp/MMI-Cockpit-Carplay/mirror/mirror.log"
 }
 select_mirror_autostart_source() {
     for candidate in \
-        "$VOLUME/MMI-Cockpit-Carplay/logs/mirror-autorestart.log" \
         "$ROOT/tmp/MMI-Cockpit-Carplay/mirror/autostart.log" \
         "$ROOT/tmp/MMI-Cockpit-Carplay.mirror.autostart.log"; do
         [ -f "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
@@ -72,11 +73,13 @@ select_mirror_autostart_source() {
     printf '%s\n' "$ROOT/tmp/MMI-Cockpit-Carplay/mirror/autostart.log"
 }
 select_controller_log_source() {
-    latest=$(ls -t \
-        "$VOLUME/MMI-Cockpit-Carplay/logs/mmi-mirror-controller.log" \
+    for candidate in \
         "$ROOT/tmp/mmi-mirror-controller.log" \
-        "$ROOT/tmp/MMI-Cockpit-Carplay/mmi-mirror-controller.log" 2>/dev/null | head -n 1)
-    printf '%s\n' "${latest:-$ROOT/tmp/mmi-mirror-controller.log}"
+        "$ROOT/tmp/MMI-Cockpit-Carplay/mmi-mirror-controller.log"; do
+        [ -f "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
+    done
+    # ClusterStateController writes this exact path on the vehicle.
+    printf '%s\n' "$ROOT/tmp/mmi-mirror-controller.log"
 }
 select_oem_geometry_history_source() {
     printf '%s\n' "$ROOT/tmp/carplay-oem-geometry.log"
@@ -85,19 +88,13 @@ select_oem_displaymanager_api_source() {
     printf '%s\n' "$ROOT/tmp/carplay-oem-displaymanager-read-api.log"
 }
 flat_plain_append() {
-    cat "$1" >> "$2" 2>/dev/null && return 0
-    fallback="$ROOT/tmp/MMI-Cockpit-Carplay.flat-diagnostics.log"
-    if [ -f "$fallback" ] && [ "$(wc -c < "$fallback")" -ge 16777216 ]; then
-        : > "$fallback" 2>/dev/null || true
-    fi
-    cat "$1" >> "$fallback" 2>/dev/null
+    cat "$1" >> "$2"
 }
 flat_capture_delta() {
     flat_source=$1; flat_offset=$2; flat_target=$3; flat_temp=$4
     [ -f "$flat_source" ] || { echo "$flat_offset"; return 0; }
     flat_size=$(wc -c < "$flat_source")
     [ "$flat_size" -ge "$flat_offset" ] || flat_offset=0
-    if [ $((flat_size - flat_offset)) -gt 8388608 ]; then flat_offset=$((flat_size - 8388608)); fi
     if [ "$flat_size" -gt "$flat_offset" ]; then
         tail -c "+$((flat_offset + 1))" "$flat_source" > "$flat_temp" 2>/dev/null || { echo "$flat_offset"; return 0; }
         if flat_plain_append "$flat_temp" "$flat_target" 2>/dev/null; then flat_offset=$flat_size; fi
@@ -144,24 +141,17 @@ run_flat_plaintext() {
     fi
     flat_hook_offset=0; flat_dio_offset=0; flat_entry_offset=0; flat_mirror_offset=0; flat_mirror_autostart_offset=0; flat_controller_offset=0; flat_oem_geometry_offset=0; flat_oem_api_offset=0; flat_system_offset=0; flat_tick=0
     while [ -f "$ENABLED" ]; do
-        flat_hook_source=$(select_hook_source)
-        case "$flat_hook_source" in "$VOLUME"/*) ;; *) flat_hook_offset=$(flat_capture_delta "$flat_hook_source" "$flat_hook_offset" "$FLAT_DEST/streams/hook_tmp.log" "${FLAT_PREFIX}_hook.chunk") ;; esac
+        flat_hook_offset=$(flat_capture_delta "$(select_hook_source)" "$flat_hook_offset" "$FLAT_DEST/streams/hook_tmp.log" "${FLAT_PREFIX}_hook.chunk")
         flat_dio_offset=$(flat_capture_delta "$ROOT/tmp/CinemoDioManager.log" "$flat_dio_offset" "$FLAT_DEST/streams/dio_tmp.log" "${FLAT_PREFIX}_dio.chunk")
         flat_entry_offset=$(flat_capture_delta "$(select_boot_entry_source)" "$flat_entry_offset" "$FLAT_DEST/streams/boot_entry.log" "${FLAT_PREFIX}_entry.chunk")
-        flat_mirror_source=$(select_mirror_log_source)
-        case "$flat_mirror_source" in "$VOLUME"/*) ;; *) flat_mirror_offset=$(flat_capture_delta "$flat_mirror_source" "$flat_mirror_offset" "$FLAT_DEST/streams/mirror.log" "${FLAT_PREFIX}_mirror.chunk") ;; esac
+        flat_mirror_offset=$(flat_capture_delta "$(select_mirror_log_source)" "$flat_mirror_offset" "$FLAT_DEST/streams/mirror.log" "${FLAT_PREFIX}_mirror.chunk")
         flat_mirror_autostart_offset=$(flat_capture_delta "$(select_mirror_autostart_source)" "$flat_mirror_autostart_offset" "$FLAT_DEST/streams/mirror_autostart.log" "${FLAT_PREFIX}_mirror_autostart.chunk")
-        flat_controller_source=$(select_controller_log_source)
-        case "$flat_controller_source" in "$VOLUME"/*) ;; *) flat_controller_offset=$(flat_capture_delta "$flat_controller_source" "$flat_controller_offset" "$FLAT_DEST/streams/mmi-mirror-controller.log" "${FLAT_PREFIX}_controller.chunk") ;; esac
+        flat_controller_offset=$(flat_capture_delta "$(select_controller_log_source)" "$flat_controller_offset" "$FLAT_DEST/streams/mmi-mirror-controller.log" "${FLAT_PREFIX}_controller.chunk")
         flat_oem_geometry_offset=$(flat_capture_delta "$(select_oem_geometry_history_source)" "$flat_oem_geometry_offset" "$FLAT_DEST/streams/carplay-oem-geometry.log" "${FLAT_PREFIX}_oem_geometry.chunk")
         flat_oem_api_offset=$(flat_capture_delta "$(select_oem_displaymanager_api_source)" "$flat_oem_api_offset" "$FLAT_DEST/streams/carplay-oem-displaymanager-read-api.log" "${FLAT_PREFIX}_oem_api.chunk")
         if [ -f "$ROOT/tmp/carplay-oem-geometry.state" ]; then
             cp "$ROOT/tmp/carplay-oem-geometry.state" "$FLAT_DEST/streams/carplay-oem-geometry.state.new" 2>/dev/null &&
                 mv "$FLAT_DEST/streams/carplay-oem-geometry.state.new" "$FLAT_DEST/streams/carplay-oem-geometry.state" 2>/dev/null || true
-        fi
-        if [ -f "$ROOT/tmp/mmi-mirror-displayable3.state" ]; then
-            cp "$ROOT/tmp/mmi-mirror-displayable3.state" "$FLAT_DEST/streams/mmi-mirror-displayable3.state.new" 2>/dev/null &&
-                mv "$FLAT_DEST/streams/mmi-mirror-displayable3.state.new" "$FLAT_DEST/streams/mmi-mirror-displayable3.state" 2>/dev/null || true
         fi
         flat_system_offset=$(flat_capture_delta "$flat_system" "$flat_system_offset" "$FLAT_DEST/streams/system.log" "${FLAT_PREFIX}_system.chunk")
         if [ -f "$flat_system" ] && [ "$(wc -c < "$flat_system")" -ge 8388608 ]; then
@@ -193,7 +183,6 @@ run_flat_plaintext() {
             rm -f "$flat_state"
         fi
         flat_tick=$((flat_tick + 1))
-        /bin/sh "${0%/*}/altscreen_log_ring.sh" prune 2>/dev/null || true
         if [ "$ITERATIONS" -gt 0 ] && [ "$flat_tick" -ge "$ITERATIONS" ]; then break; fi
         sleep "$INTERVAL"
     done
@@ -211,9 +200,7 @@ if ! ensure_dirs "$BASE/boots" 2>/dev/null; then
         storage_volume=""
         if [ "${ALTSCREEN_CHAIN_TESTING:-0}" = 1 ]; then
             storage_candidate=${ALTSCREEN_CHAIN_VOLUME:-}
-            if [ -n "$storage_candidate" ] && [ -d "$storage_candidate/Toolbox" ]; then
-                storage_volume=$storage_candidate
-            fi
+            [ ! -d "$storage_candidate/Toolbox" ] || storage_volume=$storage_candidate
         else
             for storage_candidate in /net/mmx/fs/sda0 /net/mmx/fs/sda1 /net/mmx/fs/sdb0 /net/mmx/fs/sdb1 /fs/sda0 /fs/sda1 /fs/sdb0 /fs/sdb1; do
                 if [ -d "$storage_candidate/Toolbox" ] && { [ -d "$storage_candidate/MMI-Cockpit-Carplay/backup/original" ] || [ -d "$storage_candidate/Backup/AltScreenChain/original" ]; }; then
@@ -285,7 +272,7 @@ discover() {
     VOLUME=""
     if [ "${ALTSCREEN_CHAIN_TESTING:-0}" = 1 ]; then
         candidate=${ALTSCREEN_CHAIN_VOLUME:-}
-        [ -n "$candidate" ] && [ -d "$candidate/Toolbox" ] && VOLUME=$candidate
+        [ -d "$candidate/Toolbox" ] && VOLUME=$candidate
     else
         for candidate in /net/mmx/fs/sda0 /net/mmx/fs/sda1 /net/mmx/fs/sdb0 /net/mmx/fs/sdb1 /fs/sda0 /fs/sda1 /fs/sdb0 /fs/sdb1; do
             # Only write to a test card with an AltScreen installation/backup.
@@ -335,10 +322,6 @@ snapshot() {
             cat "$source"
         } >> "$SPOOL/state_history.log"
     done
-    if [ -f "$SPOOL/state_history.log" ] && [ "$(wc -c < "$SPOOL/state_history.log")" -gt 4194304 ]; then
-        tail -c 2097152 "$SPOOL/state_history.log" > "$SPOOL/state_history.trim" &&
-            mv "$SPOOL/state_history.trim" "$SPOOL/state_history.log"
-    fi
     # Preserve the first boot observation even after dio starts or restarts.
     if [ ! -f "$SPOOL/initial_snapshot.complete" ]; then
         for source in "$SPOOL"/*.txt "$SPOOL"/*.json; do
@@ -396,6 +379,8 @@ runtime_logs() {
         echo "MISSING $controller_source" > "$controller_output"
     fi
 
+    # OEM_LAYOUT_OBSERVER_V1 evidence. These are read-only observer outputs;
+    # collecting them must not affect CarPlay or DisplayManager state.
     oem_state_source="$ROOT/tmp/carplay-oem-geometry.state"
     oem_state_output="$SPOOL/tmp_carplay-oem-geometry.state"
     if [ -f "$oem_state_source" ]; then
@@ -403,15 +388,6 @@ runtime_logs() {
             mv "$oem_state_output.new" "$oem_state_output"
     elif [ ! -f "$oem_state_output" ]; then
         echo "MISSING $oem_state_source" > "$oem_state_output"
-    fi
-
-    displayable_state_source="$ROOT/tmp/mmi-mirror-displayable3.state"
-    displayable_state_output="$SPOOL/tmp_mmi-mirror-displayable3.state"
-    if [ -f "$displayable_state_source" ]; then
-        cp "$displayable_state_source" "$displayable_state_output.new" 2>/dev/null &&
-            mv "$displayable_state_output.new" "$displayable_state_output"
-    elif [ ! -f "$displayable_state_output" ]; then
-        echo "MISSING $displayable_state_source" > "$displayable_state_output"
     fi
 
     oem_history_source=$(select_oem_geometry_history_source)
@@ -466,7 +442,6 @@ flush_sd() {
             fi
         done
     fi
-    /bin/sh "$HELPER_DIR/altscreen_log_ring.sh" prune 2>/dev/null || true
 }
 finish() {
     trap - 0

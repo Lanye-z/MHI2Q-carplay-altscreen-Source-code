@@ -21,22 +21,13 @@ if [ -x "$READELF" ]; then
   fi
 fi
 
-STRINGS="${STRINGS:-}"
-if [ -z "$STRINGS" ]; then
-  if [ -x "$QNX_HOST/usr/bin/ntoarmv7-strings" ]; then
-    STRINGS="$QNX_HOST/usr/bin/ntoarmv7-strings"
-  elif command -v strings >/dev/null 2>&1; then
-    STRINGS="$(command -v strings)"
-  fi
-fi
-[ -n "$STRINGS" ] || {
-  echo "ERROR: no strings tool found for sidecar verification" >&2
-  exit 1
-}
-
 check_marker() {
   marker=$1
-  "$STRINGS" "$BIN" | grep -Fq "$marker"
+  if command -v strings >/dev/null 2>&1; then
+    strings "$BIN" | grep -Fq "$marker"
+  else
+    grep -a -Fq "$marker" "$BIN"
+  fi
 }
 
 for marker in \
@@ -55,12 +46,7 @@ for marker in \
   'PHASE=DECODER_FIRST_FRAME' \
   'PHASE=NV12_CSC_READY' \
   'PHASE=DISPLAYABLE3_FIRST_PRESENT' \
-  'PHASE=DISPLAYABLE3_OWNERSHIP' \
-  'DISPLAYABLE3_OWNERSHIP_V1' \
-  '/tmp/mmi-mirror-displayable3.state' \
   'PHASE=DIRECT111_ACTIVE' \
-  'PHASE=FRAME_PRESENT_TIMING' \
-  'PHASE=FRAME_CHAIN_HEALTH' \
   'window58_readback=0'
 do
   check_marker "$marker" || {
@@ -69,11 +55,11 @@ do
   }
 done
 
-if "$STRINGS" "$BIN" | grep -Fq 'screen_read_window'; then
+if strings "$BIN" | grep -Fq 'screen_read_window'; then
   echo "ERROR: Window58 readback leaked into direct-display binary" >&2
   exit 1
 fi
-if "$STRINGS" "$BIN" | grep -Fq 'WINDOW_MANAGER_CONTEXT event observer ready'; then
+if strings "$BIN" | grep -Fq 'WINDOW_MANAGER_CONTEXT event observer ready'; then
   echo "ERROR: Window58 event observer leaked into direct-display binary" >&2
   exit 1
 fi

@@ -135,6 +135,9 @@ install_diag(){
         mkdir -p "$ALTS_VOLATILE" 2>/dev/null || true
     fi
     [ -d "$ALTS_VOLATILE" ] || ALTS_BOOT_ENTRY=/tmp/MMI-Cockpit-Carplay.boot_entry.log
+    if ( : >> "$ALTS_BOOT_ENTRY" ) 2>/dev/null; then
+        exec >> "$ALTS_BOOT_ENTRY" 2>&1
+    fi
     echo "BOOT_ENTRY pid=$$ universal_persistent_diag=1 runtime=$ALTS_RUNTIME"
     alts_boot_wait=0
     while { [ ! -f "$ALTS_RUNTIME/altscreen_boot_diag.sh" ] || [ ! -f "$ALTS_RUNTIME/altscreen_adaptive_diag.sh" ]; } && [ "$alts_boot_wait" -lt 60 ]; do
@@ -154,13 +157,7 @@ install_diag(){
     else
         echo "BOOT_HELPER_MISSING after_seconds=120"
     fi
-) 2>&1 < /dev/null | {
-    if [ -f /mnt/app/root/carplay-altscreen/bin/altscreen_log_ring.sh ]; then
-        /bin/sh /mnt/app/root/carplay-altscreen/bin/altscreen_log_ring.sh pipe boot-entry /tmp/MMI-Cockpit-Carplay.boot_entry.log
-    else
-        cat >> /tmp/MMI-Cockpit-Carplay.boot_entry.log 2>/dev/null || cat > /dev/null
-    fi
-} &
+) > /dev/null 2>&1 < /dev/null &
 # END ALTSCREEN DIAGNOSTICS
 BOOT_BLOCK
     if ! awk 'FNR==NR {block=block $0 "\n"; next}
