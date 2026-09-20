@@ -50,153 +50,166 @@ stall_report_after_ms=120
 
 The producer remains uncapped and the Private111 / OMX / SHM ABI is unchanged.
 
-## 2. Layout adaptation: safeArea plus stock map-plane translation
+## 2. Layout adaptation: map-local safeArea + OEM map translation
 
-The captured OEM `visible_active_x/y/w/h` values describe the physical region
-that is safe from cluster occlusion. They must **not** be interpreted as
-"shrink the full 1440x455 video into this box", because that would distort the
-map aspect ratio.
+The ListModel176-derived rectangles are treated as **map/source-local safe
+areas**, not as post-layout physical VC rectangles and not as GLES scale boxes.
 
-The renderer therefore keeps the native stream size:
+The renderer always keeps the native stream size:
 
 ```
 renderer_scale=0
 displayable3=1440x455
 ```
 
-There are two independent geometry layers:
+The two independent geometry layers are:
 
-1. **CarPlay safeArea** — tells the phone where important navigation UI should
-   land;
-2. **map-plane translation** — reproduces the OEM position of the full-size map
-   plane.
+1. **CarPlay safeArea in the 1440x455 map canvas**
+2. **Audi map-plane translation in the VC compositor**
 
-For Classic and Sport FULL, and for Classic SMALL, the renderer offset is
-`(0,0)`.
-
-For **Sport SMALL**, the OEM layout reports:
+The CarPlay source safe areas are fixed by FULL/SMALL:
 
 ```
-small_stage_dx=-476
-small_stage_dy=0
+FULL  source safeArea = 370,49,700x300
+SMALL source safeArea = 490,49,460x300
 ```
 
-matching the stock `CombiMapController.positionMap()` behavior for map planes
-33/58. V2 now applies that translation to the full 1440x455 displayable3
-content. The texture is not scaled. The left edge moves outside the viewport
-and GLES performs natural clipping.
-
-## 3. Safe-area resolver and coordinate compensation
-
-The runtime consumes:
+The Audi map-plane translation is independently derived from layout constants
+80/81:
 
 ```
-/tmp/mmi-mirror-hmi.state
+Classic FULL  -> (0,0)
+Classic SMALL -> (0,0)
+Sport   FULL  -> (0,0)
+Sport   SMALL -> (-476,0)
 ```
 
-from the already vehicle-tested Java controller. The file supplies:
-
-```
-view=FULL|SMALL
-layout_name=<OEM layout class>
-small_stage_dx=<layout 80>
-small_stage_dy=<layout 81>
-```
-
-For the tested B9 layout family, the measured **physical** unobscured regions
-remain:
-
-```
-FULL  physical safe region = 370,49,700x300
-SMALL physical safe region = 490,49,460x300
-```
-
-However, CarPlay `safeArea` is expressed in the phone's source canvas, before
-the renderer translation. Therefore Sport SMALL must compensate the -476 px
-map shift:
+Therefore Sport SMALL is intentionally **not compensated back to the centre**:
 
 ```
 physical = source + renderer_offset
-
-Sport SMALL:
-physical safe x = 490
-renderer dx     = -476
-source safe x   = 490 - (-476) = 966
+Sport SMALL physical safe x = 490 + (-476) = 14
 ```
 
-The four session setups are therefore:
+This matches the stock B9Sport behavior in
+`CombiMapController.positionMap()`: the `-476,0` offset belongs to map planes
+33/58. It is not applied to the KDK maneuver panel/backings.
 
-| State | Renderer offset | CarPlay source safeArea | Physical safe region after translation |
+The resulting four-state geometry is:
+
+| State | Renderer offset | CarPlay source safeArea | Resulting physical safe region |
 | --- | ---: | ---: | ---: |
 | CLASSIC_FULL | `(0,0)` | `370,49,700x300` | `370,49,700x300` |
 | CLASSIC_SMALL | `(0,0)` | `490,49,460x300` | `490,49,460x300` |
 | SPORT_FULL | `(0,0)` | `370,49,700x300` | `370,49,700x300` |
-| **SPORT_SMALL** | **`(-476,0)`** | **`966,49,460x300`** | **`490,49,460x300`** |
+| **SPORT_SMALL** | **`(-476,0)`** | **`490,49,460x300`** | **`14,49,460x300`** |
 
-This distinction is important: Classic/Sport can share the same **physical**
-safe region while still requiring different CarPlay source coordinates because
-Sport SMALL moves the full map plane.
+## 3. Two declared type111 viewAreas
 
-The hook logs the resolved contract as:
-
-```
-ALTAREA_LAYOUT_SAFE_V2
-safe_source=...
-safe_physical=...
-renderer_offset=...
-renderer_scale=0
-```
-
-The sidecar independently logs:
+A CarPlay session cannot switch to a view-area index that was never declared.
+The type111 display therefore advertises both Audi candidates at session setup:
 
 ```
-PHASE=OEM_MAP_PLACEMENT
-renderer_offset=...
-size=1440x455
-renderer_scale=0
-natural_clip=1
-session_latched=1
+viewAreas[0]:
+  viewArea = full 1440x455
+  safeArea = 370,49,700x300       # FULL
+
+viewAreas[1]:
+  viewArea = full 1440x455
+  safeArea = 490,49,460x300       # SMALL
 ```
 
-The separate file:
+The coded type111 frame remains 1440x455 in both states. The second viewArea
+does not shrink the video; it gives iOS a second safe-area layout for the same
+map canvas.
+
+`initialViewArea` follows the VC state present when `/info` is built:
+
+```
+FULL  -> initialViewArea=0, adjacentViewAreas=[1]
+SMALL -> initialViewArea=1, adjacentViewAreas=[0]
+```
+
+For type111 the implementation deliberately does **not** add the
+type110-only `viewAreaTransitionControl`, `viewAreaStatusBarEdge` or
+`viewAreaSupportsFocusTransfer` keys. Apple's screen-dictionary builder
+type-gates those fields to type110, while ALT/cluster viewArea entries carry the
+rect plus nested safeArea.
+
+The separate observer file:
 
 ```
 /tmp/carplay-oem-geometry.state
 ```
 
-remains **observation-only evidence** from `OEM_LAYOUT_OBSERVER_V1`. It is not
-used as a runtime control input.
+remains evidence only. Runtime control continues to consume the already
+vehicle-tested:
 
-If the display size, HMI state, or layout class is not recognized, both sides
-fail safe:
+```
+/tmp/mmi-mirror-hmi.state
+```
 
-- the hook uses full-screen safeArea;
-- the sidecar keeps fullscreen destination `(0,0)`;
-- type111 is not withheld solely because layout adaptation failed.
+which publishes `view`, `layout_name`, `small_stage_dx` and
+`small_stage_dy`.
 
-For the AltScreen/cluster display, `drawUIOutsideSafeArea` remains undefined.
+## 4. Same-session live switching
 
-## 4. Runtime switching scope
+FULL/SMALL no longer requires a CarPlay reconnect.
 
-Both safeArea and map-plane translation are **latched at session setup**.
+The runtime path is:
 
-This version does not claim an unproven same-session CarPlay command for
-changing the active view-area while the current type111 session is already
-running.
+```
+Audi View button
+ -> NAV_VIEW_SIZE_CHOICE changes
+ -> Java updates /tmp/mmi-mirror-hmi.state
+ -> hook watcher detects FULL/SMALL
+ -> AirPlay /command updateViewArea(index 0/1)
+ -> iPhone switches to the already-declared type111 viewArea
 
-Therefore:
+in parallel:
 
-- if CarPlay connects while the VC is Sport SMALL, the session starts with
-  `renderer_offset=(-476,0)` and source `safeArea=(966,49,460x300)`;
-- if it connects in the other three states, the corresponding table entry is
-  applied;
-- Java continues observing FULL/SMALL and CLASSIC/SPORT changes live;
-- changing the VC layout during an already-running session remains
-  observation-only until a verified same-session CarPlay view-area transition
-  command is identified.
+ -> sidecar watcher detects layout/view
+ -> Classic/Sport renderer offset is re-applied
+ -> current texture is immediately re-rendered
+```
 
-This avoids a dangerous half-switch where the renderer moves but the phone
-still uses the previous safeArea.
+The AirPlay command follows the CarPlay SDK wire shape:
+
+```
+type = updateViewArea
+params.uuid = <type111 display UUID>
+params.viewAreaIndex = 0 | 1
+params.animationDurationMillis = 0
+params.adjacentViewAreas = [other index]
+```
+
+The native watcher polls the HMI state at 100 ms and retries a failed/timed-out
+view-area transition. The sidecar polls placement at 50 ms. If the geometry
+changes while decoded video is momentarily stalled, the sidecar redraws the
+last uploaded texture immediately, so the map moves without waiting for the
+next video frame.
+
+This also covers same-session Classic/Sport changes:
+
+- FULL Classic/Sport both remain at renderer offset `(0,0)`;
+- SMALL Classic uses `(0,0)`;
+- SMALL Sport uses `(-476,0)`;
+- switching between Classic SMALL and Sport SMALL therefore moves the current
+  map immediately even though both use CarPlay viewArea index 1.
+
+Expected logs include:
+
+```
+ALTAREA_LAYOUT_SAFE_V3 ... viewAreaCount=2 ...
+PHASE=ALT111_VIEWAREA_TARGET ... old=0 new=1 ...
+PHASE=ALT111_VIEWAREA_SUBMIT ... viewAreaIndex=1 ... same_session=1
+PHASE=ALT111_VIEWAREA_RESULT ... accepted=1
+PHASE=OEM_MAP_PLACEMENT ... renderer_offset=-476,0 ... live_switch=1
+PHASE=OEM_MAP_RERENDER ... last_frame_redrawn=1
+```
+
+If the HMI state is not recognized, the safe fallback is full-screen geometry;
+the code does not invent a new layout or withhold Main110.
 
 ## 5. Startup safety
 
@@ -211,8 +224,8 @@ Private111 setup
 ```
 
 The layout resolver affects the type111 display dictionary and the sidecar's
-session-latched full-size map translation. Both paths have fullscreen fallbacks,
-and neither path changes the 1440x455 render scale.
+live full-size map translation. Both paths have fullscreen fallbacks, and
+neither path changes the 1440x455 render scale.
 
 It does not change:
 
@@ -230,9 +243,10 @@ It does not change:
 
 Both native artifacts must be rebuilt because this branch changes:
 
-- sidecar `main.cpp` (source-driven pacing + session map translation);
+- sidecar `main.cpp` (source-driven pacing + live map translation/rerender);
 - sidecar `gl_renderer.cpp` (negative destination coordinates with natural clipping);
-- universal hook source `p1404_airplay.c` (CarPlay safeArea + translation compensation).
+- universal hook `p1404_airplay.c` (two type111 viewAreas + `updateViewArea`);
+- native monitor `p1404_cockpit_native.c` (100 ms HMI watcher + retry/response tracking).
 
 Until both are rebuilt and promoted:
 
