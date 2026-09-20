@@ -28,6 +28,9 @@ ACTIVE="$DEVICE_ROOT/tmp/mmi-mirror-active"
 DEST_READY="$DEVICE_ROOT/tmp/mmi-mirror-basevideo.ready"
 STARTED="$DEVICE_ROOT/tmp/mmi-mirror-controller.started"
 JAVA_LOG="$DEVICE_ROOT/tmp/mmi-mirror-controller.log"
+OEM_GEOMETRY_STATE="$DEVICE_ROOT/tmp/carplay-oem-geometry.state"
+OEM_GEOMETRY_HISTORY="$DEVICE_ROOT/tmp/carplay-oem-geometry.log"
+OEM_DISPLAYMANAGER_API="$DEVICE_ROOT/tmp/carplay-oem-displaymanager-read-api.log"
 MIRROR="$RUNTIME/bin/mirror"
 MIRROR_PID="$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/mirror/pid"
 MIRROR_LOG="$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/mirror/mirror.log"
@@ -176,6 +179,30 @@ if [ -f "$JAVA_LOG" ]; then
 else
     echo "JAVA_CTX80_REQUEST=UNKNOWN log_missing=1"
     echo "JAVA_CTX80_ACTUAL=UNKNOWN log_missing=1"
+fi
+
+# OEM layout observer is intentionally diagnostic-only in this branch.
+echo "OEM_LAYOUT_OBSERVER_MODE=OBSERVE_ONLY apply_to_carplay=0 apply_to_renderer=0"
+if [ -f "$OEM_GEOMETRY_STATE" ]; then
+    echo "OEM_GEOMETRY_STATE_BEGIN"
+    cat "$OEM_GEOMETRY_STATE" 2>/dev/null || true
+    echo "OEM_GEOMETRY_STATE_END"
+else
+    echo "OEM_GEOMETRY_STATE=MISSING"
+fi
+if [ -f "$OEM_GEOMETRY_HISTORY" ]; then
+    OEM_SNAPSHOTS=$(grep -c '^--- OEM_GEOMETRY_SNAPSHOT ' "$OEM_GEOMETRY_HISTORY" 2>/dev/null || true)
+    case "$OEM_SNAPSHOTS" in ''|*[!0-9]*) OEM_SNAPSHOTS=0 ;; esac
+    echo "OEM_GEOMETRY_HISTORY=YES snapshots=$OEM_SNAPSHOTS"
+else
+    echo "OEM_GEOMETRY_HISTORY=NO"
+fi
+if [ -f "$OEM_DISPLAYMANAGER_API" ]; then
+    echo "OEM_DISPLAYMANAGER_READ_API_BEGIN"
+    cat "$OEM_DISPLAYMANAGER_API" 2>/dev/null || true
+    echo "OEM_DISPLAYMANAGER_READ_API_END"
+else
+    echo "OEM_DISPLAYMANAGER_READ_API=MISSING"
 fi
 
 # V2 vehicle display readiness is driven by the Screen-linearized decoded path.
