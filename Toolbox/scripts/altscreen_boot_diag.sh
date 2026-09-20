@@ -153,6 +153,10 @@ run_flat_plaintext() {
             cp "$ROOT/tmp/carplay-oem-geometry.state" "$FLAT_DEST/streams/carplay-oem-geometry.state.new" 2>/dev/null &&
                 mv "$FLAT_DEST/streams/carplay-oem-geometry.state.new" "$FLAT_DEST/streams/carplay-oem-geometry.state" 2>/dev/null || true
         fi
+        if [ -f "$ROOT/tmp/mmi-mirror-displayable3.state" ]; then
+            cp "$ROOT/tmp/mmi-mirror-displayable3.state" "$FLAT_DEST/streams/mmi-mirror-displayable3.state.new" 2>/dev/null &&
+                mv "$FLAT_DEST/streams/mmi-mirror-displayable3.state.new" "$FLAT_DEST/streams/mmi-mirror-displayable3.state" 2>/dev/null || true
+        fi
         flat_system_offset=$(flat_capture_delta "$flat_system" "$flat_system_offset" "$FLAT_DEST/streams/system.log" "${FLAT_PREFIX}_system.chunk")
         if [ -f "$flat_system" ] && [ "$(wc -c < "$flat_system")" -ge 8388608 ]; then
             flat_log_event "SYSTEM_RAW_TRIM possible_boundary_loss=1 limit_bytes=8388608"
@@ -388,6 +392,15 @@ runtime_logs() {
             mv "$oem_state_output.new" "$oem_state_output"
     elif [ ! -f "$oem_state_output" ]; then
         echo "MISSING $oem_state_source" > "$oem_state_output"
+    fi
+
+    displayable_state_source="$ROOT/tmp/mmi-mirror-displayable3.state"
+    displayable_state_output="$SPOOL/tmp_mmi-mirror-displayable3.state"
+    if [ -f "$displayable_state_source" ]; then
+        cp "$displayable_state_source" "$displayable_state_output.new" 2>/dev/null &&
+            mv "$displayable_state_output.new" "$displayable_state_output"
+    elif [ ! -f "$displayable_state_output" ]; then
+        echo "MISSING $displayable_state_source" > "$displayable_state_output"
     fi
 
     oem_history_source=$(select_oem_geometry_history_source)
