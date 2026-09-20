@@ -1,209 +1,168 @@
-<!-- ALTSCREEN-BRANCH-STATUS:BEGIN -->
-# AltScreen CarPlay / Virtual Cockpit status
+> [!IMPORTANT]
+> **实车点亮备份分支**
+>
+> 本分支保存 2026-09-19 实车首次成功点亮 Virtual Cockpit 的 V2 路线。后续功能修改请优先在 `main` 进行，本分支主要用于回归对比、故障恢复和确认“最后一个已知可点亮版本”。
 
-**Branch:** `carplay-private111-direct-display-v2`  
-**Role:** Vehicle-tested V2 backup baseline
+# MHI2Q CarPlay 第二屏直显 — V2 实车备份
 
-This branch is preserved as the **known-good V2 backup**. Its display source/binary path is the version that achieved confirmed physical VC first-light. Future functional work should go to `main`; this branch should remain a reference point apart from documentation updates.
+本项目用于验证 **Audi MHI2Q 平台上的 CarPlay private type111 第二屏视频流直接输出到 Virtual Cockpit**。
 
-Vehicle testing confirmed that the private111 -> stock OMX -> Screen-linearized NV12 -> decoded SHM -> GLES/displayable3 -> Java Context80 path can physically light the Virtual Cockpit and follow the phone navigation image.
+V2 已经通过实车测试证明：CarPlay 第二屏画面可以经过原车 OMX、QNX Screen 线性化、decoded SHM、GLES / displayable3 和 Java Context80，最终在仪表上正确显示并随手机导航变化。
 
-Use this branch for regression comparison or recovery to the first-light baseline, not as the primary development branch.
+## 当前状态
 
-## Current vehicle observations
-
-- **Display path:** confirmed physical VC output on the modified V2 route.
-- **Performance follow-up:** keep the proven stock-OMX/Screen-linearizer architecture. The current optimization target is to deliberately process **every other decoded frame** ("skip one, read one") to reduce Screen read/publish load rather than introducing a new decoder or `screen_blit` path before it is needed.
-- **Lifecycle issue still to audit:** on one first-session disconnect, CarPlay returned to the stock map while no stock route was active, yet a navigation arrow appeared/remained. Treat this as a teardown/navigation-state cleanup issue; the successful physical display route itself remains proven.
-- **No other mandatory architecture change is currently established by the successful test.** Continue to collect logs before changing additional layers.
-
-## Proven route
+本分支定位为：
 
 ```text
-CarPlay private type111
-  -> stock OMX
-  -> stock private renderer
-  -> Screen linearization
-  -> /carplay111_decoded
-  -> sidecar
-  -> GLES / displayable3
-  -> Java Context80
-  -> Virtual Cockpit
+实车已点亮
+        ↓
+保留为稳定备份
+        ↓
+不再作为日常开发主线
 ```
 
-Main110 remains intentionally outside the auxiliary display route.
+当前正式开发分支为：
 
-> The toolbox documentation below is inherited from the upstream MIB2 High toolbox. The branch-status section above describes the CarPlay/VC experiment in this repository.
-
----
-
-<!-- ALTSCREEN-BRANCH-STATUS:END -->
-
-# MIB2 High toolbox
-The ultimate MIB2-HIGH toolbox for all your MIB2 High customization needs.
-
-Note: this screen has the potential to ruin your MIB2 HIGH unit. The developers are not responsible for any troubles to anyone or anything caused by this toolbox.
-It's never our intention to harm any person, car or brand. Use the tools wisely, don't be a douche.
-
-Note2: This is **not** a universal Jailbreak-like solution for all your needs and firmware versions.
-
-Note3: If you're a business that tries to make a profit off of this:  Don't be an asshole, don't charge money for this. This project is done in our free time, out of love for the community. I've risked bricking my own hardware while testing, and invested a lot of time in the research. Instead of making money, why not support this project with your knowledge or a [small donation](https://paypal.me/chillout1) or become a [Patreon](https://patreon.com/jille). 
-
-# Requirements
-- Read the entire readme
-- At least 1 healthy set of brains
-- An MIB2 HIGH or MIB2.5 HIGH infotainment unit. It will **not** work on MIB1 or MIB2 Standard units. Discover Media / Compostion Media is not MIB2 HIGH!
-- 1 empty, **FAT32 formatted** SD-card, with enough space. Everything bigger than 1GB is fine
-- Some place to save your backups
-
-## Optional requirements ##
-- Python 2.7, if you want to extract/compress graphics containers (canim/mcf)
-- A text-editor, if you want to make your own green menu files or scripts
-- Picture editing software, if you want to customize graphics files
-
-# How to install
-- If you've installed a previous version (before V4.0) of the toolbox: clean your SD-card before trying to install.
-- Download all files from the repository. This can be either as a git clone or "Download zip" from github then extract the zip.
-- Put all files and folders on an empty SD-card, preferable >1GB.
-- Put the SD-card in one of the slots of your MIB2-unit. 
-- Make sure there's only 1 SD-card in your unit, otherwise the scripts don't know where to look.
-- Hold the MENU button on your MIB2 until the service screen appears.
-- Select the "Software updates/versions" menu, then hit the "Update" button in top right corner.
-- Select the SD-card and select MQB Coding MIB2 Toolbox.
-- Let the unit run the entire software update. It will reboot several times before showing a screen listing a lot of modules as N/A. The Toolbox line should be Y. You can then hit the back button in the top right corner. 
-- When it's done, it will ask you to connect a computer and clear the error codes. This is not needed, you can hit the "Cancel" button..
-- The unit will restart one final time and you're back at the main car menu. Installation is now done.
-- Hold the MENU button, and go to TESTMODE. On older versions you can go to the developer menu by holding the MENU button for about 10 seconds.
-- Go to the Green Developer Menu
-- There will be an additional menu called "mqbcoding". When you see this, the installation was succesful.
-- Go to mqbcoding, and you will see the following:
-
-![The MQB Coding toolbox menu](https://i.imgur.com/wGUZ4xw.png)
-
-- You're now done.
-- Enjoy!
-
-# How to do a manual installation
-- Put the mib2-toolbox on an SD-card and insert it into the MIB-unit SD1 slot.
-- Make a connection to the debug console of the unit (either via D-Link Dub-E100 or ASIX AX88179 on the USB port, or serial interface on the back of the unit)
-- Log in
-- Mount the SD card:
-  * `mount -uw /net/mmx/fs/sda0` 
-- Run the finalScript:  
-  * `sh /net/mmx/fs/sda0/Toolbox/final/finalScripts.sh`
-
-- Hold the MENU button, and go to TESTMODE. On older versions you can go to the developer menu by holding the MENU button for about 10 seconds.
-- Go to the Green Developer Menu
-- There will be an additional menu called "mqbcoding". When you see this, the installation was succesful.
-- You're now done.
-- Enjoy!
-
-# Green menu screen overview:
-
-```
-MQBCoding Main
-|
-+---Customization                       # Customization features
-|   +---Adaptations                     # Adaptation channels
-|       +---CarDeviceBUSAssignment
-|       +---CarFunctionsList_BAP
-|       +---CarFunctionsList_CAN
-|       +---CarMenuOperation
-|       +---HMI_FunctionBlockingTable
-|       +---RCCAdaptions
-|       +---VariantInfo
-|       +---VehicleConfiguration
-|       +---WLAN
-|   +---Advanced                        # Import shadow file, FECs pf.conf and such
-|   +---AndroidAuto                     # Android Auto custom apps patch
-|   +---Coding                          # Long coding editor
-|   +---Display                         # Displaymanager and other related features
-|   +---GreenMenu                       # Import new GreenMenu screens and scripts
-|   +---Language                        # Replacing language data
-|   +---Navigation                      # Navigation tweaks
-|   +---Privacy                         # Privacy features
-|   +---Skin                            # Skin graphics import
-|   +---Sounds                          # Sounds import (experimental)
-|   +---Startup                         # Startup graphics import
-|   +---Updates                         # Custom SWDL modes and emergency
-|   +---Various                         # Various tweaks
-|
-+---Disclaimer                          # Some wise words
-|
-+---Dump                                # Dump various data to SD-card
-|
-+---History                             # Version history of the Toolbox
-|
-+---MIB_Information                     # Information about the unit
-|   +---Password                        # Password finder
-|
-+---Uninstall                           # Uninstalls and or cleans up the MIB Toolbox
+```text
+main
 ```
 
-# How to use the new screens
-Most screens have a description inside, or show information when running a script. It's always wise to have an SD-card in slot 1.
+如果 `main` 后续优化引入显示回归，可以直接与本分支进行代码、二进制和上车现象对比。
 
-## dump
-Here you can dump various things which you need to customise you unit. Make sure a SD-card is inserted.
+## 已验证显示链路
 
-## customization
-### androidauto
-This screen has 2 buttons:
-- Patch Android Auto to enable custom third party apps. No root is needed on your phone.
-- Recover the original gal.json file in case you didn't like the patch or something is not working right.
+```text
+iPhone CarPlay
+  ↓
+private type111
+  ↓
+原车 AirPlay / ScreenStreamProcessData
+  ↓
+原车 OMX 解码
+  ↓
+原车 private renderer
+  ↓
+QNX Screen 线性化为标准 NV12
+  ↓
+/carplay111_decoded
+  ↓
+独立 sidecar
+  ↓
+CPU NV12 → RGBA
+  ↓
+GLES / displayable3
+  ↓
+Java/HMI Context80
+  ↓
+Virtual Cockpit
+```
 
-### skin
-This screen lets you install new images.mcf for each of the 6 skin-folders, from the SkinFiles folder on your SD-card. Use the dump files as a guideline. Don't install any files that are meant for other firmwares because it **will** mess up your graphics and functionalities of your infotainment unit.
-This screen will also let you recover the skins from backup.
+主 CarPlay 画面 Main110 不经过这条辅助路径。
 
-## greenmenu
-This screen will let you import new .esd files from the GreenMenu folder on your SD-card.
+## V2 解决的关键问题
 
-# How to use the tools
-In the Tools folder you will find a couple of tools:
-- extract-canim_seat.py
-- extract-canim_vw.py
+- 不再依赖 Window58 枚举作为最终显示来源；
+- 对原车 private renderer 的实际 Screen window 进行读取；
+- 将厂商内部 decoded buffer 安全转换为标准线性 NV12；
+- 去除不安全的原始 vendor pointer fallback；
+- 加强 decoded SHM 的大小、magic、version、writer PID 校验；
+- 使用 writer PID + generation + stream cookie 区分不同 CarPlay 会话；
+- 加入同一 private111 会话内 sidecar 异常退出后的恢复逻辑；
+- 防止旧连接的迟到 callback 抢回当前 stream 所有权；
+- Java/HMI 保持 Context80 唯一控制权。
 
-These are Python-scripts to extract startup screen files (.canim files) in 2 formats. If one of the scripts doesn't extract your canim, try the other one. Both work in the same way: extract_canim.py <filename> <outdir>, for instance: 
+## 实车结果
 
-```extract_canim.py test.canim .\testfiles\```
+2026-09-19 的测试确认：
 
-- extract-mcf.py
- 
-This a python script to extract skinfile containers (mcf) and it works similar to the canim-extract: extract_mcf.py <filename> <outdir>, for instance:
- 
- ```extract_mcf.py images.mcf .\extracted\```
- 
- 
-- compress-canim_seat.py
-- compress-canim_vw.py
+- Virtual Cockpit 已出现 CarPlay 第二屏画面；
+- 画面会跟随手机端导航内容更新；
+- private111 → stock OMX → Screen → SHM → GLES → Context80 的完整物理链路成立。
 
-These are the scripts to compress the startup-screens. Make sure you use the same compress-method you used when extracting. Usage: compress-canim.py <original-file> <new-file> <imagesdir>, for instance:
+因此本分支已经不再是“等待点亮”的实验版本，而是当前项目的 **首次实车成功基线**。
 
-```compress-canim.py test.canim modified.canim .\testfiles\```
+## 当前已知问题
 
-- compress-mcf.py
-This is the script to compress the MCF-container. Usage: compress-mif.py <original-file> <new-file> <imagesdir>, for instance:
-  
-```compress-mcf.py images.mcf images2.mcf .\extracted\```
+### 1. 后续应优化为隔一帧读一帧
 
-- extract-cff.py
-This script can extract images.cff files, container files for navigation icons and materials. Usage: extract-cff.py <output dir>, for instance:
-  
-```extract-cff.py images.cff c:\extracted\```
+当前方案能够点亮，但辅助链路没有必要对原车 renderer 的每一帧都执行完整读取和发布。
 
+后续 `main` 计划改为：
 
-## F.A.Q.
-If you run into any issues, consult the [F.A.Q.](https://github.com/jilleb/mib2-toolbox/blob/master/FAQ.md).
+```text
+第 1 帧：读取 / 发布
+第 2 帧：跳过
+第 3 帧：读取 / 发布
+第 4 帧：跳过
+...
+```
 
-## Supported firmware versions
-This toolbox probably doesn't work on all available firmware versions but the current SD-card installtion mproves to be mostly compatible with most firmwares.
+原车仍然每帧正常渲染，我们只是主动降低辅助链路采样频率。
 
+### 2. CarPlay 断开后出现原车导航箭头
 
-# Disclaimer:
-**Warning** These screens have the potential to break your unit and void your warranty. Be careful. We are not responsible for any troubles to you, your car or software. MQB Coding is always looking for cool hacks and retrofits to increase the potential of the MQB platform. It's never our intention to harm any person, car or brand.
+一次测试中，CarPlay 断开后仪表已经回到原车地图，并且原车没有活动导航，但仍出现了导航箭头。
 
-## Support this project
+该问题暂时归类为 teardown / 导航状态交接问题，后续在 `main` 中继续处理。
 
-You're always welcome to support this project with your knowledge, ideas or a [small donation](https://paypal.me/chillout1) to my Paypal or [Patreon](https://patreon.com/jille). 
+## 安装与测试
 
+进入工程菜单：
+
+```text
+MMI-Cockpit-Carplay
+```
+
+主要操作：
+
+| 菜单项 | 作用 |
+| --- | --- |
+| `INSTALL` | 安装 V2 private111 直显运行环境。 |
+| `START` | 启用第二屏显示链路。 |
+| `STATUS` | 查看 private111、Screen、SHM、displayable3、Context80 状态。 |
+| `STORE LOGS + RESTORE` | 保存日志并恢复。 |
+| `RESTORE ORIGINAL` | 恢复原车状态。 |
+
+推荐顺序：
+
+```text
+iPhone 保持未连接
+        ↓
+INSTALL
+        ↓
+完整重启
+        ↓
+START
+        ↓
+再次完整重启
+        ↓
+连接 CarPlay
+        ↓
+启动导航
+        ↓
+观察仪表并保存 STATUS / 日志
+```
+
+## 关键成功标记
+
+```text
+PHASE=FRAME_LINEARIZER_FIRST_FRAME
+PHASE=DECODED_SHM_ATTACHED
+PHASE=DECODER_FIRST_FRAME
+PHASE=DISPLAYABLE3_FIRST_PRESENT result=OK
+CTX80_OBSERVED actual=80
+PHASE=DIRECT111_ACTIVE
+PHYSICAL_ROUTE_READY=SOFTWARE_CHAIN_COMPLETE
+```
+
+最终仍以仪表实际画面为准。
+
+## 分支使用建议
+
+| 分支 | 用途 |
+| --- | --- |
+| `main` | 后续开发、性能优化、生命周期修复。 |
+| `carplay-private111-direct-display-v2` | 当前首次实车点亮备份，不建议继续改功能。 |
+| `carplay-private111-direct-display-v1` | 历史实验与回归分析。 |
+
+如果需要判断后续修改是否引入退化，优先和本 V2 分支进行对照。
