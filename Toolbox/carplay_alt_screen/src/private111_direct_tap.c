@@ -45,10 +45,17 @@ static uint32_t g_generation;
 static uint32_t g_stale_callback_count;
 static uint32_t g_attach_logged_generation;
 static uint32_t g_frame_reserve_seq;
+static uint32_t g_last_h264_rx_us32;
+static uint32_t g_last_h264_seq;
+static uint32_t g_last_frame_publish_us32;
+static uint32_t g_h264_progress_us32;
+static uint32_t g_linearizer_progress_us32;
+static uint32_t g_decoder_progress_us32;
+static uint32_t g_fallback_warning_us32;
+static uint32_t g_slow_warning_us32;
 /* Process-local slot ownership. A slot being copied must never be reused, and
  * the currently published slot must never be overwritten before a newer frame
- * is fully ready. This keeps the existing SHM v1 ABI while closing the
- * producer/consumer tearing window. Value is the reserved frame sequence, 0=free. */
+ * is fully ready. Value is the reserved frame sequence, 0=free. */
 static uint32_t g_frame_slot_owner[P111_FRAME_SLOTS];
 static unsigned g_h264_map_attempts;
 static unsigned g_frame_map_attempts;
@@ -88,6 +95,15 @@ static uint32_t tap_now_us32(void) {
     /* Modular 32-bit microseconds are sufficient for sub-second readback timing
      * and avoid pulling 64-bit divide helpers into the freestanding ARM hook. */
     return (uint32_t)tv.tv_sec * 1000000u + (uint32_t)tv.tv_usec;
+}
+
+static int minute_due(uint32_t now, uint32_t *last) {
+    if (!now) return 0;
+    if (!*last || now - *last >= 60000000u) {
+        *last = now;
+        return 1;
+    }
+    return 0;
 }
 
 static uint8_t byte_or_zero(const uint8_t *d, size_t n, size_t i) {
@@ -540,7 +556,13 @@ static void reset_frame_for_generation_locked(int force) {
     g_frame->frame_count = 0;
     g_frame->drop_count = 0;
     g_frame->last_copy_bytes = 0;
+    memset((void *)g_frame->timing, 0, sizeof(g_frame->timing));
     g_frame_reserve_seq = 0;
+    g_last_h264_rx_us32 = 0u;
+    g_last_h264_seq = 0u;
+    g_last_frame_publish_us32 = 0u;
+    g_h264_progress_us32 = 0u;
+    g_decoder_progress_us32 = 0u;
     /*
      * Do not clear g_frame_slot_owner here. A callback from the previous
      * process-local generation may still be outside the lock copying its slot.
@@ -766,6 +788,8 @@ void p111_h264_tap_write(void *stream, const void *data, size_t bytes) {
         tap_unlock();
         return;
     }
+    g_last_h264_rx_us32 = tap_now_us32();
+    g_last_h264_seq = seq;
 
     if (!g_seen_h264) {
         g_seen_h264 = 1;
@@ -798,7 +822,7 @@ void p111_h264_tap_write(void *stream, const void *data, size_t bytes) {
                       stream, g_generation, seq, format_name,
                       (g_seen_sps && g_seen_pps) ? "YES" : "WAITING_CONFIG");
     }
-    if ((g_h264->packet_count & 255u) == 0u) {
+    if (minute_due(g_last_h264_rx_us32, &g_h264_progress_us32)) {
         altscreen_log("PHASE=H264_TAP_PROGRESS stream=%p generation=%u packets=%u bytes=%u seq=%u wraps=%u drops=%u sps=%u pps=%u idr=%u format=%s",
                       stream, g_generation, g_h264->packet_count,
                       g_h264->total_bytes, g_h264->write_seq,
@@ -988,6 +1012,9 @@ static void linearizer_shutdown_locked(void) {
     memset(g_linearizer.readback_hist_ms, 0,
            sizeof(g_linearizer.readback_hist_ms));
     g_linearizer.sample_count = 0;
+    g_linearizer_progress_us32 = 0u;
+    g_fallback_warning_us32 = 0u;
+    g_slow_warning_us32 = 0u;
 }
 
 static int linearizer_open_api_locked(void) {
@@ -1398,11 +1425,15 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
     int published;
     uint32_t requests;
     uint32_t t0, t1, elapsed;
+    uint32_t render_us32, h264_rx_us32, h264_seq;
 
     if (!stream || !screen_window || !width || !height) return 0;
     if (!env_truth("ALT111_DIRECT_FRAME_TAP", 1)) return 1;
 
     tap_lock();
+    render_us32 = tap_now_us32();
+    h264_rx_us32 = g_stream == stream ? g_last_h264_rx_us32 : 0u;
+    h264_seq = g_stream == stream ? g_last_h264_seq : 0u;
     if (g_stream && g_stream != stream) {
         ++g_stale_callback_count;
         if (g_stale_callback_count == 1u ||
@@ -1420,13 +1451,14 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
     requests = ++g_linearizer.requests;
 
     /*
-     * Do not rate-limit the producer here. Every valid stock private111 render
-     * callback is linearized and published so /carplay111_decoded always
-     * carries the freshest frame the phone/stock renderer supplied.
-     *
-     * The proven sidecar/displayable3 path remains independently paced at
-     * 30 fps; this change removes only the producer-side 1/2 or time cap.
+     * Stock private111 is normally ~60 fps while the VC sink targets ~30 fps.
+     * Do the synchronous Screen readback only on every other render callback.
      */
+    if ((requests & 1u) == 0u) {
+        linearizer_unlock();
+        return 1;
+    }
+
     if (!linearizer_configure_locked((p111_screen_window_t)screen_window,
                                      width, height,
                                      source_format, source_usage)) {
@@ -1441,8 +1473,9 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
                                   g_linearizer.buffer, 0, NULL, 0);
     if (rc != 0 && g_linearizer.backend == P111_LINEARIZER_NV12) {
         ++g_linearizer.fallback_count;
-        altscreen_log("WARN PHASE=FRAME_LINEARIZER_READ backend=screen-nv12 rc=%d errno=%d action=RGBA_RETRY count=%u",
-                      rc, errno, g_linearizer.fallback_count);
+        if (minute_due(tap_now_us32(), &g_fallback_warning_us32))
+            altscreen_log("WARN PHASE=FRAME_LINEARIZER_READ backend=screen-nv12 rc=%d errno=%d action=RGBA_RETRY count=%u",
+                          rc, errno, g_linearizer.fallback_count);
         if (linearizer_create_pixmap_locked(width, height,
                                             P111_SCREEN_FORMAT_RGBA8888,
                                             P111_LINEARIZER_RGBA)) {
@@ -1456,8 +1489,7 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
     linearizer_record_readback_us_locked(elapsed);
     if (elapsed >= 20000u) {
         ++g_linearizer.slow_readback_count;
-        if (g_linearizer.slow_readback_count == 1u ||
-            (g_linearizer.slow_readback_count % 60u) == 0u) {
+        if (minute_due(t1, &g_slow_warning_us32)) {
             altscreen_log("WARN PHASE=FRAME_LINEARIZER_SLOW readback_us=%u threshold_us=20000 backend=%s slow_count=%u requests=%u",
                           (unsigned)elapsed,
                           g_linearizer.backend == P111_LINEARIZER_NV12 ?
@@ -1518,7 +1550,8 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
     published = p111_frame_tap_write(stream, g_linearizer.scratch,
                                      width, height,
                                      P111_QNX_NV12_FORMAT_LEGACY,
-                                     source_usage);
+                                     source_usage, render_us32, elapsed,
+                                     h264_rx_us32, h264_seq);
     if (!published) {
         ++g_linearizer.publish_drop;
         if (g_linearizer.publish_drop == 1u ||
@@ -1536,15 +1569,15 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
 
     ++g_linearizer.publish_success;
     if (g_linearizer.publish_success == 1u) {
-        altscreen_log("PHASE=FRAME_LINEARIZER_FIRST_FRAME backend=%s source_format=%u source_usage=0x%x size=%ux%u readback_us=%u readback_success=%u shm_publish_success=1 output=packed-nv12 window_readback=exact-stock-handle rate_policy=uncapped_source_callbacks sink_target_fps=30",
+        altscreen_log("PHASE=FRAME_LINEARIZER_FIRST_FRAME backend=%s source_format=%u source_usage=0x%x size=%ux%u readback_us=%u readback_success=%u shm_publish_success=1 output=packed-nv12 window_readback=exact-stock-handle",
                       backend == P111_LINEARIZER_NV12 ?
                           "screen-nv12" : "screen-rgba-bt601",
                       source_format, source_usage, width, height,
                       (unsigned)elapsed, g_linearizer.readback_success);
-    } else if ((g_linearizer.publish_success % 300u) == 0u) {
+    } else if (minute_due(tap_now_us32(), &g_linearizer_progress_us32)) {
         unsigned p50 = linearizer_percentile_ms_locked(50u);
         unsigned p95 = linearizer_percentile_ms_locked(95u);
-        altscreen_log("PHASE=FRAME_LINEARIZER_PROGRESS backend=%s readbacks=%u published=%u publish_drops=%u requests=%u rate_policy=uncapped_source_callbacks sink_target_fps=30 failures=%u fallbacks=%u slow_readbacks=%u readback_p50_ms=%u readback_p95_ms=%u readback_max_us=%u size=%ux%u",
+        altscreen_log("PHASE=FRAME_LINEARIZER_PROGRESS backend=%s readbacks=%u published=%u publish_drops=%u requests=%u failures=%u fallbacks=%u slow_readbacks=%u readback_p50_ms=%u readback_p95_ms=%u readback_max_us=%u size=%ux%u",
                       backend == P111_LINEARIZER_NV12 ?
                           "screen-nv12" : "screen-rgba-bt601",
                       g_linearizer.readback_success,
@@ -1564,12 +1597,14 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
 
 int p111_frame_tap_write(void *stream, const unsigned char *buffer,
                           uint32_t width, uint32_t height,
-                          uint32_t format, uint32_t usage) {
+                          uint32_t format, uint32_t usage,
+                          uint32_t render_us32, uint32_t readback_us,
+                          uint32_t h264_rx_us32, uint32_t h264_seq) {
     uint32_t pixels, bytes, uv_rows, slot, seq, generation;
     uint32_t src_stride = 0, uv_offset = 0;
     unsigned char *dst;
     int padded;
-    uint32_t y;
+    uint32_t y, publish_us32, decode_proxy_us, frame_interval_us;
     unsigned i, start_slot;
 
     if (!stream || !buffer || !width || !height) return 0;
@@ -1662,8 +1697,7 @@ int p111_frame_tap_write(void *stream, const unsigned char *buffer,
      * CScreenRender is normally serialized, but do not depend on that ABI
      * detail. If two callbacks copied different slots concurrently, an older
      * reserved sequence must never publish after a newer frame already won.
-     * This strengthens the 3-slot producer/consumer contract without changing
-     * the SHM layout seen by the existing QNX sidecar.
+     * This strengthens the 3-slot producer/consumer contract.
      */
     if (g_frame->sequence &&
         (int32_t)(seq - g_frame->sequence) <= 0) {
@@ -1678,7 +1712,7 @@ int p111_frame_tap_write(void *stream, const unsigned char *buffer,
      * Publish with an explicit invalidation window. The existing reader samples
      * sequence before and after its memcpy. Setting sequence=0 before changing
      * metadata/current_slot guarantees that any mixed old/new snapshot is
-     * rejected without changing the SHM ABI or requiring a sidecar rebuild.
+     * rejected by the v2 sidecar.
      */
     g_frame->sequence = 0u;
     __sync_synchronize();
@@ -1690,11 +1724,26 @@ int p111_frame_tap_write(void *stream, const unsigned char *buffer,
     g_frame->frame_bytes = bytes;
     g_frame->current_slot = slot;
     g_frame->last_copy_bytes = bytes;
+    publish_us32 = tap_now_us32();
+    g_frame->timing[slot].h264_rx_us32 = h264_rx_us32;
+    g_frame->timing[slot].h264_seq = h264_seq;
+    g_frame->timing[slot].render_us32 = render_us32;
+    g_frame->timing[slot].readback_us = readback_us;
+    g_frame->timing[slot].publish_us32 = publish_us32;
     __sync_synchronize();
     g_frame->sequence = seq;
     if (g_frame_slot_owner[slot] == seq)
         g_frame_slot_owner[slot] = 0u;
     ++g_frame->frame_count;
+
+    decode_proxy_us = p111_timing_delta_us32(render_us32, h264_rx_us32);
+    frame_interval_us = p111_timing_delta_us32(publish_us32,
+                                        g_last_frame_publish_us32);
+    g_last_frame_publish_us32 = publish_us32;
+    altscreen_log("PHASE=FRAME_DECODE_TIMING seq=%u gen=%u h264_seq=%u decode_proxy_us=%u readback_us=%u render_to_publish_us=%u frame_interval_us=%u backend=stock-omx-tap",
+                  seq, generation, h264_seq, decode_proxy_us, readback_us,
+                  p111_timing_delta_us32(publish_us32, render_us32),
+                  frame_interval_us);
 
     if (!g_seen_frame) {
         g_seen_frame = 1;
@@ -1713,7 +1762,7 @@ int p111_frame_tap_write(void *stream, const unsigned char *buffer,
                       byte_or_zero(buffer,16,14), byte_or_zero(buffer,16,15));
         altscreen_log("PHASE=DECODER_FIRST_FRAME backend=stock-omx-tap stream=%p generation=%u seq=%u format=NV12 size=%ux%u bytes=%u source_stride=%u window58_readback=0",
                       stream, generation, seq, width, height, bytes, src_stride);
-    } else if ((g_frame->frame_count % 300u) == 0u) {
+    } else if (minute_due(publish_us32, &g_decoder_progress_us32)) {
         altscreen_log("PHASE=DECODER_PROGRESS backend=stock-omx-tap stream=%p generation=%u frames=%u seq=%u size=%ux%u source_stride=%u drops=%u",
                       stream, generation, g_frame->frame_count, seq,
                       width, height, src_stride, g_frame->drop_count);
