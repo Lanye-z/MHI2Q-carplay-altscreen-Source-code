@@ -3,9 +3,9 @@
 > [!IMPORTANT]
 > **V1.1 是 STOCK MAP ONLY 观察分支。**
 >
-> 上车时只安装独立的 `oem-plane-census` 观察程序，然后依次切换 Classic Full / Classic Small / Sport Full / Sport Small 并执行对应 CAPTURE。该程序只枚举已有 QNX Screen window 并读取 33/58 的属性，不修改 CarPlay `viewArea/safeArea`、不启动 private111、不切换 Context80、不写 Screen property。
+> 上车时只安装并启动独立的 `oem-plane-census` 观察程序，然后依次切换 Classic Full / Classic Small / Sport Full / Sport Small 并执行对应 CAPTURE。该程序通过 `SCREEN_WINDOW_MANAGER_CONTEXT` 的 CREATE/PROPERTY/POST/CLOSE 事件发现 33/58，再只读其 QNX Screen 属性；不修改 CarPlay `viewArea/safeArea`、不启动 private111、不切换 Context80、不写 Screen property。
 >
-> 当前仓库提交中还没有由本次会话实际编译出的 QNX ARMv7 release binary；请先运行 `Toolbox/carplay_alt_screen/plane_census/build_qnx.sh` 并校验 release 产物，再制作上车 SD 包。
+> 当前仓库提交中还没有由本次会话实际编译出的 QNX ARMv7 release binary；请先运行 `Toolbox/carplay_alt_screen/plane_census/build_qnx.sh` 并校验 release 产物，再制作上车 SD 包。**下文“已完成实车验证”等描述属于基础分支的历史状态，不代表 V1.1 census observer 已完成实车验证。**
 
 ---
 
