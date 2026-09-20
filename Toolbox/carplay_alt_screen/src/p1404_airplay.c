@@ -503,7 +503,14 @@ static int alt_is_measured_b9_canvas(uint32_t display_w,
 static uint32_t alt_safe_y_455_to_canvas(uint32_t value, uint32_t canvas_h) {
     uint32_t numerator;
     if (!canvas_h || canvas_h == 455u) return value;
-    if (value > (0xffffffffu - 227u) / canvas_h) return 0u;
+
+    /*
+     * Keep this freestanding helper free of compiler-generated ARM division
+     * calls.  Geometry inputs are already bounded to the measured display
+     * family; this conservative bound also makes value*canvas_h+227 provably
+     * fit in uint32_t without using a variable '/' overflow check.
+     */
+    if (value > 8192u || canvas_h > 8192u) return 0u;
     numerator = value * canvas_h + 227u; /* nearest integer /455 */
     return alt_div_u32(numerator, 455u);
 }

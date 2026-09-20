@@ -276,6 +276,9 @@ grep -Fq 'alt_safe_y_455_to_canvas' "$AIRPLAY_SRC" ||
     fail "455-reference to runtime-canvas safeArea Y/H mapper missing"
 grep -Fq 'alt_div_u32(numerator, 455u)' "$AIRPLAY_SRC" ||
     fail "safeArea canvas mapper must avoid ARM EABI division helpers"
+if grep -Fq '/ canvas_h' "$AIRPLAY_SRC"; then
+    fail "safeArea canvas mapper reintroduced runtime variable division that can import __aeabi_uidiv"
+fi
 grep -Fq 'r.x = 370u;' "$AIRPLAY_SRC" ||
     fail "FULL safeArea X missing"
 grep -Fq 'r.y = alt_safe_y_455_to_canvas(49u, display_h);' "$AIRPLAY_SRC" ||
