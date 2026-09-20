@@ -34,6 +34,7 @@
 但以下数据仍必须由实车给出：
 
 - ListModel 176 row1 的实际值；
+- hook 运行时能否通过 HMI/FrameworkAccess seam 直接取得原厂 `NavigationEnv.getListModel(176)` 对应对象；
 - Classic/Sport 与 Full/Small 的真实差异；
 - displayable33/58 的真实 destination/source/buffer W/H；
 - 1440×542、455、445 各自属于哪一层。
@@ -58,6 +59,7 @@ view=
 layout_class=
 layout_hint=
 
+list_model_access=
 row1_column_count=
 row1_values=
 
@@ -103,6 +105,31 @@ apply_to_renderer=0
 ```
 
 最后两项必须保持为 0；如果不是，说明本观察版契约被破坏。
+
+### 关于 ListModel 176 的运行时入口
+
+静态逆向证明原厂消费者使用的是：
+
+```
+NavigationEnv.getListModel(176)
+```
+
+当前 hook 并没有一个强类型的 `NavigationEnv` 成员，因此观察器不会假装两者相同。它按以下只读顺序尝试，并对返回对象校验 `getLength()/getRow()` 形状：
+
+```
+HMIService.getListModel(176)
+HMIService.getModel(176)
+FrameworkAccess.getListModel(176)
+FrameworkAccess.getModel(176)
+```
+
+成功时 `list_model_access=` 会写明真实 seam；全部失败时会记录：
+
+```
+UNRESOLVED_NAVIGATIONENV_SEAM
+```
+
+这种情况下不能使用伪造数值继续做 safeArea，需要根据同次实车日志再定位 NavigationEnv 的可达入口。
 
 ### 2. 四态变化历史
 
@@ -163,13 +190,12 @@ OEM_DISPLAYMANAGER_API
 3. 保持导航运行。
 4. 依次进入 Classic Full、Classic Small、Sport Full、Sport Small；每种状态稳定停留数秒。
 5. 不需要重连 CarPlay。
-6. 测试结束后统一收集：
-   - `/tmp/carplay-oem-geometry.state`
-   - `/tmp/carplay-oem-geometry.log`
-   - `/tmp/carplay-oem-displaymanager-read-api.log`
-   - `/tmp/mmi-mirror-controller.log`
-   - 当前 AltScreen / Direct111 原有日志
-7. 最好同步记录四种状态的仪表照片。
+6. 测试结束后，原有 boot diagnostics 会自动把 OEM observer 文件同步到 SD：
+   ```
+   MMI-Cockpit-Carplay/logs/boots/<boot_id>/
+   ```
+   其中包括最新 geometry state、四态 history、DisplayManager API metadata 和 controller/hook/mirror 日志。
+7. 最好同步记录四种状态的仪表照片；测试完成后直接把对应的整个 `boot_<...>` 目录打包回传即可。
 
 ## 关于 updateViewArea 的结论
 
