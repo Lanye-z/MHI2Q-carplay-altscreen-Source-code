@@ -16,10 +16,19 @@ struct VideoFrame {
     int stride;
     PixelFormat format;
     unsigned long long timestamp_us;
+    unsigned sequence;
+    unsigned h264_sequence;
+    unsigned h264_rx_us32;
+    unsigned render_us32;
+    unsigned publish_us32;
+    unsigned readback_us;
+    unsigned copy_us;
 
     VideoFrame()
         : data(0), width(0), height(0), stride(0),
-          format(PIXEL_FORMAT_RGBA8888), timestamp_us(0) {
+          format(PIXEL_FORMAT_RGBA8888), timestamp_us(0), sequence(0),
+          h264_sequence(0), h264_rx_us32(0), render_us32(0),
+          publish_us32(0), readback_us(0), copy_us(0) {
     }
 };
 
