@@ -55,6 +55,11 @@ public final class ClusterStateController {
      */
     private static final String OEM_GEOMETRY_STATE_FILE =
         "/tmp/carplay-oem-geometry.state";
+    private static final String OEM_GEOMETRY_HISTORY_FILE =
+        "/tmp/carplay-oem-geometry.log";
+    private static final String OEM_DISPLAYMANAGER_API_FILE =
+        "/tmp/carplay-oem-displaymanager-read-api.log";
+    private static final long OEM_HISTORY_MAX_BYTES = 262144L;
     private static final int OEM_SCREEN_LAYOUT_MODEL_ID = 176;
     private static final int OEM_SCREEN_LAYOUT_ROW = 1;
     private static final int OEM_REQUIRED_COLUMN_COUNT = 28;
@@ -86,6 +91,7 @@ public final class ClusterStateController {
     private static long oemGeometryRevision;
     private static long lastOemProbeMs;
     private static long lastReconcileMs;
+    private static boolean displayManagerApiProbed;
     private static int contextWriteFailures;
     private static long circuitOpenUntilMs;
     private static int navViewSizeChoiceId = Integer.MIN_VALUE;
@@ -505,6 +511,8 @@ public final class ClusterStateController {
         if (now - lastOemProbeMs < OEM_PROBE_MS) return;
         lastOemProbeMs = now;
 
+        probeDisplayManagerReadApi();
+
         try {
             Object list = resolveListModel176(hmi);
             if (list == null) {
@@ -640,6 +648,7 @@ public final class ClusterStateController {
                     + "rgi_active=" + (rgiPresentationActive ? "1" : "0") + "\n";
 
                 if (writeAtomicState(OEM_GEOMETRY_STATE_FILE, text)) {
+                    appendOemGeometryHistory(text);
                     lastOemProbeStatus = "valid";
                     diag("OEM_GEOMETRY_OBSERVER publish revision="
                         + oemGeometryRevision + " view=" + view
@@ -652,6 +661,84 @@ public final class ClusterStateController {
             }
         } catch (Throwable t) {
             oemProbeUnavailable(describe(t));
+        }
+    }
+
+
+    /*
+     * Record every geometry signature change so one vehicle session can
+     * capture FULL/SMALL and any skin/layout transitions without manually
+     * copying the state file after each switch.
+     */
+    private static void appendOemGeometryHistory(String snapshot) {
+        FileOutputStream out = null;
+        try {
+            File f = new File(OEM_GEOMETRY_HISTORY_FILE);
+            boolean reset = f.exists() && f.length() > OEM_HISTORY_MAX_BYTES;
+            out = new FileOutputStream(f, !reset);
+            if (reset) {
+                out.write(("--- history reset at " + nowMs() + " ---\n")
+                    .getBytes("UTF-8"));
+            }
+            String header = "--- OEM_GEOMETRY_SNAPSHOT revision="
+                + oemGeometryRevision + " time_ms=" + nowMs() + " ---\n";
+            out.write(header.getBytes("UTF-8"));
+            out.write(snapshot.getBytes("UTF-8"));
+            out.write("--- END_OEM_GEOMETRY_SNAPSHOT ---\n".getBytes("UTF-8"));
+            out.flush();
+            out.close();
+            out = null;
+        } catch (Throwable t) {
+            diag("WARN OEM geometry history write failed: " + describe(t));
+            try { if (out != null) out.close(); } catch (Throwable ignored) {}
+        }
+    }
+
+    /*
+     * The reverse report could not prove a Java getter for displayable33/58
+     * extents.  Do not guess or invoke unknown methods.  Instead, capture the
+     * runtime DisplayManager class and the signatures of read-looking APIs
+     * once.  This is reflection metadata only; no method below is invoked.
+     */
+    private static void probeDisplayManagerReadApi() {
+        if (displayManagerApiProbed) return;
+        try {
+            Object dm = displayManager();
+            if (dm == null) return;
+
+            Method[] methods = dm.getClass().getMethods();
+            StringBuffer text = new StringBuffer();
+            text.append("observer=OEM_LAYOUT_OBSERVER_V1\n");
+            text.append("mode=REFLECTION_METADATA_ONLY\n");
+            text.append("display_manager_class=")
+                .append(dm.getClass().getName()).append('\n');
+
+            int hits = 0;
+            int i;
+            for (i = 0; i < methods.length; ++i) {
+                Method m = methods[i];
+                String name = m.getName();
+                String lower = name.toLowerCase();
+                if (lower.indexOf("displayable") < 0
+                    && lower.indexOf("extent") < 0
+                    && lower.indexOf("position") < 0
+                    && lower.indexOf("size") < 0
+                    && lower.indexOf("source") < 0) {
+                    continue;
+                }
+                text.append("method_").append(hits).append('=')
+                    .append(sanitizeStateValue(m.toString())).append('\n');
+                ++hits;
+            }
+            text.append("method_count=").append(hits).append('\n');
+            text.append("invoked_getter_count=0\n");
+            if (writeAtomicState(OEM_DISPLAYMANAGER_API_FILE, text.toString())) {
+                displayManagerApiProbed = true;
+                diag("OEM_DISPLAYMANAGER_API metadata captured methods=" + hits
+                    + " invoked=0");
+            }
+        } catch (Throwable t) {
+            diag("WARN OEM DisplayManager metadata probe failed: " + describe(t));
         }
     }
 
