@@ -106,7 +106,11 @@ prune_logs() {
             case "$used" in ''|*[!0-9]*) break ;; esac
             [ "$used" -le "$PRUNE_KIB" ] && break
         done
-    )
+    ) || true
+    # Pruning is best-effort. Protected live ring files may legitimately keep
+    # the directory above the target, which must not turn a logger maintenance
+    # pass into a runtime/CI failure.
+    return 0
 }
 
 case "${1:-}" in
