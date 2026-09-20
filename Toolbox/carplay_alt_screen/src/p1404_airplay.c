@@ -383,7 +383,7 @@ struct alt_safe_rect {
     int physical_x;
     int physical_y;
 
-    /* Session-latched full-size map-plane translation. No scaling. */
+    /* Live full-size map-plane translation. No scaling. */
     int renderer_dx;
     int renderer_dy;
 
