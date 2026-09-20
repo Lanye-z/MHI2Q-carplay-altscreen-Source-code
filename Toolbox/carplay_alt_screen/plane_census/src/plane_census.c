@@ -53,7 +53,12 @@
 #define SCR_PROP_SCALE_QUALITY            56
 #define SCR_PROP_SOURCE_CLIP_POSITION     68
 #define SCR_PROP_SOURCE_CLIP_SIZE         72
+#define SCR_PROP_VIEWPORT_POSITION        74
+#define SCR_PROP_VIEWPORT_SIZE            75
+#define SCR_PROP_CLIP_POSITION            91
+#define SCR_PROP_CLIP_SIZE                92
 #define SCR_PROP_SCALE_FACTOR            114
+#define SCR_PROP_TRANSFORM               127
 #define SCR_PROP_MANAGER_STRING          152
 
 typedef void *scr_context_t;
@@ -176,6 +181,25 @@ static void out_iv2(FILE *out, struct api *a, scr_window_t w,
     else fprintf(out, "%s=NA rc=%d errno=%d\n", name, rc, e);
 }
 
+static void out_iv9(FILE *out, struct api *a, scr_window_t w,
+                    int prop, const char *name) {
+    int v[9];
+    int rc;
+    int e;
+    int i;
+    for (i = 0; i < 9; ++i) v[i] = 0x5a5a5a5a;
+    errno = 0;
+    rc = a->get_window_iv(w, prop, v);
+    e = errno;
+    if (rc == 0) {
+        fprintf(out, "%s=%d,%d,%d,%d,%d,%d,%d,%d,%d rc=0\\n",
+                name, v[0], v[1], v[2], v[3], v[4],
+                v[5], v[6], v[7], v[8]);
+    } else {
+        fprintf(out, "%s=NA rc=%d errno=%d\\n", name, rc, e);
+    }
+}
+
 static void out_cv(FILE *out, struct api *a, scr_window_t w,
                    int prop, const char *name, int len) {
     char buf[192];
@@ -289,7 +313,6 @@ static void out_related(FILE *out, struct api *a, scr_window_t w) {
     }
 
     fprintf(out, "parent=UNAVAILABLE_IN_QNX650_WINDOW_API\n");
-    fprintf(out, "viewport=UNAVAILABLE_AS_STANDARD_QNX650_WINDOW_PROPERTY\n");
 }
 
 static void out_buffers(FILE *out, struct api *a, scr_window_t w) {
@@ -378,8 +401,17 @@ static int write_snapshot(const char *state_dir, const char *id,
             "SCREEN_PROPERTY_SOURCE_CLIP_POSITION");
     out_iv2(out, a, w, SCR_PROP_SOURCE_CLIP_SIZE,
             "SCREEN_PROPERTY_SOURCE_CLIP_SIZE");
+    out_iv2(out, a, w, SCR_PROP_VIEWPORT_POSITION,
+            "SCREEN_PROPERTY_VIEWPORT_POSITION");
+    out_iv2(out, a, w, SCR_PROP_VIEWPORT_SIZE,
+            "SCREEN_PROPERTY_VIEWPORT_SIZE");
+    out_iv2(out, a, w, SCR_PROP_CLIP_POSITION,
+            "SCREEN_PROPERTY_CLIP_POSITION");
+    out_iv2(out, a, w, SCR_PROP_CLIP_SIZE,
+            "SCREEN_PROPERTY_CLIP_SIZE");
     out_iv1(out, a, w, SCR_PROP_SCALE_FACTOR, "SCREEN_PROPERTY_SCALE_FACTOR");
     out_iv1(out, a, w, SCR_PROP_SCALE_QUALITY, "SCREEN_PROPERTY_SCALE_QUALITY");
+    out_iv9(out, a, w, SCR_PROP_TRANSFORM, "SCREEN_PROPERTY_TRANSFORM");
     out_cv(out, a, w, SCR_PROP_MANAGER_STRING,
            "SCREEN_PROPERTY_MANAGER_STRING", 191);
     out_related(out, a, w);
