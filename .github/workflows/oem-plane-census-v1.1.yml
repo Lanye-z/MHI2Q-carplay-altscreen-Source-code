@@ -12,6 +12,8 @@ on:
       - 'Toolbox/carplay_alt_screen/plane_census/**'
       - 'Toolbox/scripts/oem_plane_census_*.sh'
       - 'Toolbox/scripts/install_oem_plane_census.sh'
+      - 'Toolbox/scripts/start_oem_plane_census.sh'
+      - 'Toolbox/scripts/stop_oem_plane_census.sh'
       - 'Toolbox/scripts/status_oem_plane_census.sh'
       - 'Toolbox/scripts/uninstall_oem_plane_census.sh'
   workflow_dispatch:
