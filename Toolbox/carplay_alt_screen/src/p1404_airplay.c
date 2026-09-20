@@ -380,8 +380,8 @@ struct alt_safe_rect {
     uint32_t h;
 
     /* Same safe region after renderer translation, in physical VC space. */
-    uint32_t physical_x;
-    uint32_t physical_y;
+    int physical_x;
+    int physical_y;
 
     /* Session-latched full-size map-plane translation. No scaling. */
     int renderer_dx;
@@ -496,20 +496,25 @@ static int alt_load_measured_k1004_safe_area(uint32_t display_w,
                                              int small_dy,
                                              struct alt_safe_rect *out) {
     struct alt_safe_rect r;
-    int64_t source_x, source_y;
+    int64_t physical_x, physical_y;
     if (!view || !layout || !out) return 0;
     if (display_w != 1440u || display_h != 455u) return 0;
     if (!strstr(layout, "LayoutMIB2HighB9")) return 0;
 
     memset(&r, 0, sizeof(r));
+
+    /*
+     * ListModel176 describes the safe region in the map/source coordinate
+     * system.  Keep those coordinates unchanged when advertising to CarPlay.
+     * The Audi layout may translate the whole map plane afterwards; that is a
+     * separate compositor operation and must not be cancelled here.
+     */
     if (!strcmp(view, "SMALL")) {
-        r.physical_x = 490u; r.physical_y = 49u;
-        r.w = 460u; r.h = 300u;
+        r.x = 490u; r.y = 49u; r.w = 460u; r.h = 300u;
         r.renderer_dx = small_dx;
         r.renderer_dy = small_dy;
     } else if (!strcmp(view, "FULL")) {
-        r.physical_x = 370u; r.physical_y = 49u;
-        r.w = 700u; r.h = 300u;
+        r.x = 370u; r.y = 49u; r.w = 700u; r.h = 300u;
         r.renderer_dx = 0;
         r.renderer_dy = 0;
     } else {
@@ -517,34 +522,27 @@ static int alt_load_measured_k1004_safe_area(uint32_t display_w,
     }
 
     /*
-     * CarPlay safeArea is expressed in the phone's 1440x455 source canvas,
-     * while the OEM Sport SMALL rule translates the full map plane in the
-     * physical VC compositor. Compensate the source safeArea so that after:
+     * Physical VC coordinates are diagnostic only:
      *
      *     physical = source + renderer_offset
      *
-     * the important CarPlay UI still lands in the measured unobscured region.
-     * Sport SMALL: physical x=490, dx=-476 -> source x=966.
+     * Therefore Sport SMALL is x=490-476=14, matching the stock left-shifted
+     * map-plane layout.  Classic SMALL remains x=490.
      */
-    source_x = (int64_t)r.physical_x - (int64_t)r.renderer_dx;
-    source_y = (int64_t)r.physical_y - (int64_t)r.renderer_dy;
-    if (source_x < 0 || source_y < 0 ||
-        source_x + (int64_t)r.w > (int64_t)display_w ||
-        source_y + (int64_t)r.h > (int64_t)display_h) {
+    physical_x = (int64_t)r.x + (int64_t)r.renderer_dx;
+    physical_y = (int64_t)r.y + (int64_t)r.renderer_dy;
+    if (physical_x < -8192 || physical_x > 8192 ||
+        physical_y < -8192 || physical_y > 8192) {
         return 0;
     }
-    r.x = (uint32_t)source_x;
-    r.y = (uint32_t)source_y;
+    r.physical_x = (int)physical_x;
+    r.physical_y = (int)physical_y;
 
     strncpy(r.view, view, sizeof(r.view) - 1u);
     r.view[sizeof(r.view) - 1u] = 0;
     strncpy(r.layout, layout, sizeof(r.layout) - 1u);
     r.layout[sizeof(r.layout) - 1u] = 0;
-    strncpy(r.source,
-            (r.renderer_dx || r.renderer_dy)
-                ? "k1004-measured-compensated"
-                : "k1004-measured",
-            sizeof(r.source) - 1u);
+    strncpy(r.source, "k1004-measured-map-local", sizeof(r.source) - 1u);
     r.source[sizeof(r.source) - 1u] = 0;
     *out = r;
     return 1;
@@ -563,8 +561,8 @@ static void alt_resolve_cluster_safe_area(uint32_t display_w,
     memset(out, 0, sizeof(*out));
     out->w = display_w;
     out->h = display_h;
-    out->physical_x = 0u;
-    out->physical_y = 0u;
+    out->physical_x = 0;
+    out->physical_y = 0;
     out->renderer_dx = 0;
     out->renderer_dy = 0;
     strncpy(out->view, "FULL", sizeof(out->view) - 1u);
@@ -617,12 +615,83 @@ static cf_obj make_view_areas(uint32_t w, uint32_t h) {
     return make_view_areas_with_safe(w, h, NULL);
 }
 
+
+/*
+ * Type111 may declare multiple candidate viewAreas.  Apple cluster templates
+ * do this as well; unlike type110, ALT entries do not carry
+ * viewAreaTransitionControl/viewAreaStatusBarEdge flags.  Our coded canvas
+ * remains 1440x455 in both states; only the nested safeArea changes.
+ *
+ * index 0 = FULL  (370,49,700x300)
+ * index 1 = SMALL (490,49,460x300)
+ */
+static cf_obj make_cluster_layout_view_areas(uint32_t w, uint32_t h,
+                                             int enable_two_areas) {
+    struct alt_safe_rect full, small;
+    cf_obj areas = NULL, v = NULL, safe = NULL;
+
+    if (!cf_array_create_mutable || !cf_array_append || !cf_dict_set)
+        return NULL;
+
+    areas = cf_array_create_mutable(NULL, 0, NULL, NULL);
+    if (!areas) return NULL;
+
+    memset(&full, 0, sizeof(full));
+    full.x = 370u; full.y = 49u; full.w = 700u; full.h = 300u;
+    if (!alt_safe_rect_valid(&full, w, h)) goto fail;
+
+    v = rect_dict(w, h, 0u, 0u);
+    safe = rect_dict(full.w, full.h, full.x, full.y);
+    if (!v || !safe || !cf_dict_set_cstr_obj(v, "safeArea", safe)) goto fail;
+    cf_release_safe(safe); safe = NULL;
+    cf_array_append(areas, v);
+    cf_release_safe(v); v = NULL;
+
+    if (!enable_two_areas) return areas;
+
+    memset(&small, 0, sizeof(small));
+    small.x = 490u; small.y = 49u; small.w = 460u; small.h = 300u;
+    if (!alt_safe_rect_valid(&small, w, h)) goto fail;
+
+    v = rect_dict(w, h, 0u, 0u);
+    safe = rect_dict(small.w, small.h, small.x, small.y);
+    if (!v || !safe || !cf_dict_set_cstr_obj(v, "safeArea", safe)) goto fail;
+    cf_release_safe(safe); safe = NULL;
+    cf_array_append(areas, v);
+    cf_release_safe(v); v = NULL;
+    return areas;
+
+fail:
+    cf_release_safe(safe);
+    cf_release_safe(v);
+    cf_release_safe(areas);
+    return NULL;
+}
+
+static cf_obj make_i64_array_one(int64_t value) {
+    cf_obj a = NULL, n = NULL;
+    if (!cf_array_create_mutable || !cf_array_append || !cf_num_new)
+        return NULL;
+    a = cf_array_create_mutable(NULL, 0, NULL, NULL);
+    n = cf_num_new(NULL, value);
+    if (!a || !n) {
+        cf_release_safe(n);
+        cf_release_safe(a);
+        return NULL;
+    }
+    cf_array_append(a, n);
+    cf_release_safe(n);
+    return a;
+}
+
 void *alt_build_cluster_display(void) {
     const struct altscreen_display *d;
     uint32_t width = 0, height = 0;
     uint32_t physical_width, physical_height;
     struct alt_safe_rect cluster_safe;
-    cf_obj dict = NULL, areas = NULL, vs = NULL;
+    cf_obj dict = NULL, areas = NULL, adjacent = NULL, vs = NULL;
+    int layout_known = 0;
+    int initial_view_area = 0;
     /* Refresh on every display-info build so the request follows the current
      * target mode. If Screen temporarily refuses a second context, retain only
      * the display-1 geometry already proved by the worker's mandatory READY
@@ -675,30 +744,59 @@ void *alt_build_cluster_display(void) {
 
     alt_resolve_cluster_safe_area(
         d->width_pixels, d->height_pixels, &cluster_safe);
-    areas = make_view_areas_with_safe(
-        d->width_pixels, d->height_pixels, &cluster_safe);
-    if (areas) {
-        if (!cf_dict_set_cstr_obj(dict, "viewAreas", areas) ||
-            !set_i64(dict, "initialViewArea", 0)) goto fail;
-        cf_release_safe(areas); areas = NULL;
-        altscreen_log(
-            "ALTAREA_LAYOUT_SAFE_V2 schema=viewAreas[array] "
-            "initialViewArea=0 view=full:%ux%u "
-            "safe_source=%u,%u,%ux%u safe_physical=%u,%u,%ux%u "
-            "renderer_offset=%d,%d mode=%s layout=%s source=%s "
-            "renderer_scale=0",
-            d->width_pixels, d->height_pixels,
-            cluster_safe.x, cluster_safe.y,
-            cluster_safe.w, cluster_safe.h,
-            cluster_safe.physical_x, cluster_safe.physical_y,
-            cluster_safe.w, cluster_safe.h,
-            cluster_safe.renderer_dx, cluster_safe.renderer_dy,
-            cluster_safe.view, cluster_safe.layout,
-            cluster_safe.source);
-    } else {
-        altscreen_log("ERROR ALTAREA failed to build reference-compatible viewAreas");
+
+    layout_known =
+        strstr(cluster_safe.layout, "LayoutMIB2HighB9") != NULL &&
+        d->width_pixels == 1440u && d->height_pixels == 455u;
+    initial_view_area =
+        layout_known && !strcmp(cluster_safe.view, "SMALL") ? 1 : 0;
+
+    /*
+     * Declare BOTH Audi FULL/SMALL candidates up front. Runtime layout changes
+     * can then use the standard AirPlay updateViewArea command without
+     * reconnecting or changing the coded type111 resolution.
+     */
+    areas = make_cluster_layout_view_areas(
+        d->width_pixels, d->height_pixels, layout_known);
+    if (!areas) {
+        altscreen_log("ERROR ALTAREA failed to build cluster viewAreas");
         goto fail;
     }
+    if (layout_known) {
+        adjacent = make_i64_array_one(initial_view_area ? 0 : 1);
+        if (!adjacent) goto fail;
+    } else {
+        adjacent = cf_array_create_mutable ?
+            cf_array_create_mutable(NULL, 0, NULL, NULL) : NULL;
+        if (!adjacent) goto fail;
+    }
+
+    if (!cf_dict_set_cstr_obj(dict, "viewAreas", areas) ||
+        !set_i64(dict, "initialViewArea", initial_view_area) ||
+        !cf_dict_set_cstr_obj(dict, "adjacentViewAreas", adjacent)) {
+        goto fail;
+    }
+    cf_release_safe(adjacent); adjacent = NULL;
+    cf_release_safe(areas); areas = NULL;
+
+    altscreen_log(
+        "ALTAREA_LAYOUT_SAFE_V3 schema=viewAreas[array] viewAreaCount=%d "
+        "initialViewArea=%d adjacent=%d "
+        "view=full:%ux%u safe_source=%u,%u,%ux%u "
+        "safe_physical=%d,%d,%ux%u renderer_offset=%d,%d "
+        "mode=%s layout=%s source=%s renderer_scale=0 "
+        "runtime_switch=updateViewArea type111_transition_flags=omitted",
+        layout_known ? 2 : 1,
+        initial_view_area,
+        layout_known ? (initial_view_area ? 0 : 1) : -1,
+        d->width_pixels, d->height_pixels,
+        cluster_safe.x, cluster_safe.y,
+        cluster_safe.w, cluster_safe.h,
+        cluster_safe.physical_x, cluster_safe.physical_y,
+        cluster_safe.w, cluster_safe.h,
+        cluster_safe.renderer_dx, cluster_safe.renderer_dy,
+        cluster_safe.view, cluster_safe.layout,
+        cluster_safe.source);
     altscreen_log("ALTINFO built type=%u %ux%u@%u uuid=%s features=0x%x input=%d fields=%u",
                   d->stream_type, d->width_pixels, d->height_pixels, d->max_fps,
                   d->uuid, DISPLAY_FEATURE_KNOBS | DISPLAY_FEATURE_HIGH_FIDELITY_TOUCH,
@@ -706,6 +804,7 @@ void *alt_build_cluster_display(void) {
     return dict;
 fail:
     cf_release_safe(vs);
+    cf_release_safe(adjacent);
     cf_release_safe(areas);
     cf_release_safe(dict);
     return NULL;
@@ -718,6 +817,7 @@ struct alt111_event_context {
     void *stream;
     uint32_t generation;
     int event_kind;
+    int event_value;
     volatile int refs;
     volatile int callback_called;
 };
@@ -737,10 +837,16 @@ static void alt111_event_response(int status, void *response, void *opaque) {
     altscreen_log("PHASE=ALT111_EVENT_RESPONSE receiver=%p stream=%p generation=%u event=%d status=%d response=%p",
                   ctx->receiver, ctx->stream, ctx->generation,
                   ctx->event_kind, status, response);
-    if (ctx->stream && ctx->generation)
-        p1404_cockpit_native_event_result(ctx->receiver, ctx->stream,
-                                      ctx->generation, ctx->event_kind,
-                                      status, response != NULL);
+    if (ctx->stream && ctx->generation) {
+        if (ctx->event_kind == ALT111_EVENT_UPDATE_VIEW_AREA)
+            p1404_cockpit_native_view_area_result(
+                ctx->receiver, ctx->stream, ctx->generation,
+                ctx->event_value, status, response != NULL);
+        else
+            p1404_cockpit_native_event_result(ctx->receiver, ctx->stream,
+                                          ctx->generation, ctx->event_kind,
+                                          status, response != NULL);
+    }
     alt111_event_context_release(ctx);
 }
 
@@ -786,6 +892,7 @@ static int alt_send_cluster_event_impl(void *receiver, void *stream,
     ctx->stream = stream;
     ctx->generation = generation;
     ctx->event_kind = event_kind;
+    ctx->event_value = -1;
     ctx->refs = 2; /* submit path plus callback path */
     rc = send_command(receiver, command, alt111_event_response, ctx);
     altscreen_log("PHASE=ALT111_EVENT_SUBMIT receiver=%p stream=%p generation=%u event=%s uuid=%s url=%s rc=%d response_callback=1",
@@ -815,6 +922,85 @@ done:
 int alt_send_cluster_event(void *receiver, void *stream, uint32_t generation,
                            int event_kind) {
     return alt_send_cluster_event_impl(receiver, stream, generation, event_kind, 0);
+}
+
+
+int alt_send_cluster_view_area(void *receiver, void *stream,
+                               uint32_t generation, int view_area_index) {
+    airplay_send_command_fn send_command;
+    struct alt111_event_context *ctx = NULL;
+    const struct altscreen_display *display = altscreen_cluster_display();
+    cf_obj command = NULL, params = NULL, type = NULL, uuid = NULL;
+    cf_obj adjacent = NULL, adjacent_num = NULL;
+    int rc = -1;
+    const int adjacent_index = view_area_index == 0 ? 1 : 0;
+
+    if (!receiver || !stream || !generation || !display || !display->uuid ||
+        (view_area_index != 0 && view_area_index != 1))
+        return -1;
+
+    send_command = (airplay_send_command_fn)
+        p1404_stock_symbol_named("AirPlayReceiverSessionSendCommand");
+    if (!send_command || !cf_dict_create_mutable || !cf_array_create_mutable ||
+        !cf_array_append || !cf_str_new || !cf_num_new ||
+        !cf_dict_set || !cf_release)
+        goto done;
+
+    command = cf_dict_create_mutable(NULL, 0, NULL, NULL, NULL);
+    params = cf_dict_create_mutable(NULL, 0, NULL, NULL, NULL);
+    type = cf_str_new("updateViewArea", -1);
+    uuid = cf_str_new(display->uuid, -1);
+    adjacent = cf_array_create_mutable(NULL, 0, NULL, NULL);
+    adjacent_num = cf_num_new(NULL, (int64_t)adjacent_index);
+    if (!command || !params || !type || !uuid || !adjacent || !adjacent_num)
+        goto done;
+
+    cf_array_append(adjacent, adjacent_num);
+    if (!cf_dict_set_cstr_obj(command, "type", type) ||
+        !cf_dict_set_cstr_obj(params, "uuid", uuid) ||
+        !set_i64(params, "viewAreaIndex", (int64_t)view_area_index) ||
+        !set_i64(params, "animationDurationMillis", 0) ||
+        !cf_dict_set_cstr_obj(params, "adjacentViewAreas", adjacent) ||
+        !cf_dict_set_cstr_obj(command, "params", params))
+        goto done;
+
+    ctx = (struct alt111_event_context *)calloc(1u, sizeof(*ctx));
+    if (!ctx) goto done;
+    ctx->receiver = receiver;
+    ctx->stream = stream;
+    ctx->generation = generation;
+    ctx->event_kind = ALT111_EVENT_UPDATE_VIEW_AREA;
+    ctx->event_value = view_area_index;
+    ctx->refs = 2;
+
+    rc = send_command(receiver, command, alt111_event_response, ctx);
+    altscreen_log(
+        "PHASE=ALT111_VIEWAREA_SUBMIT receiver=%p stream=%p generation=%u "
+        "uuid=%s viewAreaIndex=%d animationDurationMillis=0 "
+        "adjacentViewAreas=[%d] rc=%d same_session=1",
+        receiver, stream, generation, display->uuid,
+        view_area_index, adjacent_index, rc);
+
+    if (rc == 0) {
+        alt111_event_context_release(ctx);
+        ctx = NULL;
+    } else if (__sync_fetch_and_add(&ctx->callback_called, 0)) {
+        alt111_event_context_release(ctx);
+        ctx = NULL;
+    }
+
+done:
+    cf_release_safe(adjacent_num);
+    cf_release_safe(adjacent);
+    cf_release_safe(uuid);
+    cf_release_safe(type);
+    cf_release_safe(params);
+    cf_release_safe(command);
+    if (ctx) {
+        alt111_event_context_release(ctx);
+        alt111_event_context_release(ctx);
+    }
+    return rc;
 }
 
 /* LIVI requests the Alt UUID when Main110 becomes ready, before the phone has
