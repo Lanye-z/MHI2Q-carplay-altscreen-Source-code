@@ -591,23 +591,42 @@ static int request_route_action(struct native_slot *slot, int action) {
 
 static int native_read_view_area_target(void) {
     FILE *f;
-    char line[128];
+    char line[192];
+    char layout[128];
     int target = -1;
+    int have_layout = 0;
 
+    layout[0] = 0;
     f = fopen("/tmp/mmi-mirror-hmi.state", "r");
     if (!f) return -1;
 
     while (fgets(line, sizeof(line), f)) {
         if (!strncmp(line, "view=FULL", 9u)) {
             target = 0;
-            break;
-        }
-        if (!strncmp(line, "view=SMALL", 10u)) {
+        } else if (!strncmp(line, "view=SMALL", 10u)) {
             target = 1;
-            break;
+        } else if (!strncmp(line, "layout_name=", 12u)) {
+            size_t n;
+            strncpy(layout, line + 12u, sizeof(layout) - 1u);
+            layout[sizeof(layout) - 1u] = 0;
+            n = strlen(layout);
+            while (n && (layout[n - 1u] == '\n' ||
+                         layout[n - 1u] == '\r' ||
+                         layout[n - 1u] == ' ' ||
+                         layout[n - 1u] == '\t'))
+                layout[--n] = 0;
+            have_layout = 1;
         }
     }
     fclose(f);
+
+    /*
+     * /info predeclares two viewAreas only for the measured B9 target family.
+     * Never send index 1 merely because a stale/foreign HMI state says SMALL:
+     * on an unknown layout the display may have advertised only one viewArea.
+     */
+    if (!have_layout || !strstr(layout, "LayoutMIB2HighB9"))
+        return -1;
     return target;
 }
 
@@ -678,7 +697,7 @@ static void *native_monitor_worker(void *arg) {
 
             if (desired_view_area == 0 || desired_view_area == 1) {
                 if (slot->view_area_target != desired_view_area) {
-                    altscreen_log("PHASE=ALT111_VIEWAREA_TARGET receiver=%p stream=%p generation=%u old=%d new=%d source=/tmp/mmi-mirror-hmi.state",
+                    altscreen_log("PHASE=ALT111_VIEWAREA_TARGET receiver=%p stream=%p generation=%u old=%d new=%d source=/tmp/mmi-mirror-hmi.state gate=LayoutMIB2HighB9",
                                   receiver, stream, generation,
                                   slot->view_area_target, desired_view_area);
                     slot->view_area_target = desired_view_area;

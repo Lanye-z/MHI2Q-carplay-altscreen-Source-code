@@ -50,10 +50,11 @@ stall_report_after_ms=120
 
 The producer remains uncapped and the Private111 / OMX / SHM ABI is unchanged.
 
-## 2. Layout adaptation: map-local safeArea + OEM map translation
+## 2. Layout adaptation: 455-reference safeArea + OEM map translation
 
-The ListModel176-derived rectangles are treated as **map/source-local safe
-areas**, not as post-layout physical VC rectangles and not as GLES scale boxes.
+The ListModel176-derived rectangles are treated as **measured physical safe
+regions in the proven 1440x455 map/displayable plane**.  They are not GLES
+scale boxes.
 
 The two sizes must be kept distinct:
 
@@ -61,25 +62,43 @@ The two sizes must be kept distinct:
 private111 / CarPlay coded canvas = runtime display geometry
                                   = 1440x542 in the vehicle logs
 displayable3 sink/map plane       = 1440x455
-renderer_scale                    = 0 for OEM X-placement
+renderer_scale                    = full-canvas GLES mapping
+OEM X-placement                   = translation only
 ```
 
 The measured ListModel geometry also reports the related 1440x540 cluster
-screen model. The hook therefore recognizes only the observed B9-family
-vertical extents 542 / 540 / 455 instead of silently requiring 455 at the
-CarPlay `/info` stage.
+screen model. The hook recognizes only the observed B9-family vertical extents
+542 / 540 / 455 instead of silently requiring 455 at the CarPlay `/info`
+stage.
 
-The two independent geometry layers are:
-
-1. **CarPlay safeArea in the 1440x455 map canvas**
-2. **Audi map-plane translation in the VC compositor**
-
-The CarPlay source safe areas are fixed by FULL/SMALL:
+Because CarPlay safeArea coordinates live in the **coded canvas** coordinate
+system, while the OEM measurements are in the **455-pixel sink/reference
+plane**, Y and H are converted before they are advertised:
 
 ```
-FULL  source safeArea = 370,49,700x300
-SMALL source safeArea = 490,49,460x300
+canvas_y = round(reference_y * canvas_h / 455)
+canvas_h_safe = round(reference_h * canvas_h / 455)
 ```
+
+X and W are unchanged because all observed canvases are 1440 pixels wide.
+
+The 455-reference measurements remain:
+
+```
+FULL  reference safeArea = 370,49,700x300
+SMALL reference safeArea = 490,49,460x300
+```
+
+For the observed 1440x542 private111 canvas they become approximately:
+
+```
+FULL  CarPlay safeArea = 370,58,700x357
+SMALL CarPlay safeArea = 490,58,460x357
+```
+
+After the full 542-high texture is mapped onto the 455-high displayable3 sink,
+those coordinates land back at approximately the measured physical
+`y=49,h=300`.
 
 The Audi map-plane translation is independently derived from layout constants
 80/81:
@@ -94,7 +113,7 @@ Sport   SMALL -> (-476,0)
 Therefore Sport SMALL is intentionally **not compensated back to the centre**:
 
 ```
-physical = source + renderer_offset
+physical_x = reference_x + renderer_offset_x
 Sport SMALL physical safe x = 490 + (-476) = 14
 ```
 
@@ -102,9 +121,9 @@ This matches the stock B9Sport behavior in
 `CombiMapController.positionMap()`: the `-476,0` offset belongs to map planes
 33/58. It is not applied to the KDK maneuver panel/backings.
 
-The resulting four-state geometry is:
+The resulting four-state **physical** geometry remains:
 
-| State | Renderer offset | CarPlay source safeArea | Resulting physical safe region |
+| State | Renderer offset | 455-reference safeArea | Resulting physical safe region |
 | --- | ---: | ---: | ---: |
 | CLASSIC_FULL | `(0,0)` | `370,49,700x300` | `370,49,700x300` |
 | CLASSIC_SMALL | `(0,0)` | `490,49,460x300` | `490,49,460x300` |
@@ -114,22 +133,27 @@ The resulting four-state geometry is:
 ## 3. Two declared type111 viewAreas
 
 A CarPlay session cannot switch to a view-area index that was never declared.
-The type111 display therefore advertises both Audi candidates at session setup:
+The type111 display therefore advertises both Audi candidates at session setup.
+
+For an observed 1440x542 canvas:
 
 ```
 viewAreas[0]:
-  viewArea = full runtime type111 canvas   # observed 1440x542
-  safeArea = 370,49,700x300                # FULL
+  viewArea = 1440x542
+  safeArea ~= 370,58,700x357   # FULL; derived from 455 reference
 
 viewAreas[1]:
-  viewArea = full runtime type111 canvas   # observed 1440x542
-  safeArea = 490,49,460x300                # SMALL
+  viewArea = 1440x542
+  safeArea ~= 490,58,460x357   # SMALL; derived from 455 reference
 ```
+
+For a 1440x455 canvas the values remain exactly
+`370,49,700x300` / `490,49,460x300`.
 
 The coded type111 frame keeps the runtime-negotiated dimensions in both states;
 the second viewArea does not change stream resolution or shrink the video. It
 only gives iOS a second safe-area layout. The independent displayable3 sink
-continues to use its proven 1440x455 map plane.
+continues to use its proven 1440x455 plane.
 
 `initialViewArea` follows the VC state present when `/info` is built:
 
@@ -196,10 +220,19 @@ params.adjacentViewAreas = [other index]
 ```
 
 The native watcher polls the HMI state at 100 ms and retries a failed/timed-out
-view-area transition. The sidecar polls placement at 50 ms. If the geometry
-changes while decoded video is momentarily stalled, the sidecar redraws the
-last uploaded texture immediately, so the map moves without waiting for the
-next video frame.
+view-area transition. It sends index 0/1 only when `layout_name` belongs to the
+measured `LayoutMIB2HighB9` family, so an unknown/non-B9 display that declared
+only one viewArea cannot receive an invalid SMALL index.
+
+The sidecar polls placement at 50 ms. Java updates
+`/tmp/mmi-mirror-hmi.state` through a temporary file; if a poll lands in the
+tiny replace/copy gap, the sidecar retains the previous valid placement instead
+of flashing to fullscreen. Once a complete new state arrives, it is applied
+normally.
+
+If the geometry changes while decoded video is momentarily stalled, the sidecar
+redraws the last uploaded texture immediately, so the map moves without waiting
+for the next video frame.
 
 This also covers same-session Classic/Sport changes:
 
@@ -213,10 +246,11 @@ Expected logs include:
 
 ```
 ALTAREA_LAYOUT_SAFE_V3 ... viewAreaCount=2 ...
-PHASE=ALT111_VIEWAREA_TARGET ... old=0 new=1 ...
+PHASE=ALT111_VIEWAREA_TARGET ... old=0 new=1 ... gate=LayoutMIB2HighB9
 PHASE=ALT111_VIEWAREA_SUBMIT ... viewAreaIndex=1 ... same_session=1
 PHASE=ALT111_VIEWAREA_RESULT ... accepted=1
 PHASE=OEM_MAP_PLACEMENT ... renderer_offset=-476,0 ... live_switch=1
+PHASE=OEM_MAP_PLACEMENT_STATE_GAP ... action=retain_previous
 PHASE=OEM_MAP_RERENDER ... last_frame_redrawn=1
 ```
 

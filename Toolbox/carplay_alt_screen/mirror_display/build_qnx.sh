@@ -44,6 +44,8 @@ for marker in \
   'present_policy=source-driven' \
   'no_success_sleep=1' \
   'PHASE=OEM_MAP_PLACEMENT' \
+  'PHASE=OEM_MAP_PLACEMENT_STATE_GAP' \
+  'action=retain_previous' \
   'PHASE=OEM_MAP_RERENDER' \
   'live_switch=1' \
   'renderer_scale=0' \

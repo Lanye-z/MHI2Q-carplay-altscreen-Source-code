@@ -190,8 +190,10 @@ for marker in \
   '/tmp/mmi-mirror-hmi.state' \
   'safe_source=' \
   'safe_physical=' \
+  'safe_yh_mapping=reference455_to_canvas' \
   'renderer_offset=' \
   'runtime_switch=updateViewArea' \
+  'gate=LayoutMIB2HighB9' \
   'predeclared_even_if_hmi_late=' \
   'PHASE=ALT111_VIEWAREA_SUBMIT' \
   'PHASE=ALT111_VIEWAREA_TARGET' \

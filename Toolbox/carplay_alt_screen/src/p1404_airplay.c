@@ -382,6 +382,8 @@ struct alt_safe_rect {
     /* Same safe region after renderer translation, in physical VC space. */
     int physical_x;
     int physical_y;
+    uint32_t physical_w;
+    uint32_t physical_h;
 
     /* Live full-size map-plane translation. No scaling. */
     int renderer_dx;
@@ -410,19 +412,6 @@ static int alt_kv_text(const char *line, const char *key,
     strncpy(out, line + n + 1u, cap - 1u);
     out[cap - 1u] = 0;
     alt_trim_line(out);
-    return 1;
-}
-
-static int alt_kv_u32(const char *line, const char *key, uint32_t *out) {
-    char *end = NULL;
-    long value;
-    size_t n;
-    if (!line || !key || !out) return 0;
-    n = strlen(key);
-    if (strncmp(line, key, n) || line[n] != '=') return 0;
-    value = strtol(line + n + 1u, &end, 10);
-    if (end == line + n + 1u || value < 0) return 0;
-    *out = (uint32_t)value;
     return 1;
 }
 
@@ -503,6 +492,22 @@ static int alt_is_measured_b9_canvas(uint32_t display_w,
            (display_h == 542u || display_h == 540u || display_h == 455u);
 }
 
+/*
+ * ListModel176/OEM measurements are in the 1440x455 map/displayable plane,
+ * while private111 may negotiate a 1440x542 (or 1440x540) coded canvas.
+ * X/W are unchanged because width stays 1440.  Convert only Y/H into the
+ * coded-canvas coordinate system so the subsequent 542->455 GLES mapping lands
+ * back on the measured physical y/height.  Use alt_div_u32 to avoid pulling
+ * ARM EABI division helpers into the freestanding preload.
+ */
+static uint32_t alt_safe_y_455_to_canvas(uint32_t value, uint32_t canvas_h) {
+    uint32_t numerator;
+    if (!canvas_h || canvas_h == 455u) return value;
+    if (value > (0xffffffffu - 227u) / canvas_h) return 0u;
+    numerator = value * canvas_h + 227u; /* nearest integer /455 */
+    return alt_div_u32(numerator, 455u);
+}
+
 static int alt_load_measured_k1004_safe_area(uint32_t display_w,
                                              uint32_t display_h,
                                              const char *view,
@@ -525,27 +530,36 @@ static int alt_load_measured_k1004_safe_area(uint32_t display_w,
      * separate compositor operation and must not be cancelled here.
      */
     if (!strcmp(view, "SMALL")) {
-        r.x = 490u; r.y = 49u; r.w = 460u; r.h = 300u;
+        r.x = 490u;
+        r.y = alt_safe_y_455_to_canvas(49u, display_h);
+        r.w = 460u;
+        r.h = alt_safe_y_455_to_canvas(300u, display_h);
+        r.physical_w = 460u;
+        r.physical_h = 300u;
         r.renderer_dx = small_dx;
         r.renderer_dy = small_dy;
     } else if (!strcmp(view, "FULL")) {
-        r.x = 370u; r.y = 49u; r.w = 700u; r.h = 300u;
+        r.x = 370u;
+        r.y = alt_safe_y_455_to_canvas(49u, display_h);
+        r.w = 700u;
+        r.h = alt_safe_y_455_to_canvas(300u, display_h);
+        r.physical_w = 700u;
+        r.physical_h = 300u;
         r.renderer_dx = 0;
         r.renderer_dy = 0;
     } else {
         return 0;
     }
+    if (!r.y || !r.h) return 0;
 
     /*
-     * Physical VC coordinates are diagnostic only:
-     *
-     *     physical = source + renderer_offset
-     *
-     * Therefore Sport SMALL is x=490-476=14, matching the stock left-shifted
-     * map-plane layout.  Classic SMALL remains x=490.
+     * Physical VC diagnostics stay in the measured 1440x455 sink plane.
+     * Source Y/H above may be 542/540-canvas values; do not add renderer
+     * translation to those scaled source coordinates.
      */
-    physical_x = (int64_t)r.x + (int64_t)r.renderer_dx;
-    physical_y = (int64_t)r.y + (int64_t)r.renderer_dy;
+    physical_x = (int64_t)(!strcmp(view, "SMALL") ? 490u : 370u) +
+                 (int64_t)r.renderer_dx;
+    physical_y = 49 + (int64_t)r.renderer_dy;
     if (physical_x < -8192 || physical_x > 8192 ||
         physical_y < -8192 || physical_y > 8192) {
         return 0;
@@ -588,9 +602,14 @@ static void alt_resolve_cluster_safe_area(uint32_t display_w,
      * same-session FULL<->SMALL switching impossible later.
      */
     if (alt_is_measured_b9_canvas(display_w, display_h)) {
-        out->x = 370u; out->y = 49u; out->w = 700u; out->h = 300u;
+        out->x = 370u;
+        out->y = alt_safe_y_455_to_canvas(49u, display_h);
+        out->w = 700u;
+        out->h = alt_safe_y_455_to_canvas(300u, display_h);
         out->physical_x = 370;
         out->physical_y = 49;
+        out->physical_w = 700u;
+        out->physical_h = 300u;
         strncpy(out->source, "k1004-default-full-before-hmi",
                 sizeof(out->source) - 1u);
     } else {
@@ -598,6 +617,8 @@ static void alt_resolve_cluster_safe_area(uint32_t display_w,
         out->h = display_h;
         out->physical_x = 0;
         out->physical_y = 0;
+        out->physical_w = display_w;
+        out->physical_h = display_h;
         strncpy(out->source, "fullscreen-fallback", sizeof(out->source) - 1u);
     }
     out->source[sizeof(out->source) - 1u] = 0;
@@ -668,8 +689,11 @@ static cf_obj make_cluster_layout_view_areas(uint32_t w, uint32_t h,
     if (!areas) return NULL;
 
     memset(&full, 0, sizeof(full));
-    full.x = 370u; full.y = 49u; full.w = 700u; full.h = 300u;
-    if (!alt_safe_rect_valid(&full, w, h)) goto fail;
+    full.x = 370u;
+    full.y = alt_safe_y_455_to_canvas(49u, h);
+    full.w = 700u;
+    full.h = alt_safe_y_455_to_canvas(300u, h);
+    if (!full.y || !full.h || !alt_safe_rect_valid(&full, w, h)) goto fail;
 
     v = rect_dict(w, h, 0u, 0u);
     safe = rect_dict(full.w, full.h, full.x, full.y);
@@ -681,8 +705,11 @@ static cf_obj make_cluster_layout_view_areas(uint32_t w, uint32_t h,
     if (!enable_two_areas) return areas;
 
     memset(&small, 0, sizeof(small));
-    small.x = 490u; small.y = 49u; small.w = 460u; small.h = 300u;
-    if (!alt_safe_rect_valid(&small, w, h)) goto fail;
+    small.x = 490u;
+    small.y = alt_safe_y_455_to_canvas(49u, h);
+    small.w = 460u;
+    small.h = alt_safe_y_455_to_canvas(300u, h);
+    if (!small.y || !small.h || !alt_safe_rect_valid(&small, w, h)) goto fail;
 
     v = rect_dict(w, h, 0u, 0u);
     safe = rect_dict(small.w, small.h, small.x, small.y);
@@ -820,7 +847,7 @@ void *alt_build_cluster_display(void) {
         "initialViewArea=%d adjacent=%d predeclared_even_if_hmi_late=%d "
         "view=full:%ux%u safe_source=%u,%u,%ux%u "
         "safe_physical=%d,%d,%ux%u renderer_offset=%d,%d "
-        "mode=%s layout=%s source=%s renderer_scale=0 "
+        "safe_yh_mapping=reference455_to_canvas mode=%s layout=%s source=%s renderer_scale=0 "
         "runtime_switch=updateViewArea type111_transition_flags=omitted",
         two_area_capable ? 2 : 1,
         initial_view_area,
@@ -830,7 +857,7 @@ void *alt_build_cluster_display(void) {
         cluster_safe.x, cluster_safe.y,
         cluster_safe.w, cluster_safe.h,
         cluster_safe.physical_x, cluster_safe.physical_y,
-        cluster_safe.w, cluster_safe.h,
+        cluster_safe.physical_w, cluster_safe.physical_h,
         cluster_safe.renderer_dx, cluster_safe.renderer_dy,
         cluster_safe.view, cluster_safe.layout,
         cluster_safe.source);

@@ -246,6 +246,7 @@ struct OemMapPlacement {
     int dy;
     char view[16];
     char layout[128];
+    bool state_complete;
     bool recognized;
 };
 
@@ -309,10 +310,11 @@ static OemMapPlacement load_session_map_placement() {
     }
     fclose(f);
 
-    if (!have_view || !have_layout ||
-        !strstr(p.layout, "LayoutMIB2HighB9")) {
+    p.state_complete = have_view && have_layout;
+    if (!p.state_complete)
         return p;
-    }
+    if (!strstr(p.layout, "LayoutMIB2HighB9"))
+        return p;
 
     if (strcmp(p.view, "FULL") == 0) {
         p.dx = 0;
@@ -360,9 +362,35 @@ static bool reconcile_oem_map_placement(ClusterVideoDisplay &display,
                                         const char *reason,
                                         bool redraw_last_frame) {
     static bool have_previous = false;
+    static bool transient_gap_reported = false;
     static OemMapPlacement previous;
 
     const OemMapPlacement p = load_session_map_placement();
+
+    /*
+     * Java replaces /tmp/mmi-mirror-hmi.state through a temp file.  There is a
+     * very small delete/rename (or copy fallback) interval in which the reader
+     * can observe no file or an incomplete file.  Once a valid placement has
+     * been applied, keep it through that transient gap instead of flashing back
+     * to fullscreen for one 50 ms poll.
+     */
+    if (have_previous && !p.state_complete) {
+        if (!transient_gap_reported) {
+            fprintf(stderr,
+                    "direct111: PHASE=OEM_MAP_PLACEMENT_STATE_GAP "
+                    "reason=%s action=retain_previous "
+                    "previous_view=%s previous_layout=%s "
+                    "renderer_offset=%d,%d\n",
+                    reason ? reason : "poll",
+                    previous.view, previous.layout,
+                    previous.dx, previous.dy);
+            transient_gap_reported = true;
+        }
+        return false;
+    }
+    if (p.state_complete)
+        transient_gap_reported = false;
+
     if (have_previous && same_map_placement(previous, p))
         return false;
 

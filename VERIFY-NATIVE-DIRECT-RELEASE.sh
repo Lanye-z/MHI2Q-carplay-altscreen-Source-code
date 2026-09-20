@@ -269,12 +269,29 @@ if grep -Fq '/tmp/carplay-oem-geometry.state' "$AIRPLAY_SRC"; then
 fi
 grep -Fq 'LayoutMIB2HighB9' "$AIRPLAY_SRC" ||
     fail "K1004 measured layout guard missing"
-grep -Fq 'r.x = 370u; r.y = 49u; r.w = 700u; r.h = 300u;' "$AIRPLAY_SRC" ||
-    fail "FULL map-local safeArea missing"
-grep -Fq 'r.x = 490u; r.y = 49u; r.w = 460u; r.h = 300u;' "$AIRPLAY_SRC" ||
-    fail "SMALL map-local safeArea missing"
-grep -Fq 'physical_x = (int64_t)r.x + (int64_t)r.renderer_dx;' "$AIRPLAY_SRC" ||
-    fail "physical safe-region translation is not source+renderer_offset"
+if grep -Fq 'static int alt_kv_u32' "$AIRPLAY_SRC"; then
+    fail "unused alt_kv_u32 helper would fail the -Werror universal build"
+fi
+grep -Fq 'alt_safe_y_455_to_canvas' "$AIRPLAY_SRC" ||
+    fail "455-reference to runtime-canvas safeArea Y/H mapper missing"
+grep -Fq 'alt_div_u32(numerator, 455u)' "$AIRPLAY_SRC" ||
+    fail "safeArea canvas mapper must avoid ARM EABI division helpers"
+grep -Fq 'r.x = 370u;' "$AIRPLAY_SRC" ||
+    fail "FULL safeArea X missing"
+grep -Fq 'r.y = alt_safe_y_455_to_canvas(49u, display_h);' "$AIRPLAY_SRC" ||
+    fail "FULL safeArea Y is not mapped from the 455 reference plane"
+grep -Fq 'r.w = 700u;' "$AIRPLAY_SRC" ||
+    fail "FULL safeArea width missing"
+grep -Fq 'r.h = alt_safe_y_455_to_canvas(300u, display_h);' "$AIRPLAY_SRC" ||
+    fail "FULL safeArea height is not mapped from the 455 reference plane"
+grep -Fq 'r.x = 490u;' "$AIRPLAY_SRC" ||
+    fail "SMALL safeArea X missing"
+grep -Fq 'r.w = 460u;' "$AIRPLAY_SRC" ||
+    fail "SMALL safeArea width missing"
+grep -Fq 'safe_yh_mapping=reference455_to_canvas' "$AIRPLAY_SRC" ||
+    fail "runtime safeArea coordinate-space diagnostic missing"
+grep -Fq 'physical_y = 49 + (int64_t)r.renderer_dy;' "$AIRPLAY_SRC" ||
+    fail "physical safe-region Y must stay in the measured 455 sink plane"
 if grep -Fq 'r.physical_x - (int64_t)r.renderer_dx' "$AIRPLAY_SRC" ||
    grep -Fq 'source x=966' "$AIRPLAY_SRC"; then
     fail "retired Sport SMALL safeArea compensation still present"
@@ -307,6 +324,10 @@ grep -Fq 'PHASE=ALT111_VIEWAREA_TARGET' "$NATIVE" ||
     fail "native HMI view-area target observer missing"
 grep -Fq 'PHASE=ALT111_VIEWAREA_RESULT' "$NATIVE" ||
     fail "native view-area response/retry observer missing"
+grep -Fq 'strstr(layout, "LayoutMIB2HighB9")' "$NATIVE" ||
+    fail "view-area sender is not gated to the measured B9 layout family"
+grep -Fq 'gate=LayoutMIB2HighB9' "$NATIVE" ||
+    fail "B9-only view-area gate diagnostic missing"
 grep -Fq 'usleep(100000u);' "$NATIVE" ||
     fail "live CarPlay layout watcher must poll HMI state at 100ms"
 grep -Fq 'renderer_scale=0' "$AIRPLAY_SRC" ||
@@ -314,6 +335,12 @@ grep -Fq 'renderer_scale=0' "$AIRPLAY_SRC" ||
 
 grep -Fq 'PHASE=OEM_MAP_PLACEMENT' "$MAIN_CPP" ||
     fail "live OEM map placement marker missing"
+grep -Fq 'PHASE=OEM_MAP_PLACEMENT_STATE_GAP' "$MAIN_CPP" ||
+    fail "HMI state atomic-replace gap retention marker missing"
+grep -Fq 'action=retain_previous' "$MAIN_CPP" ||
+    fail "sidecar must retain the previous placement across transient HMI-state gaps"
+grep -Fq 'bool state_complete;' "$MAIN_CPP" ||
+    fail "sidecar cannot distinguish incomplete HMI state from a valid unknown layout"
 grep -Fq 'PHASE=OEM_MAP_RERENDER' "$MAIN_CPP" ||
     fail "layout change does not redraw the current frame immediately"
 grep -Fq 'next_layout_probe_us' "$MAIN_CPP" ||
