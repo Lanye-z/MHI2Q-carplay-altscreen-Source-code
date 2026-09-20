@@ -2,15 +2,22 @@
 #include "cluster_video_display.h"
 
 #include <signal.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <unistd.h>
 
 static volatile sig_atomic_t g_stop = 0;
 static const unsigned kTargetFps = 30;
 static const char kBuildId[] = "carplay-private111-direct-display-v2";
+
+static void make_diagnostics_nonblocking(int fd) {
+    const int flags = fcntl(fd, F_GETFL, 0);
+    if (flags >= 0) (void)fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
 
 static const char *volatile_path(const char *key, const char *fallback) {
     const char *v = getenv(key);
@@ -42,6 +49,45 @@ static unsigned long long now_us() {
     if (gettimeofday(&tv, 0) != 0) return 0;
     return (unsigned long long)(unsigned long)tv.tv_sec * 1000000ULL +
            (unsigned long long)(unsigned long)tv.tv_usec;
+}
+
+static unsigned counter_delta(unsigned current, unsigned base) {
+    return current >= base ? current - base : current;
+}
+
+static void log_frame_present_timing(const VideoFrame &frame,
+                                     unsigned long long before_present_us,
+                                     unsigned long long after_present_us,
+                                     unsigned long long previous_present_us,
+                                     uint32_t generation) {
+    const unsigned present_us32 = (unsigned)after_present_us;
+    const unsigned interval_us = previous_present_us &&
+                                 after_present_us >= previous_present_us &&
+                                 after_present_us - previous_present_us <= 5000000ULL
+                                     ? (unsigned)(after_present_us - previous_present_us) : 0u;
+    const unsigned present_call_us = before_present_us &&
+                                     after_present_us >= before_present_us &&
+                                     after_present_us - before_present_us <= 5000000ULL
+                                         ? (unsigned)(after_present_us - before_present_us) : 0u;
+    char line[512];
+    const int written = snprintf(line, sizeof(line),
+            "direct111: PHASE=FRAME_PRESENT_TIMING seq=%u gen=%u h264_seq=%u "
+            "decode_proxy_us=%u readback_us=%u publish_to_copy_end_us=%u "
+            "copy_us=%u copy_to_present_us=%u present_call_us=%u "
+            "publish_to_present_us=%u input_to_present_proxy_us=%u "
+            "present_interval_us=%u instant_fps100=%u\n",
+            frame.sequence, generation, frame.h264_sequence,
+            p111_timing_delta_us32(frame.render_us32, frame.h264_rx_us32),
+            frame.readback_us,
+            p111_timing_delta_us32((unsigned)frame.timestamp_us, frame.publish_us32),
+            frame.copy_us,
+            p111_timing_delta_us32(present_us32, (unsigned)frame.timestamp_us),
+            present_call_us,
+            p111_timing_delta_us32(present_us32, frame.publish_us32),
+            p111_timing_delta_us32(present_us32, frame.h264_rx_us32),
+            interval_us, interval_us ? 100000000u / interval_us : 0u);
+    if (written > 0 && (size_t)written < sizeof(line))
+        (void)write(STDERR_FILENO, line, (size_t)written);
 }
 
 static bool env_truth(const char *name) {
@@ -104,6 +150,7 @@ static bool persist_gate(const char *line) {
  */
 static bool wait_for_phone111_gate() {
     static const char kFlatHookLog[] = "/tmp/altscreen_hook.log";
+    static const char kNamespaceHookLog[] = "/tmp/MMI-Cockpit-Carplay/altscreen_hook.log";
     char consumed[1024];
     char candidate[1024];
     char candidate_source[48];
@@ -111,76 +158,81 @@ static bool wait_for_phone111_gate() {
     bool have_hook_init = false;
     bool reported_waiting = false;
     bool reported_consumed = false;
-    FILE *f = 0;
-    const char *opened_path = 0;
+    FILE *files[3] = {0, 0, 0};
+    const char *paths[3] = {
+        hook_log_path(),
+        volatile_path("ALT111_MIRROR_HOOK_FALLBACK_LOG", kNamespaceHookLog),
+        kFlatHookLog
+    };
 
     load_consumed_gate(consumed, sizeof(consumed));
     candidate[0] = 0;
     candidate_source[0] = 0;
 
     while (!g_stop) {
-        if (!f) {
-            const char *primary = hook_log_path();
-            f = fopen(primary, "r");
-            if (f) {
-                opened_path = primary;
-            } else if (strcmp(primary, kFlatHookLog) != 0) {
-                f = fopen(kFlatHookLog, "r");
-                if (f) opened_path = kFlatHookLog;
+        bool read_any = false;
+        for (unsigned source = 0; source < 3u; ++source) {
+            if (source && strcmp(paths[source], paths[0]) == 0) continue;
+            if (source == 2u && strcmp(paths[source], paths[1]) == 0) continue;
+            FILE *&f = files[source];
+            struct stat path_stat, open_stat;
+            if (f && (stat(paths[source], &path_stat) != 0 ||
+                      fstat(fileno(f), &open_stat) != 0 ||
+                      path_stat.st_ino != open_stat.st_ino ||
+                      path_stat.st_size < ftell(f))) {
+                fclose(f);
+                f = 0;
             }
-
             if (!f) {
-                if (!reported_waiting) {
+                f = fopen(paths[source], "r");
+                if (f)
                     fprintf(stderr,
-                            "direct111: PHASE=GATE_WAIT "
-                            "for=PHONE_REQUEST_111 screen_context=NONE "
-                            "window58_dependency=NONE hook_log=%s\n",
-                            primary);
-                    reported_waiting = true;
-                }
-                usleep(100000);
-                continue;
+                            "direct111: PHASE=GATE_LOG_ATTACHED path=%s "
+                            "screen_context=NONE window58_dependency=NONE\n",
+                            paths[source]);
             }
+            if (!f) continue;
+            while (fgets(line, sizeof(line), f)) {
+                read_any = true;
+                strip_eol(line);
 
-            fprintf(stderr,
-                    "direct111: PHASE=GATE_LOG_ATTACHED path=%s "
-                    "screen_context=NONE window58_dependency=NONE\n",
-                    opened_path ? opened_path : "-");
+                if (strstr(line, "PHASE=HOOK_LOG_SEGMENT")) {
+                    have_hook_init = true;
+                    continue;
+                }
+                if (strstr(line, "PHASE=HOOK_INIT")) {
+                    have_hook_init = true;
+                    candidate[0] = 0;
+                    candidate_source[0] = 0;
+                    reported_consumed = false;
+                    continue;
+                }
+
+                /*
+                 * PHONE_REQUESTED_ALTSCREEN=YES is a process-level marker;
+                 * STREAM_111_REQUESTED=YES is emitted for each type111 setup.
+                 */
+                if (have_hook_init && strstr(line, "PHASE=PHONE_REQUEST_111")) {
+                    if (strstr(line, "STREAM_111_REQUESTED=YES")) {
+                        copy_line(candidate, sizeof(candidate), line);
+                        copy_line(candidate_source, sizeof(candidate_source),
+                                  "stream111-request");
+                    } else if (strstr(line, "PHONE_REQUESTED_ALTSCREEN=YES")) {
+                        copy_line(candidate, sizeof(candidate), line);
+                        copy_line(candidate_source, sizeof(candidate_source),
+                                  "phone-marker");
+                    }
+                }
+            }
+            clearerr(f);
         }
 
-        bool read_any = false;
-        while (fgets(line, sizeof(line), f)) {
-            read_any = true;
-            strip_eol(line);
-
-            if (strstr(line, "PHASE=HOOK_INIT")) {
-                have_hook_init = true;
-                candidate[0] = 0;
-                candidate_source[0] = 0;
-                reported_consumed = false;
-                continue;
-            }
-
-            /*
-             * PHONE_REQUESTED_ALTSCREEN=YES is a process-level state marker and
-             * may only be emitted once for the lifetime of dio_manager.
-             * STREAM_111_REQUESTED=YES is emitted for every actual type111
-             * setup request. Accept either, preferring the repeated request
-             * marker as the per-session gate so normal disconnect/reconnect in
-             * one dio_manager process cannot strand the sidecar.
-             */
-            if (have_hook_init &&
-                strstr(line, "PHASE=PHONE_REQUEST_111")) {
-                if (strstr(line, "STREAM_111_REQUESTED=YES")) {
-                    copy_line(candidate, sizeof(candidate), line);
-                    copy_line(candidate_source, sizeof(candidate_source),
-                              "stream111-request");
-                } else if (strstr(line, "PHONE_REQUESTED_ALTSCREEN=YES")) {
-                    copy_line(candidate, sizeof(candidate), line);
-                    copy_line(candidate_source, sizeof(candidate_source),
-                              "phone-marker");
-                }
-            }
+        if (!read_any && !reported_waiting) {
+            fprintf(stderr,
+                    "direct111: PHASE=GATE_WAIT for=PHONE_REQUEST_111 "
+                    "screen_context=NONE window58_dependency=NONE hook_log=%s\n",
+                    paths[0]);
+            reported_waiting = true;
         }
 
         if (candidate[0]) {
@@ -200,10 +252,8 @@ static bool wait_for_phone111_gate() {
                     usleep(100000);
                     continue;
                 }
-                if (f) {
-                    fclose(f);
-                    f = 0;
-                }
+                for (unsigned source = 0; source < 3u; ++source)
+                    if (files[source]) fclose(files[source]);
                 fprintf(stderr,
                         "direct111: PHASE=GATE_PASS trigger=PHONE_REQUEST_111 "
                         "gate_source=%s policy=stream111_request_or_phone_marker "
@@ -213,11 +263,11 @@ static bool wait_for_phone111_gate() {
             }
         }
 
-        clearerr(f);
         usleep(read_any ? 20000 : 50000);
     }
 
-    if (f) fclose(f);
+    for (unsigned source = 0; source < 3u; ++source)
+        if (files[source]) fclose(files[source]);
     return false;
 }
 
@@ -309,6 +359,10 @@ static int run_sink_grid(bool verbose) {
 }
 
 int main(int argc, char **argv) {
+    /* The launcher may connect stdout/stderr to an SD-backed FIFO reader.
+     * A stalled card must drop diagnostics, never stall decoded-frame work. */
+    make_diagnostics_nonblocking(STDOUT_FILENO);
+    make_diagnostics_nonblocking(STDERR_FILENO);
     bool verbose = false;
     bool sink_test_grid = false;
     const char *grid_env = getenv("ALT111_SINK_TEST_GRID");
@@ -491,6 +545,7 @@ int main(int argc, char **argv) {
     }
     display.set_fullscreen_destination();
 
+    unsigned long long before_present_us = now_us();
     if (!display.present_frame(frame)) {
         fprintf(stderr,
                 "direct111: ERROR PHASE=DISPLAYABLE3_FIRST_PRESENT "
@@ -501,6 +556,9 @@ int main(int argc, char **argv) {
         source.shutdown();
         return 4;
     }
+    unsigned long long last_present_us = now_us();
+    log_frame_present_timing(frame, before_present_us, last_present_us,
+                             0ULL, source.generation());
 
     fprintf(stderr,
             "direct111: PHASE=DISPLAYABLE3_FIRST_PRESENT result=OK "
@@ -528,11 +586,67 @@ int main(int argc, char **argv) {
     unsigned long source_frames = 1;
     unsigned long stats_presented_base = display.frame_count();
     unsigned long long stats_start = now_us();
+    uint32_t stats_h264_base = source.h264_packets();
+    uint32_t stats_decoded_base = source.producer_frames();
+    uint32_t stats_copies_base = source.consumer_copies();
+    uint32_t last_present_seq = frame.sequence;
+    uint32_t last_present_generation = source.generation();
+    unsigned long skipped_frames = 0;
+    unsigned long stats_skipped_base = 0;
+    unsigned long stall_events = 0;
+    unsigned long stats_stall_base = 0;
+    unsigned max_decode_proxy_us = 0u;
+    unsigned max_readback_us = 0u;
+    unsigned max_publish_to_present_us = 0u;
+    unsigned max_present_call_us = 0u;
     const unsigned long long frame_period_us =
         1000000ULL / (unsigned long long)kTargetFps;
 
     while (!g_stop) {
         const unsigned long long frame_start = now_us();
+        if (frame_start && stats_start && frame_start >= stats_start &&
+            frame_start - stats_start >= 60000000ULL) {
+            clearerr(stderr);
+            const unsigned long long span = frame_start - stats_start;
+            const unsigned long presented = display.frame_count();
+            const unsigned long interval_presented = presented - stats_presented_base;
+            const unsigned long fps100 = span
+                ? (unsigned long)((unsigned long long)interval_presented * 100000000ULL / span)
+                : 0u;
+            const unsigned long decoded_fps100 = span
+                ? (unsigned long)((unsigned long long)counter_delta(source.producer_frames(), stats_decoded_base) *
+                                   100000000ULL / span)
+                : 0u;
+            fprintf(stderr,
+                    "direct111: PHASE=FRAME_CHAIN_HEALTH interval_s=%llu gen=%u "
+                    "h264_packets=%u decoded_frames=%u copied_frames=%u presented_frames=%lu "
+                    "present_fps=%lu.%02lu decoded_fps=%lu.%02lu skipped_sequences=%lu "
+                    "h264_drops=%u h264_wraps=%u decoded_drops=%u copy_races=%u "
+                    "stall_events=%lu in_stall=%d max_decode_proxy_us=%u "
+                    "max_readback_us=%u max_publish_to_present_us=%u "
+                    "max_present_call_us=%u\n",
+                    span / 1000000ULL, (unsigned)source.generation(),
+                    counter_delta(source.h264_packets(), stats_h264_base),
+                    counter_delta(source.producer_frames(), stats_decoded_base),
+                    counter_delta(source.consumer_copies(), stats_copies_base),
+                    interval_presented, fps100 / 100u, fps100 % 100u,
+                    decoded_fps100 / 100u, decoded_fps100 % 100u,
+                    skipped_frames - stats_skipped_base,
+                    (unsigned)source.h264_drops(), (unsigned)source.h264_wraps(),
+                    (unsigned)source.decoded_drops(), (unsigned)source.copy_races(),
+                    stall_events - stats_stall_base, in_stall ? 1 : 0,
+                    max_decode_proxy_us, max_readback_us,
+                    max_publish_to_present_us, max_present_call_us);
+            stats_start = frame_start;
+            stats_presented_base = presented;
+            stats_h264_base = source.h264_packets();
+            stats_decoded_base = source.producer_frames();
+            stats_copies_base = source.consumer_copies();
+            stats_skipped_base = skipped_frames;
+            stats_stall_base = stall_events;
+            max_decode_proxy_us = max_readback_us = 0u;
+            max_publish_to_present_us = max_present_call_us = 0u;
+        }
 
         if (source.read_frame(&frame)) {
             if (in_stall) {
@@ -552,35 +666,50 @@ int main(int argc, char **argv) {
             in_stall = false;
             stall_start_us = 0;
             ++source_frames;
+            if (source.generation() == last_present_generation &&
+                (int32_t)(frame.sequence - last_present_seq) > 1)
+                skipped_frames += (unsigned)(frame.sequence - last_present_seq - 1u);
+            last_present_generation = source.generation();
+            last_present_seq = frame.sequence;
+            before_present_us = now_us();
             if (!display.present_frame(frame)) {
                 fprintf(stderr,
                         "direct111: ERROR PHASE=DISPLAY_PRESENT "
                         "stopping_safely=1\n");
                 break;
             }
+            const unsigned long long after_present_us = now_us();
+            log_frame_present_timing(frame, before_present_us,
+                                     after_present_us, last_present_us,
+                                     source.generation());
+            const unsigned decode_proxy_us = p111_timing_delta_us32(
+                frame.render_us32, frame.h264_rx_us32);
+            const unsigned publish_to_present_us = p111_timing_delta_us32(
+                (unsigned)after_present_us, frame.publish_us32);
+            const unsigned present_call_us = p111_timing_delta_us32(
+                (unsigned)after_present_us, (unsigned)before_present_us);
+            if (decode_proxy_us > max_decode_proxy_us)
+                max_decode_proxy_us = decode_proxy_us;
+            if (frame.readback_us > max_readback_us)
+                max_readback_us = frame.readback_us;
+            if (publish_to_present_us > max_publish_to_present_us)
+                max_publish_to_present_us = publish_to_present_us;
+            if (present_call_us > max_present_call_us)
+                max_present_call_us = present_call_us;
+            last_present_us = after_present_us;
         } else {
             ++failures;
-            if (!in_stall) {
+            if (!stall_start_us) stall_start_us = now_us();
+            const unsigned long long stall_now = now_us();
+            if (!in_stall && stall_now >= stall_start_us &&
+                stall_now - stall_start_us >= 250000ULL) {
                 in_stall = true;
-                stall_start_us = now_us();
+                ++stall_events;
                 fprintf(stderr,
                         "direct111: PHASE=DECODED_SOURCE_STALL "
                         "freeze_last_frame=1 failures=%u h264_packets=%u "
                         "decoded_frames=%u generation=%u\n",
                         failures, (unsigned)source.h264_packets(),
-                        (unsigned)source.decoded_frames(),
-                        (unsigned)source.generation());
-            } else if ((failures % 250u) == 0u) {
-                const unsigned long long now = now_us();
-                const unsigned long long stall_ms =
-                    (now && stall_start_us && now >= stall_start_us)
-                        ? (now - stall_start_us) / 1000ULL : 0;
-                fprintf(stderr,
-                        "direct111: PHASE=DECODED_SOURCE_STALL "
-                        "freeze_last_frame=1 duration_ms=%llu failures=%u "
-                        "h264_packets=%u decoded_frames=%u generation=%u\n",
-                        stall_ms, failures,
-                        (unsigned)source.h264_packets(),
                         (unsigned)source.decoded_frames(),
                         (unsigned)source.generation());
             }
@@ -589,36 +718,6 @@ int main(int argc, char **argv) {
              * during nav-map / phone / OMX scheduling jitter. */
             usleep(20000);
             continue;
-        }
-
-        const unsigned long long now = now_us();
-        if (now && stats_start && now - stats_start >= 10000000ULL) {
-            const unsigned long long span = now - stats_start;
-            const unsigned long total_presented = display.frame_count();
-            const unsigned long interval_presented =
-                total_presented >= stats_presented_base
-                    ? total_presented - stats_presented_base : 0;
-            const unsigned long fps100 = span
-                ? (unsigned long)(((unsigned long long)interval_presented *
-                                   100000000ULL) / span)
-                : 0;
-
-            fprintf(stderr,
-                    "direct111: PHASE=RUN generation=%u "
-                    "h264_ready=%d h264_packets=%u h264_bytes=%u "
-                    "decoded_frames=%u source_frames=%lu "
-                    "presented_frames=%lu present_fps=%lu.%02lu "
-                    "displayable=3 context=80 window58_readback=0\n",
-                    (unsigned)source.generation(),
-                    source.h264_ready() ? 1 : 0,
-                    (unsigned)source.h264_packets(),
-                    (unsigned)source.h264_bytes(),
-                    (unsigned)source.decoded_frames(),
-                    source_frames, total_presented,
-                    fps100 / 100, fps100 % 100);
-
-            stats_presented_base = total_presented;
-            stats_start = now;
         }
 
         const unsigned long long spent = now_us() - frame_start;
