@@ -11,6 +11,7 @@ on:
       - 'Toolbox/carplay_alt_screen/mirror_display/src/**'
       - 'Toolbox/carplay_alt_screen/tests/**'
       - 'Toolbox/scripts/altscreen_boot_diag.sh'
+      - 'Toolbox/scripts/altscreen_log_ring.sh'
       - 'Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh'
       - 'Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh'
       - 'Toolbox/scripts/status_mmi_cockpit_carplay_test.sh'
