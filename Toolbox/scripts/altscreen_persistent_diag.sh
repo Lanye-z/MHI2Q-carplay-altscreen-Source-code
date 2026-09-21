@@ -32,6 +32,7 @@ fi
 
 STATE="$VOLUME/MMI-Cockpit-Carplay/state"
 BOOT_BACKUP="$VOLUME/MMI-Cockpit-Carplay/backup/boot-diagnostics"
+TXN_ROOT="$ROOT/tmp/MMI-Cockpit-Carplay/txn"
 ENABLED="$ROOT/mnt/app/root/carplay-altscreen/state/diagnostics.enabled"
 DEVICE_SCRIPTS="$ROOT/mnt/app/root/carplay-altscreen/bin"
 ensure_dirs "$STATE" || exit 1
@@ -40,6 +41,15 @@ mount_system_rw(){ [ "$TESTING" = 1 ] || mount -uw /mnt/system; }
 mount_system_ro(){ [ "$TESTING" = 1 ] || mount -ur /mnt/system; }
 mount_app_rw(){ [ "$TESTING" = 1 ] || mount -uw /mnt/app; }
 mount_app_ro(){ [ "$TESTING" = 1 ] || mount -ur /mnt/app; }
+publish_system_file(){
+    src=$1; dst=$2; mode=$3; dir=${dst%/*}; base=${dst##*/}; tmp="$dir/.$base.altscreen.new.$$"
+    if cmp -s "$src" "$dst" 2>/dev/null; then chmod "$mode" "$dst" 2>/dev/null || return 1; echo "SYSTEM_PUBLISH=SKIP_IDENTICAL target=$dst"; return 0; fi
+    rm -f "$tmp" 2>/dev/null || true
+    if ! cp "$src" "$tmp"; then rc=$?; rm -f "$tmp" 2>/dev/null || true; return "$rc"; fi
+    chmod "$mode" "$tmp" || { rc=$?; rm -f "$tmp" 2>/dev/null || true; return "$rc"; }
+    cmp -s "$src" "$tmp" || { rm -f "$tmp" 2>/dev/null || true; return 1; }
+    mv "$tmp" "$dst" || { rc=$?; rm -f "$tmp" 2>/dev/null || true; return "$rc"; }
+}
 
 find_startup(){
     for p in "$ROOT/mnt/system/etc/boot/startup.sh" "$ROOT/etc/boot/startup.sh"; do
@@ -84,11 +94,10 @@ install_diag(){
     sh -n "$startup" || return 1
 
     sys_rw=0; app_rw=0
-    mount_system_rw || return 1; sys_rw=1
-    if ! mount_app_rw; then
-        [ "$sys_rw" = 0 ] || mount_system_ro >/dev/null 2>&1 || true
-        return 1
-    fi
+    txn="$TXN_ROOT/diag-install.$$"
+    ensure_dirs "$txn" || return 1
+    trap 'rm -rf "$txn" 2>/dev/null || true' 0 1 2 15
+    if ! mount_app_rw; then return 1; fi
     app_rw=1
 
     if [ -f "$BOOT_BACKUP/COMPLETE" ]; then
@@ -116,7 +125,7 @@ install_diag(){
         }
     fi
 
-    clean="$STATE/diag.clean.$$"; block="$STATE/diag.block.$$"; new="$STATE/diag.new.$$"
+    clean="$txn/startup.clean"; block="$txn/startup.block"; new="$txn/startup.new"
     if ! strip_block "$startup" > "$clean"; then
         rm -f "$clean" "$block" "$new"
         mount_app_ro >/dev/null 2>&1 || true; mount_system_ro >/dev/null 2>&1 || true
@@ -163,21 +172,26 @@ BOOT_BLOCK
     if ! awk 'FNR==NR {block=block $0 "\n"; next}
          FNR==1 {if ($0 ~ /^#!/) {print; printf "%s",block; next} printf "%s",block}
          {print}' "$block" "$clean" > "$new" || ! sh -n "$new" ||
-       ! ensure_dirs "$(dirname -- "$ENABLED")" || ! touch "$ENABLED" ||
-       ! cp "$new" "$startup" || ! chmod 755 "$startup" || ! sync; then
-        rm -f "$clean" "$block" "$new"
+       ! ensure_dirs "$(dirname -- "$ENABLED")" || ! touch "$ENABLED"; then
         rm -f "$ENABLED" 2>/dev/null || true
-        mount_app_ro >/dev/null 2>&1 || true; mount_system_ro >/dev/null 2>&1 || true
+        mount_app_ro >/dev/null 2>&1 || true
         return 1
     fi
-    rm -f "$clean" "$block" "$new"
-    if ! mount_app_ro; then
-        mount_system_ro >/dev/null 2>&1 || true
-        return 1
+    if ! cmp -s "$new" "$startup" 2>/dev/null; then
+        mount_system_rw || { rm -f "$ENABLED" 2>/dev/null || true; mount_app_ro >/dev/null 2>&1 || true; return 1; }
+        sys_rw=1
+        if ! publish_system_file "$new" "$startup" 755 || ! sync; then
+            rm -f "$ENABLED" 2>/dev/null || true
+            mount_app_ro >/dev/null 2>&1 || true; mount_system_ro >/dev/null 2>&1 || true
+            return 1
+        fi
+        mount_system_ro || return 1
+        sys_rw=0
     fi
+    if ! mount_app_ro; then return 1; fi
     app_rw=0
-    mount_system_ro || return 1
-    sys_rw=0
+    rm -rf "$txn" 2>/dev/null || true
+    trap - 0 1 2 15
     echo "PERSISTENT_DIAGNOSTICS=ENABLED auto_sd=YES source=/tmp/MMI-Cockpit-Carplay/altscreen_hook.log runtime=/mnt/app/root/carplay-altscreen/bin adaptive_status=plaintext_filtered adaptive_failsafe=direct_sd full_stream=plaintext"
     return 0
 }
@@ -186,27 +200,28 @@ remove_diag(){
     startup=$(find_startup) || { echo "FAIL: startup.sh not found while disabling diagnostics" >&2; return 1; }
     sh -n "$startup" || return 1
     sys_rw=0; app_rw=0
-    mount_system_rw || return 1; sys_rw=1
-    if ! mount_app_rw; then
-        mount_system_ro >/dev/null 2>&1 || true
-        return 1
-    fi
+    txn="$TXN_ROOT/diag-remove.$$"
+    ensure_dirs "$txn" || return 1
+    trap 'rm -rf "$txn" 2>/dev/null || true' 0 1 2 15
+    clean="$txn/startup.clean"
+    if ! strip_block "$startup" > "$clean" || ! sh -n "$clean"; then return 1; fi
+    if ! mount_app_rw; then return 1; fi
     app_rw=1
-    clean="$STATE/diag.restore.$$"
-    if ! strip_block "$startup" > "$clean" || ! sh -n "$clean" ||
-       ! rm -f "$ENABLED" || ! cp "$clean" "$startup" || ! chmod 755 "$startup" || ! sync; then
-        rm -f "$clean"
-        mount_app_ro >/dev/null 2>&1 || true; mount_system_ro >/dev/null 2>&1 || true
-        return 1
+    if ! rm -f "$ENABLED"; then mount_app_ro >/dev/null 2>&1 || true; return 1; fi
+    if ! cmp -s "$clean" "$startup" 2>/dev/null; then
+        mount_system_rw || { mount_app_ro >/dev/null 2>&1 || true; return 1; }
+        sys_rw=1
+        if ! publish_system_file "$clean" "$startup" 755 || ! sync; then
+            mount_app_ro >/dev/null 2>&1 || true; mount_system_ro >/dev/null 2>&1 || true
+            return 1
+        fi
+        mount_system_ro || return 1
+        sys_rw=0
     fi
-    rm -f "$clean"
-    if ! mount_app_ro; then
-        mount_system_ro >/dev/null 2>&1 || true
-        return 1
-    fi
+    if ! mount_app_ro; then return 1; fi
     app_rw=0
-    mount_system_ro || return 1
-    sys_rw=0
+    rm -rf "$txn" 2>/dev/null || true
+    trap - 0 1 2 15
     echo "PERSISTENT_DIAGNOSTICS=DISABLED"
     return 0
 }

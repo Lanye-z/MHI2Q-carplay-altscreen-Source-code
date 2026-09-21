@@ -86,6 +86,8 @@ LOCK_BOOT_TOKEN_FILE="$(p /tmp/MMI-Cockpit-Carplay/lock/boot_token)"
 LOCK_OWNER_TAG="MMI-Cockpit-Carplay-Universal"
 INSTALLED_MARKER="$STATE_DIR/INSTALLED"
 PROBE_MARKER="$(p /mnt/app/root/carplay-altscreen/state/fullchain_probe)"
+TXN_ROOT="$(p /tmp/MMI-Cockpit-Carplay/txn)"
+TXN_DIR="$TXN_ROOT/universal.$$"
 FIREWALL_BEGIN="# BEGIN ALTSCREEN TYPE111 FIREWALL"
 FIREWALL_END="# END ALTSCREEN TYPE111 FIREWALL"
 
@@ -95,13 +97,33 @@ locate_first(){
 }
 same_bytes(){ [ -f "$1" ] && [ -f "$2" ] && cmp -s "$1" "$2" 2>/dev/null; }
 nonempty(){ [ -s "$1" ]; }
+system_space_snapshot(){
+    label=$1
+    target="$(p /mnt/system)"
+    say "SYSTEM_SPACE_BEGIN label=$label path=$target"
+    df -k "$target" 2>/dev/null || df "$target" 2>/dev/null || true
+    say "SYSTEM_SPACE_END label=$label"
+}
+cleanup_txn(){ [ ! -e "$TXN_DIR" ] || rm -rf "$TXN_DIR" 2>/dev/null || true; }
 stage_and_publish() (
-    src=$1; dst=$2; mode=$3; dir=$(dirname -- "$dst"); tmp="$dir/.$(basename -- "$dst").new.$$"
+    src=$1; dst=$2; mode=$3; dir=$(dirname -- "$dst"); base=$(basename -- "$dst")
+    tmp="$dir/.$base.new.$$"
     ensure_dirs "$dir" || return 1
-    cp "$src" "$tmp" || return 1
-    chmod "$mode" "$tmp" || { rm -f "$tmp"; return 1; }
-    same_bytes "$src" "$tmp" || { rm -f "$tmp"; return 1; }
-    mv "$tmp" "$dst" || { rm -f "$tmp"; return 1; }
+    if same_bytes "$src" "$dst"; then
+        chmod "$mode" "$dst" 2>/dev/null || return 1
+        say "PUBLISH_SKIP_IDENTICAL path=$dst"
+        return 0
+    fi
+    rm -f "$dir/.$base.new."* 2>/dev/null || true
+    if ! cp "$src" "$tmp"; then
+        rc=$?
+        rm -f "$tmp" 2>/dev/null || true
+        case "$dst" in "$(p /mnt/system)/"*) say "SYSTEM_WRITE_FAILED stage=copy target=$dst"; system_space_snapshot publish_copy_failed ;; esac
+        return "$rc"
+    fi
+    chmod "$mode" "$tmp" || { rc=$?; rm -f "$tmp" 2>/dev/null || true; return "$rc"; }
+    same_bytes "$src" "$tmp" || { rm -f "$tmp" 2>/dev/null || true; return 1; }
+    mv "$tmp" "$dst" || { rc=$?; rm -f "$tmp" 2>/dev/null || true; return "$rc"; }
 )
 
 migrate_legacy_dir() {
@@ -294,6 +316,11 @@ verify_backup() (
 
 backup_originals() (
     if [ -f "$COMPLETE_MARKER" ]; then verify_backup || return 1; say "BACKUP=EXISTING kept"; return 0; fi
+    live_si=$(p "$LIVE_JSON_SI")
+    if grep -Fq 'libcarplay_altscreen.so' "$live_si" 2>/dev/null; then
+        say "FAIL: trusted original backup is absent but live CarPlay config already references an AltScreen hook; reuse the original SD backup or restore stock first"
+        return 1
+    fi
     stage="$STAGING_ROOT/universal-original.$$"
     [ ! -e "$BACKUP_DIR" ] || { say "FAIL: incomplete original backup exists"; return 1; }
     ensure_dirs "$stage/files" || return 1
@@ -387,7 +414,8 @@ strip_firewall_block(){
 }
 remove_legacy_firewall_rule() (
     live=$(p "$LIVE_PF_CONF")
-    clean="$STATE_DIR/pf.clean.$$"
+    ensure_dirs "$TXN_DIR" || return 1
+    clean="$TXN_DIR/pf.clean"
     strip_firewall_block "$live" > "$clean" || return 1
     if ! same_bytes "$clean" "$live"; then
         stage_and_publish "$clean" "$live" 644 || { rm -f "$clean"; return 1; }
@@ -460,6 +488,8 @@ check_sources(){
 
 cmd_install(){
     lock_acquire
+    ensure_dirs "$TXN_DIR" || { lock_release; return 1; }
+    system_space_snapshot install_begin
     check_sources || { lock_release; return 1; }
     backup_originals || { say "FAIL: original backup failed"; lock_release; return 1; }
     backup_firewall || { say "FAIL: firewall backup failed"; lock_release; return 1; }
@@ -471,7 +501,7 @@ cmd_install(){
     if [ "${goto_fail:-0}" != 1 ]; then restore_overlay_baseline || goto_fail=1; fi
     if [ "${goto_fail:-0}" != 1 ]; then stage_and_publish "$UNIVERSAL_SRC" "$UNIVERSAL_DST" 755 || goto_fail=1; fi
     if [ "${goto_fail:-0}" != 1 ]; then
-        cfg="$STATE_DIR/universal-config.$$"
+        cfg="$TXN_DIR/universal-config"
         awk -v hook="$UNIVERSAL_REL" \
             -v exclude=/mnt/app/root/hooks/libcarplay_hook.so \
             -v exclude2=/mnt/app/root/hooks/libcp_mirror.so -v exclude_prefix=/mnt/app/root/hooks/libcarplay_altscreen.so \
@@ -494,6 +524,8 @@ cmd_install(){
           "$STATE_DIR/ACTIVE" "$STATE_DIR/FORCE_START" "$STATE_DIR/FULL_CHAIN_MODE" "$STATE_DIR/NATIVE_DISPLAY_MODE"
     finish_mounts || { lock_release; return 1; }
     LIVE_DIRTY=0
+    system_space_snapshot install_end
+    cleanup_txn
     say "FIRMWARE_PROFILE=UNIVERSAL source=aug22_unified_policy stock_reuse=YES"
     say "UNIVERSAL_PRELOAD=INSTALLED path=$UNIVERSAL_REL resolver=ELF_DYNAMIC_RELOCATION"
     lock_release || return 1
@@ -540,6 +572,8 @@ cmd_start(){
 
 cmd_restore(){
     lock_acquire
+    ensure_dirs "$TXN_DIR" || { lock_release; return 1; }
+    system_space_snapshot restore_begin
     verify_backup || { say "FAIL: original backup unavailable or damaged"; lock_release; return 1; }
     verify_universal_backup || { say "FAIL: universal hook backup unavailable or damaged"; lock_release; return 1; }
     rm -f "$STATE_DIR/ARMED" "$STATE_DIR/ARMED_MUTATE" "$STATE_DIR/ARMED_IAP2" \
@@ -551,6 +585,8 @@ cmd_restore(){
     rm -f "$PROBE_MARKER" "$INSTALLED_MARKER"
     touch "$STATE_DIR/RESTORE_PENDING_REBOOT"
     finish_mounts || { lock_release; return 1; }
+    system_space_snapshot restore_end
+    cleanup_txn
     lock_release || return 1
     say "RESTORE=PASS profile=UNIVERSAL bytes_verified=1 reboot_required=YES"
 }
