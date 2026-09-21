@@ -138,6 +138,7 @@ public final class ClusterStateController {
         carPlaySessionActive = active;
         lastStateSignature = "";
         diag("carplay_session=" + (active ? "1" : "0"));
+        if (!active) WheelZoomBridge.reset();
     }
 
     public static void setRgiPresentationActive(boolean active) {
