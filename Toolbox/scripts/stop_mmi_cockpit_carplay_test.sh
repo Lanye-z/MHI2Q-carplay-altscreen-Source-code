@@ -4,6 +4,14 @@
 # restores the native AltScreen/preload transaction. No MMI Mirror is involved.
 set -u
 
+ensure_dirs() {
+    for dir in "$@"; do
+        [ -d "$dir" ] && continue
+        mkdir -p "$dir" || return 1
+    done
+    return 0
+}
+
 BASE="$0"
 RESOLVED=$(command -v -- "$BASE" 2>/dev/null)
 [ -n "$RESOLVED" ] || RESOLVED="$BASE"
@@ -68,12 +76,39 @@ verify_backup(){
 
 strip_blocks(){
     awk '
-      $0 == "# BEGIN ALT111 MIRROR AUTOSTART" { in_old=1; next }
-      $0 == "# END ALT111 MIRROR AUTOSTART"   { in_old=0; next }
-      $0 == "# BEGIN ALT111 BASEVIDEO3 AUTOSTART" { in_new=1; next }
-      $0 == "# END ALT111 BASEVIDEO3 AUTOSTART"   { in_new=0; next }
-      !in_old && !in_new { print }
-      END { if (in_old || in_new) exit 9 }
+      {
+        key=$0
+        sub(/\r$/, "", key)
+        trimmed=key
+        gsub(/^[ \t]+/, "", trimmed)
+        gsub(/[ \t]+$/, "", trimmed)
+
+        if (trimmed == "# BEGIN ALT111 MIRROR AUTOSTART") {
+            if (block != "") bad=8
+            block="old"
+            next
+        }
+        if (trimmed == "# END ALT111 MIRROR AUTOSTART") {
+            if (block != "old") bad=8
+            block=""
+            next
+        }
+        if (trimmed == "# BEGIN ALT111 BASEVIDEO3 AUTOSTART") {
+            if (block != "") bad=8
+            block="new"
+            next
+        }
+        if (trimmed == "# END ALT111 BASEVIDEO3 AUTOSTART") {
+            if (block != "new") bad=8
+            block=""
+            next
+        }
+        if (block == "") print
+      }
+      END {
+        if (bad) exit bad
+        if (block != "") exit 9
+      }
     ' "$1"
 }
 
@@ -104,7 +139,7 @@ if [ -n "$STARTUP" ]; then
     sh -n "$CLEAN" || {
         rm -f "$CLEAN"; mount_system_ro >/dev/null 2>&1 || true
         echo "FAIL: startup.sh invalid after BaseVideo3 block removal"; exit 1; }
-    cp "$CLEAN" "$STARTUP" && chmod 755 "$STARTUP" || {
+    cp "$CLEAN" "$STARTUP" && chmod 755 "$STARTUP" && cmp -s "$CLEAN" "$STARTUP" || {
         rm -f "$CLEAN"; mount_system_ro >/dev/null 2>&1 || true
         echo "FAIL: cannot publish cleaned startup.sh"; exit 1; }
     rm -f "$CLEAN"
@@ -114,7 +149,7 @@ fi
 
 verify_backup || { echo "FAIL: original Java HMI backup unavailable or damaged: $BACKUP"; exit 1; }
 mount_app_rw || { echo "FAIL: cannot mount /mnt/app to restore Java HMI"; exit 1; }
-mkdir -p "$JAR_DIR" || { mount_app_ro >/dev/null 2>&1 || true; echo "FAIL: cannot create JAR directory"; exit 1; }
+ensure_dirs "$JAR_DIR" || { mount_app_ro >/dev/null 2>&1 || true; echo "FAIL: cannot create JAR directory"; exit 1; }
 TMP="$JAR.basevideo3.restore.tmp"
 rm -f "$TMP" 2>/dev/null || true
 if [ -f "$BACKUP/present" ]; then

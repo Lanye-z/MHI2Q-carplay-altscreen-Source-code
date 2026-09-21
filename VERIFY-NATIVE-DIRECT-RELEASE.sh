@@ -25,7 +25,7 @@ STOP="$ROOT/Toolbox/scripts/stop_mmi_cockpit_carplay_test.sh"
 INSTALL="$ROOT/Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh"
 STATUS="$ROOT/Toolbox/scripts/status_mmi_cockpit_carplay_test.sh"
 CHAIN="$ROOT/Toolbox/scripts/altscreen_chain_test.sh"
-BOOT_DIAG="$ROOT/Toolbox/scripts/altscreen_boot_diag.sh"
+BOOT_DIAG="$ROOT/Toolbox/scripts/altscreen_boot_diag.sh"\nSTART_TX_TEST="$ROOT/Toolbox/carplay_alt_screen/tests/test_start_autostart_transaction.sh"
 TOP="$ROOT/SHA256SUMS.txt"
 MAP="$ROOT/PACKAGE_SOURCE_MAP.json"
 
@@ -36,11 +36,11 @@ sha256_file(){
 }
 binary_strings(){ strings "$1" 2>/dev/null || grep -a -o '[[:print:]][[:print:]]*' "$1"; }
 
-for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$AIRPLAY_SRC" "$RESOLVE" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$GL_RENDERER_CPP" "$MAIN_CPP" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$STOP" "$INSTALL" "$STATUS" "$CHAIN" "$BOOT_DIAG"; do
+for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$AIRPLAY_SRC" "$RESOLVE" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$GL_RENDERER_CPP" "$MAIN_CPP" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$STOP" "$INSTALL" "$STATUS" "$CHAIN" "$BOOT_DIAG" "$START_TX_TEST"; do
     [ -s "$f" ] || fail "missing/empty: $f"
 done
 
-for s in "$START" "$CTRL" "$LAUNCH" "$STOP" "$BOOT_DIAG" "$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh"; do
+for s in "$START" "$CTRL" "$LAUNCH" "$STOP" "$BOOT_DIAG" "$START_TX_TEST" "$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh"; do
     sh -n "$s" || fail "shell syntax: $s"
 done
 
@@ -506,6 +506,29 @@ grep -Fq 'streams/mmi-mirror-controller.log' "$BOOT_DIAG" ||
 if grep -Fq 'DISPLAY_PATH=WINDOW58_READBACK' "$CTRL"; then
     fail "controller still advertises retired Window58 readback"
 fi
+
+grep -Fq 'START_FAIL_STAGE=' "$START" ||
+    fail "START persistent stage/failure diagnostics missing"
+grep -Fq 'diagnostics/operations' "$START" ||
+    fail "START volatile operation journal path missing"
+grep -Fq '/tmp/MMI-Cockpit-Carplay/mirror/autostart.log' "$START" ||
+    fail "canonical Mirror autostart log path missing"
+if grep -Fq '/tmp/MMI-Cockpit-Carplay/mirror_autostart.log' "$START"; then
+    fail "retired non-canonical Mirror autostart log path remains"
+fi
+grep -Fq 'MIRROR_START_RC=' "$START" ||
+    fail "boot autostart launcher return code diagnostic missing"
+grep -Fq 'ensure_dirs "$STATE"' "$START" ||
+    fail "QNX-safe idempotent runtime state creation missing"
+if grep -Fq 'mkdir -p "$STATE"' "$START"; then
+    fail "fatal QNX EEXIST-prone mkdir -p remains for runtime state"
+fi
+grep -Fq 'START_ROLLBACK_CONTROLLER=DISARMED_NEW_TRANSACTION' "$START" ||
+    fail "START cannot transactionally disarm a newly-created controller state"
+grep -Fq '"$BASE/operations"' "$BOOT_DIAG" ||
+    fail "boot diagnostics do not flush volatile operation journals to SD"
+
+sh "$START_TX_TEST" || fail "START/autostart host transaction fixture failed"
 
 grep -Fq 'touch /tmp/mmi-mirror-active' "$START" ||
     fail "Java80 demand boot marker missing"
