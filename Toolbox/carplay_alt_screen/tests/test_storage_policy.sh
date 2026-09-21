@@ -3,13 +3,14 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 START="$ROOT/Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh"
 STOP="$ROOT/Toolbox/scripts/stop_mmi_cockpit_carplay_test.sh"
+CHAIN="$ROOT/Toolbox/scripts/altscreen_chain_test.sh"
 CTRL="$ROOT/Toolbox/scripts/altscreen_chain_test_universal.sh"
 DIAG="$ROOT/Toolbox/scripts/altscreen_persistent_diag.sh"
 ADAPT="$ROOT/Toolbox/scripts/altscreen_adaptive_diag.sh"
 INSTALL="$ROOT/Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh"
 fail(){ echo "STORAGE_POLICY_TEST=FAIL: $*" >&2; exit 1; }
 
-for f in "$START" "$STOP" "$CTRL" "$DIAG" "$ADAPT" "$INSTALL"; do
+for f in "$START" "$STOP" "$CHAIN" "$CTRL" "$DIAG" "$ADAPT" "$INSTALL"; do
     sh -n "$f" || fail "shell syntax: $f"
 done
 
@@ -18,6 +19,10 @@ grep -Fq '/tmp/MMI-Cockpit-Carplay/txn/restore.$$' "$STOP" || fail "RESTORE tran
 grep -Fq '/tmp/MMI-Cockpit-Carplay/txn' "$DIAG" || fail "diagnostics transaction is not volatile"
 if grep -Fq 'CLEAN="$STARTUP.basevideo3' "$START" || grep -Fq 'CLEAN="$STARTUP.basevideo3' "$STOP"; then
     fail "BaseVideo transaction scratch still lives beside /mnt/system startup.sh"
+fi
+grep -Fq 'RUNTIME_ROLLBACK_SLOT_CLEANED=PASS' "$CHAIN" || fail "runtime rollback slot is not cleaned after successful INSTALL"
+if grep -Fq 'mirror.previous' "$CHAIN"; then
+    fail "new runtime still embeds a duplicate previous Mirror payload"
 fi
 grep -Fq 'PUBLISH_SKIP_IDENTICAL' "$CTRL" || fail "universal publish lacks no-op skip"
 grep -Fq 'SYSTEM_WRITE_FAILED stage=copy' "$CTRL" || fail "universal publish lacks low-space diagnostic"
