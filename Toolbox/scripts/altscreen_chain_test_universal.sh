@@ -580,8 +580,8 @@ cmd_restore_precheck(){
     if [ "$rc" = 0 ]; then
         verify_universal_backup || { say "FAIL: universal hook backup unavailable or damaged"; rc=1; }
     fi
-    if [ "$rc" = 0 ] && [ -e "$FIREWALL_BACKUP_DIR" ]; then
-        verify_firewall_backup || { say "FAIL: firewall backup is present but incomplete/damaged"; rc=1; }
+    if [ "$rc" = 0 ]; then
+        verify_firewall_backup || { say "FAIL: firewall original backup unavailable or damaged"; rc=1; }
     fi
     if [ "$rc" = 0 ]; then
         say "RESTORE_PRECHECK=PASS profile=UNIVERSAL production_changed=NO"
