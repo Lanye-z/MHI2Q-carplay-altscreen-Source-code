@@ -21,6 +21,13 @@ if grep -Fq 'CLEAN="$STARTUP.basevideo3' "$START" || grep -Fq 'CLEAN="$STARTUP.b
     fail "BaseVideo transaction scratch still lives beside /mnt/system startup.sh"
 fi
 grep -Fq 'RUNTIME_ROLLBACK_SLOT_CLEANED=PASS' "$CHAIN" || fail "runtime rollback slot is not cleaned after successful INSTALL"
+grep -Fq 'RUNTIME_STAGE="$(p /mnt/app/root/.carplay-altscreen.new)"' "$CHAIN" || fail "runtime staging is not a fixed bounded path"
+grep -Fq 'legacy_pid_staging=reaped' "$CHAIN" || fail "legacy PID runtime staging is not reaped"
+grep -Fq 'probe="$parent/.altscreen-write-test"' "$CHAIN" || fail "persistent app write probe is still PID-suffixed"
+grep -Fq 'ROUTER_TXN_ROOT="$(p /tmp/MMI-Cockpit-Carplay/txn)"' "$CHAIN" || fail "router child transaction output is not volatile"
+if grep -Fq 'tmp="$STATE_DIR/.child-install.$"' "$CHAIN"; then
+    fail "router child transaction output still lives on persistent SD state"
+fi
 if grep -Fq 'mirror.previous' "$CHAIN"; then
     fail "new runtime still embeds a duplicate previous Mirror payload"
 fi
