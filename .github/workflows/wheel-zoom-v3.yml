@@ -329,7 +329,10 @@ jobs:
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
           grep -Fq 'cluster_owned = native_read_cluster_owned_for_zoom();' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
-          grep -Fq 'zoom_gate = route_ready && cluster_owned;' \
+          grep -Fq 'alt_control_fence_is_current(state_generation);' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq \
+            'zoom_gate = route_ready && cluster_owned && wheel_generation_current;' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
           if grep -Fq \
             'zoom_gate = route_ready && visible && native_route_requested();' \

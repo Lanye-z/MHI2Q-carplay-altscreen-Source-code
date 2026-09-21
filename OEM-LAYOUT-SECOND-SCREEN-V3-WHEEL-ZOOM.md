@@ -210,7 +210,7 @@ Do not modify for this feature unless evidence proves it is necessary:
 
 The protocol gate is now satisfied at STATIC_BINARY level. V3 implements the sender using the same active receiver, private111 stream generation and cluster display UUID already proven by `showUI` / `updateViewArea`.
 
-The Java transport is an append-only discrete event queue. A callback with `delta=-3` emits three ordered Zoom In records. Each Java process publishes an event epoch so an HMI-only restart cannot make a restarted `seq=1` look stale to a still-running native monitor. Native scans complete committed records, consumes them at most once per epoch, discards stale pre-attach records, and sends only while the current private111 generation is route-ready **and** the independent Java80 ownership state reports an active CarPlay session with verified Context80 readback. The wheel gate does not depend on the retired native Context76/displayable58 `visible` state or on the OEM layout observer.
+The Java transport is an append-only discrete event queue. A callback with `delta=-3` emits three ordered Zoom In records. Each Java process publishes an event epoch so an HMI-only restart cannot make a restarted `seq=1` look stale to a still-running native monitor. Native scans complete committed records, consumes them at most once per epoch, discards stale pre-attach records, and sends only while the private111 control-fence generation is still current, the same generation is route-ready, **and** the independent Java80 ownership state reports an active CarPlay session with verified Context80 readback. The wheel gate does not depend on the retired native Context76/displayable58 `visible` state or on the OEM layout observer.
 
 Vehicle-test acceptance now requires:
 

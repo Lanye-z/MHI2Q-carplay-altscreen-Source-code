@@ -22,6 +22,7 @@
 #include "altscreen_core.h"
 #include "altscreen_paths.h"
 #include "p1404_observe.h"
+#include "p1404_control_fence.h"
 #include "private111_direct_tap.h"
 
 #include <stddef.h>
@@ -775,6 +776,7 @@ static void *native_monitor_worker(void *arg) {
     uint64_t now;
     int visible, pending, live, route_ready, event_kind, send_rc;
     int desired_view_area, view_area_send_index, zoom_gate, cluster_owned;
+    int wheel_generation_current;
     struct wheel_zoom_event zoom_events[WHEEL_ZOOM_BATCH_MAX];
     unsigned zoom_count, zoom_i;
     uint32_t zoom_last_epoch = 0;
@@ -884,7 +886,9 @@ static void *native_monitor_worker(void *arg) {
 
         if (!live) break;
 
-        zoom_gate = route_ready && cluster_owned;
+        wheel_generation_current =
+            alt_control_fence_is_current(state_generation);
+        zoom_gate = route_ready && cluster_owned && wheel_generation_current;
 
         if (event_kind == ALT111_EVENT_UPDATE_VIEW_AREA) {
             send_rc = alt_send_cluster_view_area(
@@ -927,8 +931,8 @@ static void *native_monitor_worker(void *arg) {
                 ze->direction, ze->magnification, ze->delta,
                 ze->step, ze->steps,
                 zoom_gate ? "queued" : "dropped",
-                zoom_gate ? "java80_cluster_owned_route_ready" :
-                            "route_not_ready_or_java80_cluster_not_owned");
+                zoom_gate ? "java80_cluster_owned_route_ready_generation_current" :
+                            "route_not_ready_or_java80_cluster_not_owned_or_generation_stale");
             if (!zoom_gate) continue;
             send_rc = alt_send_cluster_zoom(
                 receiver, stream, generation, ze->seq, ze->direction);
