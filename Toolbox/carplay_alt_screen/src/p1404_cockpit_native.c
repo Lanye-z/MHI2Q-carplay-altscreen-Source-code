@@ -636,6 +636,79 @@ static int native_read_view_area_target(void) {
     return target;
 }
 
+#define WHEEL_ZOOM_EVENT_FILE "/tmp/mmi-mirror-wheel-zoom.events"
+#define WHEEL_ZOOM_BATCH_MAX 32u
+
+struct wheel_zoom_event {
+    uint32_t seq;
+    int direction;
+    int magnification;
+    int delta;
+    int step;
+    int steps;
+};
+
+static unsigned native_read_wheel_zoom_events(
+        uint32_t after_seq, struct wheel_zoom_event *events, unsigned cap) {
+    FILE *f;
+    char line[256];
+    unsigned count = 0;
+
+    if (!events || !cap) return 0;
+    f = fopen(WHEEL_ZOOM_EVENT_FILE, "r");
+    if (!f) return 0;
+
+    while (fgets(line, sizeof(line), f)) {
+        struct wheel_zoom_event e;
+        unsigned commit = 0;
+        size_t n = strlen(line);
+        int fields;
+
+        if (!n || line[n - 1] != '\n') continue;
+        memset(&e, 0, sizeof(e));
+        fields = sscanf(
+            line,
+            "seq=%u direction=%d magnification=%d delta=%d step=%d steps=%d commit=%u",
+            &e.seq, &e.direction, &e.magnification, &e.delta,
+            &e.step, &e.steps, &commit);
+        if (fields != 7 || !e.seq || commit != e.seq ||
+            (e.direction != 0 && e.direction != 1) ||
+            e.step < 1 || e.steps < 1 || e.step > e.steps)
+            continue;
+        if (e.seq <= after_seq) continue;
+        events[count++] = e;
+        if (count == cap) break;
+    }
+    fclose(f);
+    return count;
+}
+
+static uint32_t native_wheel_zoom_max_seq(void) {
+    FILE *f;
+    char line[256];
+    uint32_t max_seq = 0;
+
+    f = fopen(WHEEL_ZOOM_EVENT_FILE, "r");
+    if (!f) return 0;
+    while (fgets(line, sizeof(line), f)) {
+        unsigned seq = 0, commit = 0;
+        int direction = -1, magnification = 0, delta = 0, step = 0, steps = 0;
+        size_t n = strlen(line);
+        if (!n || line[n - 1] != '\n') continue;
+        if (sscanf(
+                line,
+                "seq=%u direction=%d magnification=%d delta=%d step=%d steps=%d commit=%u",
+                &seq, &direction, &magnification, &delta,
+                &step, &steps, &commit) == 7 &&
+            seq && seq == commit && (direction == 0 || direction == 1) &&
+            step >= 1 && steps >= 1 && step <= steps &&
+            seq > max_seq)
+            max_seq = (uint32_t)seq;
+    }
+    fclose(f);
+    return max_seq;
+}
+
 /*
  * This monitor is the same-session bridge between Audi NAV_VIEW_SIZE_CHOICE
  * and CarPlay's standard updateViewArea command.  Java publishes the OEM state;
@@ -650,7 +723,15 @@ static void *native_monitor_worker(void *arg) {
     uint32_t state_generation = job ? job->state_generation : 0;
     uint64_t now;
     int visible, pending, live, route_ready, event_kind, send_rc;
-    int desired_view_area, view_area_send_index;
+    int desired_view_area, view_area_send_index, zoom_gate;
+    struct wheel_zoom_event zoom_events[WHEEL_ZOOM_BATCH_MAX];
+    unsigned zoom_count, zoom_i;
+    uint32_t zoom_last_seq = native_wheel_zoom_max_seq();
+
+    altscreen_log(
+        "PHASE=WHEEL_ZOOM_QUEUE_RESET receiver=%p stream=%p generation=%u "
+        "baseline_seq=%u stale_events_before_attach=discarded",
+        receiver, stream, generation, zoom_last_seq);
 
     for (;;) {
         /*
@@ -660,8 +741,11 @@ static void *native_monitor_worker(void *arg) {
         usleep(100000u);
         now = obs_now_us();
         desired_view_area = native_read_view_area_target();
+        zoom_count = native_read_wheel_zoom_events(
+            zoom_last_seq, zoom_events, WHEEL_ZOOM_BATCH_MAX);
         event_kind = 0;
         view_area_send_index = -1;
+        zoom_gate = 0;
 
         native_lock();
         live = slot && slot->stream == stream && slot->receiver == receiver &&
@@ -745,6 +829,8 @@ static void *native_monitor_worker(void *arg) {
 
         if (!live) break;
 
+        zoom_gate = route_ready && visible && native_route_requested();
+
         if (event_kind == ALT111_EVENT_UPDATE_VIEW_AREA) {
             send_rc = alt_send_cluster_view_area(
                 receiver, stream, generation, view_area_send_index);
@@ -759,6 +845,34 @@ static void *native_monitor_worker(void *arg) {
                                                    event_kind, send_rc, 0);
         }
 
+        for (zoom_i = 0; zoom_i < zoom_count; ++zoom_i) {
+            struct wheel_zoom_event *ze = &zoom_events[zoom_i];
+            if (ze->seq <= zoom_last_seq) continue;
+            if (zoom_last_seq && ze->seq != zoom_last_seq + 1u)
+                altscreen_log(
+                    "WARN PHASE=WHEEL_ZOOM_QUEUE_GAP receiver=%p stream=%p "
+                    "generation=%u expected_seq=%u actual_seq=%u",
+                    receiver, stream, generation, zoom_last_seq + 1u, ze->seq);
+            zoom_last_seq = ze->seq;
+            altscreen_log(
+                "PHASE=WHEEL_ZOOM_QUEUE receiver=%p stream=%p generation=%u "
+                "seq=%u action=%s direction=%d magnification=%d delta=%d "
+                "step=%d steps=%d result=%s reason=%s",
+                receiver, stream, generation, ze->seq,
+                ze->direction == 0 ? "ZOOM_IN" : "ZOOM_OUT",
+                ze->direction, ze->magnification, ze->delta,
+                ze->step, ze->steps,
+                zoom_gate ? "queued" : "dropped",
+                zoom_gate ? "cluster_owned_route_ready" : "route_not_ready_or_not_visible");
+            if (!zoom_gate) continue;
+            send_rc = alt_send_cluster_zoom(
+                receiver, stream, generation, ze->seq, ze->direction);
+            if (send_rc != 0)
+                p1404_cockpit_native_zoom_result(
+                    receiver, stream, generation, ze->seq, ze->direction,
+                    send_rc, 0);
+        }
+
         if (route_ready && !visible && !pending && native_route_requested()) {
             altscreen_log("PHASE=NATIVE_111_ROUTE_READY receiver=%p stream=%p generation=%u basis=dynamic_config_plus_accepted_showui_plus_first_real_type111_post video_availability_gate=real_frame",
                           receiver, stream, generation);
@@ -771,6 +885,30 @@ static void *native_monitor_worker(void *arg) {
     free(job);
     return NULL;
 }
+
+void p1404_cockpit_native_zoom_result(void *receiver, void *stream,
+                                      uint32_t generation,
+                                      uint32_t event_seq,
+                                      int direction,
+                                      int status,
+                                      int response_received) {
+    struct native_slot *slot;
+    int generation_current = 0;
+
+    native_lock();
+    slot = find_stream_locked(receiver, stream);
+    generation_current = slot && slot->generation == generation;
+    native_unlock();
+
+    altscreen_log(
+        "PHASE=CLUSTER_ZOOM_RESPONSE receiver=%p stream=%p generation=%u "
+        "seq=%u direction=%d action=%s status=%d response_received=%d "
+        "generation_current=%d semantics=OBSERVE_ONLY_NO_SUCCESS_ASSUMPTION",
+        receiver, stream, generation, event_seq, direction,
+        direction == 0 ? "ZOOM_IN" : "ZOOM_OUT",
+        status, response_received, generation_current);
+}
+
 
 void p1404_cockpit_native_event_result(void *receiver, void *stream,
                                         uint32_t generation, int event_kind,
