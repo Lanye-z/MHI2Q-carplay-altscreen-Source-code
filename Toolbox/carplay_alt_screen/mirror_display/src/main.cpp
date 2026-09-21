@@ -12,7 +12,7 @@ static volatile sig_atomic_t g_stop = 0;
 static const unsigned kNoFramePollUs = 5000u;
 static const unsigned kDecodedStallReportUs = 120000u;
 static const char kBuildId[] =
-    "carplay-private111-direct-display-v2-source-driven-layout-live-v4";
+    "carplay-private111-direct-display-v3.1-oem-map-1to1-clip";
 
 static const char *volatile_path(const char *key, const char *fallback) {
     const char *v = getenv(key);
