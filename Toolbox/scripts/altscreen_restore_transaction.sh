@@ -119,10 +119,28 @@ while IFS= read -r rel; do
 done < "$NATIVE/manifest.txt"
 [ "$NATIVE_COUNT" = 5 ] || fail "trusted native manifest count mismatch"
 
-if [ -f "$BACKUP/firewall-original/COMPLETE" ]; then
-  [ -f "$BACKUP/firewall-original/pf.conf" ] && same "$BACKUP/firewall-original/pf.conf" "$PF" ||
-    fail "pf.conf verification failed"
-fi
+[ -f "$BACKUP/firewall-original/COMPLETE" ] ||
+  fail "firewall original backup missing after restore"
+[ -f "$BACKUP/firewall-original/pf.conf" ] &&
+  same "$BACKUP/firewall-original/pf.conf" "$PF" ||
+  fail "pf.conf verification failed"
+
+# Exact overlay baseline verification.  The original manifest records whether
+# each stock overlay file existed and which directory owned that baseline.
+OVERLAY_DIR=$(cat "$NATIVE/overlay_dir.txt" 2>/dev/null || true)
+case "$OVERLAY_DIR" in
+  /mnt/app/root/carplay-altscreen/lib|/mnt/app/root/lib-target) ;;
+  *) fail "invalid overlay baseline directory" ;;
+esac
+for n in libairplay.so libairplax.so libNmeBaseClasses.so; do
+  overlay_dst="$(p "$OVERLAY_DIR")/$n"
+  if grep -q "^$n$" "$NATIVE/overlay_present.txt" 2>/dev/null; then
+    [ -f "$NATIVE/files/overlay_$n" ] && same "$NATIVE/files/overlay_$n" "$overlay_dst" ||
+      fail "overlay baseline verification failed: $n"
+  else
+    [ ! -e "$overlay_dst" ] || fail "overlay should be absent after restore: $n"
+  fi
+done
 
 if [ -f "$BACKUP/universal-hook-original/COMPLETE" ]; then
   hook_present=$(cat "$BACKUP/universal-hook-original/present" 2>/dev/null || echo invalid)
