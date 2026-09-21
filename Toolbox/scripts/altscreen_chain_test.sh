@@ -80,7 +80,7 @@ RUNTIME_BIN="$RUNTIME_ROOT/bin"
 RUNTIME_STAGE="$(p /mnt/app/root/.carplay-altscreen.new)"
 RUNTIME_STAGE_PARENT="$(p /mnt/app/root)"
 RUNTIME_PREV="$(p /mnt/app/root/.carplay-altscreen.previous)"
-ROUTER_TXN_ROOT="$(p /tmp/MMI-Cockpit-Carplay/txn)"
+ROUTER_TMP="$(p /tmp/altscreen_router_child_install.$$)"
 RESTORE_TXN_DIR="$SD_ROOT/restore-transaction/active"
 RUNTIME_OWNER=.mmi-cockpit-carplay-runtime-owner
 RUNTIME_PUBLISHED=0
@@ -320,14 +320,23 @@ rollback_runtime_scripts(){
 }
 
 cleanup_volatile_runtime(){
-    volatile_root="$(p /tmp/MMI-Cockpit-Carplay)"
-    if [ -e "$volatile_root" ]; then
-        rm -rf "$volatile_root" 2>/dev/null || {
-            echo "WARN: project volatile namespace could not be fully removed: /tmp/MMI-Cockpit-Carplay" >&2
-            return 0
-        }
-    fi
-    echo "VOLATILE_RUNTIME_CLEANUP=PASS path=/tmp/MMI-Cockpit-Carplay"
+    tmp_root="$(p /tmp)"
+    rm -f "$tmp_root"/altscreen_start_* "$tmp_root"/altscreen_router_child_install.* \
+          "$(p /tmp/altscreen_hook.log)" "$(p /tmp/altscreen_boot_entry.log)" \
+          "$(p /tmp/altscreen_boot_token)" "$(p /tmp/altscreen_autostart.log)" \
+          "$(p /tmp/altscreen_mirror.pid)" "$(p /tmp/altscreen_mirror.lifecycle.pid)" \
+          "$(p /tmp/altscreen_mirror.stop.requested)" "$(p /tmp/altscreen_mirror.log)" \
+          "$(p /tmp/altscreen_mirror.autorestart.log)" "$(p /tmp/altscreen_mirror.ready)" \
+          "$(p /tmp/altscreen_mirror.phone111.gate)" \
+          "$(p /tmp/mmi-mirror-active)" "$(p /tmp/mmi-mirror-basevideo.ready)" \
+          "$(p /tmp/mmi-mirror-controller.started)" 2>/dev/null || true
+    rmdir "$(p /tmp/altscreen_mirror.recovery.lock)" 2>/dev/null || true
+
+    # Backward-compatible cleanup only: older 2026-09-21 builds may have left
+    # this namespace behind. New code never creates or writes into it.
+    legacy_root="$(p /tmp/MMI-Cockpit-Carplay)"
+    [ ! -e "$legacy_root" ] || rm -rf "$legacy_root" 2>/dev/null || true
+    echo "VOLATILE_RUNTIME_CLEANUP=PASS policy=flat_tmp legacy_namespace=purged"
     return 0
 }
 
@@ -422,10 +431,10 @@ delegate(){
 
 delegate_install(){
     route=$1
-    ensure_dirs "$STATE_DIR" "$LOG_ROOT" "$BACKUP_ROOT" "$STAGING_ROOT" "$ROUTER_TXN_ROOT" || return 1
-    # Child controller output is transaction scratch, not persistent state.
-    # Keep it volatile so interruption/reboot cannot grow SD state metadata.
-    tmp="$ROUTER_TXN_ROOT/router-child-install.$"
+    ensure_dirs "$STATE_DIR" "$LOG_ROOT" "$BACKUP_ROOT" "$STAGING_ROOT" || return 1
+    # Child controller output is bounded, process-local scratch. Keep it as one
+    # flat /tmp file so INSTALL never depends on creating a QNX /tmp directory tree.
+    tmp="$ROUTER_TMP"
     delegate "$route" install > "$tmp" 2>&1
     rc=$?
     sed 's/^INSTALL=PASS /CHILD_INSTALL=PASS /' "$tmp"

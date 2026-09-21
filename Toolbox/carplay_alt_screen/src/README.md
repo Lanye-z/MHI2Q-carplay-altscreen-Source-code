@@ -54,8 +54,8 @@ Every hook event uses an ordered prefix:
 
 Important transitions use fixed `PHASE=` markers. Control-plane dictionaries are recorded generically when the P1404 CF enumeration API is available; otherwise the code falls back to a large known-key probe. Dictionary/array recursion is bounded and CFData is capped at 64 bytes. Video hot paths never hex-dump every packet.
 
-The native writer keeps its bounded asynchronous plaintext log only at
-`/tmp/MMI-Cockpit-Carplay/altscreen_hook.log` (with `/tmp/altscreen_hook.log` only as a flat-QNX fallback). A separate observer appends new bytes to SD
+The native writer keeps its bounded asynchronous plaintext log directly at
+`/tmp/altscreen_hook.log`; no nested `/tmp` directory is required. A separate observer appends new bytes to SD
 append, so the CarPlay control/video threads never perform encryption or SD I/O.
 Persistent diagnostic artifacts are:
 

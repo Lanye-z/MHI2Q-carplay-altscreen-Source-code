@@ -35,12 +35,12 @@ VOLUME=""
 
 select_hook_source() {
     for candidate in \
+        "$ROOT/tmp/altscreen_hook.log" \
         "$ROOT/tmp/MMI-Cockpit-Carplay/altscreen_hook.log" \
-        "$ROOT/tmp/MMI-Cockpit-Carplay.altscreen_hook.log" \
-        "$ROOT/tmp/altscreen_hook.log"; do
+        "$ROOT/tmp/MMI-Cockpit-Carplay.altscreen_hook.log"; do
         [ -f "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
     done
-    printf '%s\n' "$ROOT/tmp/MMI-Cockpit-Carplay/altscreen_hook.log"
+    printf '%s\n' "$ROOT/tmp/altscreen_hook.log"
 }
 
 find_volume() {
@@ -69,12 +69,14 @@ init_dest() {
         profile=$(cat "$VOLUME/MMI-Cockpit-Carplay/state/firmware_profile.txt" 2>/dev/null || echo UNKNOWN)
     else
         VOLUME=""
-        dir="$ROOT/tmp/MMI-Cockpit-Carplay/logs/adaptive"
-        ensure_dirs "$dir" 2>/dev/null || return 1
         DEST_MODE=TMP
         profile=UNKNOWN
     fi
-    DEST="$dir/adaptive_$(date +%Y%m%d_%H%M%S)_$$.log"
+    if [ "$DEST_MODE" = TMP ]; then
+        DEST="$ROOT/tmp/altscreen_adaptive_$(date +%Y%m%d_%H%M%S)_$$.log"
+    else
+        DEST="$dir/adaptive_$(date +%Y%m%d_%H%M%S)_$$.log"
+    fi
     train=""
     for rel in /net/rcc/dev/shmem/version.txt /dev/shmem/version.txt /net/mmx/dev/shmem/version.txt; do
         path="$ROOT$rel"
@@ -82,7 +84,7 @@ init_dest() {
         train=$(sed -n '/Current train/p' "$path" | head -n 1)
         [ -n "$train" ] && break
     done
-    printf '%s ADAPTIVE_FAILSAFE_BEGIN profile=%s train=%s source=/tmp/MMI-Cockpit-Carplay/altscreen_hook.log storage=%s payload_filter=STATUS_ONLY store_required=NO\n' \
+    printf '%s ADAPTIVE_FAILSAFE_BEGIN profile=%s train=%s source=/tmp/altscreen_hook.log storage=%s payload_filter=STATUS_ONLY store_required=NO\n' \
         "$(date +%Y%m%d_%H%M%S)" "$profile" "${train:-UNKNOWN}" "$DEST_MODE" > "$DEST" || { DEST=""; DEST_MODE=""; return 1; }
     for rel in /eso/lib/libairplay.so /eso/bin/apps/dio_manager /mnt/app/eso/bin/apps/dio_manager /armle/usr/lib/libNmeBaseClasses.so /mnt/app/armle/usr/lib/libNmeBaseClasses.so; do
         path="$ROOT$rel"

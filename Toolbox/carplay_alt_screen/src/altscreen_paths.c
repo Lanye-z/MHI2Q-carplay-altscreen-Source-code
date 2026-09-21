@@ -10,7 +10,7 @@
  * Toolbox and the current transaction directory. This prevents an old Log
  * directory on another card from shadowing the SD selected by START. */
 #define ALTSCREEN_DEV_ROOT "/tmp"
-#define ALTSCREEN_VOLATILE_ROOT "/tmp/MMI-Cockpit-Carplay"
+#define ALTSCREEN_VOLATILE_ROOT "/tmp"
 #define ALTSCREEN_LOG_LEAF "altscreen_hook.log"
 #define ALTSCREEN_PROFILE_LEAF "IAP2_PROFILE"
 
@@ -40,8 +40,9 @@ static const AltPathCandidate kCandidates[] = {
     { NULL, NULL, NULL, NULL, NULL }
 };
 
-/* /tmp is a diagnostic-only root: it is never published, so a late SD mount can
- * still win later. Both strings are constants, so a stored fallback pointer
+/* Flat /tmp contract: runtime diagnostics are single files directly under /tmp.
+ * No operation may depend on creating a nested volatile directory. A late SD mount can
+ * still win later. These strings are constants, so a stored fallback pointer
  * stays valid even after an SD root has been selected. */
 static const char kDevLogPath[] = ALTSCREEN_VOLATILE_ROOT "/" ALTSCREEN_LOG_LEAF;
 static const char kLegacyDevLogPath[] = ALTSCREEN_DEV_ROOT "/" ALTSCREEN_LOG_LEAF;

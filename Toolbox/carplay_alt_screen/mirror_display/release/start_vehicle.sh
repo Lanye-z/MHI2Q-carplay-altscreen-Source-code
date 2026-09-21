@@ -32,35 +32,27 @@ else
 fi
 
 TMP_ROOT="${ALT111_MIRROR_TMP_ROOT:-/tmp}"
-PROJECT_TMP="$TMP_ROOT/MMI-Cockpit-Carplay"
-VOLATILE="$PROJECT_TMP/mirror"
-if [ ! -d "$PROJECT_TMP" ]; then mkdir "$PROJECT_TMP" 2>/dev/null || true; fi
-if [ -d "$PROJECT_TMP" ] && [ ! -d "$VOLATILE" ]; then mkdir "$VOLATILE" 2>/dev/null || true; fi
+PIDFILE="$TMP_ROOT/altscreen_mirror.pid"
+WATCH_PIDFILE="$TMP_ROOT/altscreen_mirror.lifecycle.pid"
+STOP_GUARD="$TMP_ROOT/altscreen_mirror.stop.requested"
+LOGFILE="$TMP_ROOT/altscreen_mirror.log"
+AUTORESTART_LOG="$TMP_ROOT/altscreen_mirror.autorestart.log"
+RECOVERY_LOCK="$TMP_ROOT/altscreen_mirror.recovery.lock"
+READY="$TMP_ROOT/altscreen_mirror.ready"
+BASE_READY="${ALT111_JAVA_BASE_READY_FILE:-/tmp/mmi-mirror-basevideo.ready}"
+GATE_TOKEN="$TMP_ROOT/altscreen_mirror.phone111.gate"
+HOOK_LOG="$TMP_ROOT/altscreen_hook.log"
+VOLATILE_MODE=FLAT_TMP
 
-if [ -d "$VOLATILE" ]; then
-  PIDFILE="$VOLATILE/pid"
-  WATCH_PIDFILE="$VOLATILE/lifecycle.pid"
-  STOP_GUARD="$VOLATILE/stop.requested"
-  LOGFILE="$VOLATILE/mirror.log"
-  AUTORESTART_LOG="$VOLATILE/autorestart.log"
-  RECOVERY_LOCK="$VOLATILE/recovery.lock"
-  READY="$VOLATILE/ready"
-  BASE_READY="${ALT111_JAVA_BASE_READY_FILE:-/tmp/mmi-mirror-basevideo.ready}"
-  GATE_TOKEN="$VOLATILE/phone111.gate"
-  HOOK_LOG="$PROJECT_TMP/altscreen_hook.log"
-  VOLATILE_MODE=NAMESPACE
-else
-  PIDFILE="$TMP_ROOT/MMI-Cockpit-Carplay.mirror.pid"
-  WATCH_PIDFILE="$TMP_ROOT/MMI-Cockpit-Carplay.mirror.lifecycle.pid"
-  STOP_GUARD="$TMP_ROOT/MMI-Cockpit-Carplay.mirror.stop.requested"
-  LOGFILE="$TMP_ROOT/MMI-Cockpit-Carplay.mirror.log"
-  AUTORESTART_LOG="$TMP_ROOT/MMI-Cockpit-Carplay.mirror.autorestart.log"
-  RECOVERY_LOCK="$TMP_ROOT/MMI-Cockpit-Carplay.mirror.recovery.lock"
-  READY="$TMP_ROOT/MMI-Cockpit-Carplay.mirror.ready"
-  BASE_READY="${ALT111_JAVA_BASE_READY_FILE:-/tmp/mmi-mirror-basevideo.ready}"
-  GATE_TOKEN="$TMP_ROOT/MMI-Cockpit-Carplay.mirror.phone111.gate"
-  HOOK_LOG="$TMP_ROOT/altscreen_hook.log"
-  VOLATILE_MODE=FLAT_TMP
+# Read-only compatibility probe for a pre-upgrade sidecar. New launches never
+# create or write the legacy namespace.
+LEGACY_PIDFILE="$TMP_ROOT/MMI-Cockpit-Carplay/mirror/pid"
+if [ -f "$LEGACY_PIDFILE" ]; then
+  LEGACY_PID="$(cat "$LEGACY_PIDFILE" 2>/dev/null || true)"
+  if [ -n "$LEGACY_PID" ] && kill -0 "$LEGACY_PID" 2>/dev/null; then
+    echo "ALREADY_RUNNING pid=$LEGACY_PID volatile_mode=LEGACY_NAMESPACE"
+    exit 0
+  fi
 fi
 
 DEMAND="${ALT111_MIRROR_ACTIVE_FILE:-/tmp/mmi-mirror-active}"

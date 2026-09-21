@@ -6,13 +6,18 @@ on:
       - experiment/oem-layout-second-screen_v2
       - experiment/oem-layout-second-screen_v3
     paths:
-      - 'Toolbox/carplay_alt_screen/src/p1404_resolve.c'
+      - 'Toolbox/carplay_alt_screen/src/**'
+      - 'Toolbox/carplay_alt_screen/mirror_display/release/start_vehicle.sh'
+      - 'Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh'
       - 'Toolbox/scripts/altscreen_chain_test.sh'
       - 'Toolbox/scripts/altscreen_chain_test_universal.sh'
       - 'Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh'
       - 'Toolbox/scripts/stop_mmi_cockpit_carplay_test.sh'
       - 'Toolbox/scripts/altscreen_persistent_diag.sh'
       - 'Toolbox/scripts/altscreen_adaptive_diag.sh'
+      - 'Toolbox/scripts/altscreen_boot_diag.sh'
+      - 'Toolbox/scripts/altscreen_live_diag.sh'
+      - 'Toolbox/scripts/altscreen_chain_test_known.sh'
       - 'Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh'
       - 'Toolbox/scripts/status_mmi_cockpit_carplay_test.sh'
       - 'Toolbox/carplay_alt_screen/tests/test_start_autostart_transaction.sh'
