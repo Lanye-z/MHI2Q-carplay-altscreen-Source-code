@@ -39,11 +39,14 @@ log(){ echo "$*"; echo "$*" >&3; }
 size(){ n=$(wc -c < "$1" 2>/dev/null || echo 0); set -- $n; echo "${1:-0}"; }
 same(){ [ -f "$1" ] && [ -f "$2" ] && [ "$(size "$1")" = "$(size "$2")" ] && [ "$(cksum < "$1")" = "$(cksum < "$2")" ]; }
 find_startup(){ for f in "$(p /mnt/system/etc/boot/startup.sh)" "$(p /etc/boot/startup.sh)"; do [ -f "$f" ] && { echo "$f"; return 0; }; done; return 1; }
+dir_file_count(){ find "$1" -type f -print 2>/dev/null | wc -l | awk '{print $1}'; }
+dir_kb(){ n=$(du -sk "$1" 2>/dev/null | awk 'NR==1{print $1}'); case "${n:-0}" in ''|*[!0-9]*) echo 0 ;; *) echo "$n" ;; esac; }
+same_dir_hint(){ [ -d "$1" ] && [ -d "$2" ] && [ "$(dir_file_count "$1")" = "$(dir_file_count "$2")" ] && [ "$(dir_kb "$1")" = "$(dir_kb "$2")" ]; }
 finish_mounts(){ r=0; sync >/dev/null 2>&1 || r=1; [ "$APP_RW" = 0 ] || { mount_app_ro >/dev/null 2>&1 || r=1; APP_RW=0; }; [ "$SYS_RW" = 0 ] || { mount_system_ro >/dev/null 2>&1 || r=1; SYS_RW=0; }; return "$r"; }
 
 snap_file(){ src=$1; name=$2; dst="$TXN/files/$name"; if [ -f "$src" ]; then cp "$src" "$dst" && same "$src" "$dst" && touch "$dst.present"; else touch "$dst.absent"; fi; }
 restore_file(){ dst=$1; name=$2; mode=$3; src="$TXN/files/$name"; ensure_dirs "$(dirname -- "$dst")" || return 1; if [ -f "$src.present" ]; then tmp="${dst}.restore.$"; rm -f "$tmp"; cp "$src" "$tmp" && chmod "$mode" "$tmp" && same "$src" "$tmp" && mv "$tmp" "$dst"; elif [ -f "$src.absent" ]; then rm -f "$dst"; else return 1; fi; }
-snap_dir(){ src=$1; name=$2; dst="$TXN/dirs/$name"; if [ -d "$src" ]; then ensure_dirs "$dst" && cp -R "$src/." "$dst/" && touch "$TXN/dirs/$name.present"; else touch "$TXN/dirs/$name.absent"; fi; }
+snap_dir(){ src=$1; name=$2; dst="$TXN/dirs/$name"; if [ -d "$src" ]; then ensure_dirs "$dst" && cp -R "$src/." "$dst/" && same_dir_hint "$src" "$dst" && touch "$TXN/dirs/$name.present"; else touch "$TXN/dirs/$name.absent"; fi; }
 restore_dir(){ dst=$1; name=$2; src="$TXN/dirs/$name"; rm -rf "$dst"; if [ -f "$TXN/dirs/$name.present" ]; then tmp="${dst}.restore.$$"; rm -rf "$tmp"; ensure_dirs "$tmp" && cp -R "$src/." "$tmp/" && mv "$tmp" "$dst"; elif [ -f "$TXN/dirs/$name.absent" ]; then :; else return 1; fi; }
 
 verify_hmi(){
@@ -79,7 +82,11 @@ recover_stale(){
   [ -d "$TXN" ] || return 0
   if [ -f "$TXN/COMMITTED" ] || [ -f "$TXN/ROLLED_BACK" ]; then rm -rf "$TXN"; return $?; fi
   if [ -f "$TXN/PREPARED" ]; then log "STALE_RESTORE_TRANSACTION=DETECTED action=ROLLBACK_FIRST"; TXN_READY=1; rollback || return 1; rm -rf "$TXN" || return 1; TXN_READY=0; log "STALE_RESTORE_TRANSACTION=RECOVERED"; return 0; fi
-  log "RESTORE=REFUSED reason=AMBIGUOUS_TRANSACTION production_changed=NO"; return 1
+  # No PREPARED marker means the previous run never reached the first production
+  # mutation. It is safe to discard this incomplete SD-only snapshot.
+  log "STALE_RESTORE_TRANSACTION=INCOMPLETE_PREPARE action=CLEANUP production_changed=NO"
+  rm -rf "$TXN" || return 1
+  return 0
 }
 
 fail(){ msg=$1; log "ERROR: $msg"; finish_mounts >/dev/null 2>&1 || true; if [ "$ROLLING_BACK" = 0 ] && [ "$TXN_READY" = 1 ]; then rollback && log "RESTORE=ABORTED rollback=PASS" || log "RESTORE=FAILED rollback=INCOMPLETE recovery_required=YES"; else log "RESTORE=REFUSED production_changed=NO"; fi; exit 1; }
