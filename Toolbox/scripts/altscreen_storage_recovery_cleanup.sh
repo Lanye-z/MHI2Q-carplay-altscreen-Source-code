@@ -131,11 +131,29 @@ same_file() {
     [ "$(file_cksum "$1")" = "$(file_cksum "$2")" ]
 }
 
+dir_file_count() {
+    find "$1" -type f -print 2>/dev/null | wc -l | awk '{print $1}'
+}
+
+dir_file_bytes() {
+    total=0
+    find "$1" -type f -print 2>/dev/null | while IFS= read -r f; do
+        n=$(wc -c < "$f" 2>/dev/null || echo 0)
+        set -- $n
+        case "${1:-0}" in ''|*[!0-9]*) n=0 ;; *) n=$1 ;; esac
+        total=$((total + n))
+        echo "$total"
+    done | tail -n 1
+}
+
 same_dir_hint() {
     [ -d "$1" ] && [ -d "$2" ] || return 1
-    a=$(du -sk "$1" 2>/dev/null | awk '{print $1}')
-    b=$(du -sk "$2" 2>/dev/null | awk '{print $1}')
-    [ -n "$a" ] && [ "$a" = "$b" ]
+    a_count=$(dir_file_count "$1")
+    b_count=$(dir_file_count "$2")
+    [ "$a_count" = "$b_count" ] || return 1
+    a_bytes=$(dir_file_bytes "$1")
+    b_bytes=$(dir_file_bytes "$2")
+    [ "${a_bytes:-0}" = "${b_bytes:-0}" ]
 }
 
 capture_df() {
@@ -280,13 +298,15 @@ if [ -e "$CHAIN_LOCK" ]; then
 fi
 
 command -v cksum >/dev/null 2>&1 || {
-    echo "CLEANUP=REFUSED reason=CKSUM_UNAVAILABLE" | tee -a "$REPORT"
+    echo "CLEANUP=REFUSED reason=CKSUM_UNAVAILABLE" >> "$REPORT"
+    echo "CLEANUP=REFUSED reason=CKSUM_UNAVAILABLE"
     exit 1
 }
 
 STARTUP="$(p /mnt/system/etc/boot/startup.sh)"
 [ -f "$STARTUP" ] || {
-    echo "CLEANUP=REFUSED reason=LIVE_STARTUP_MISSING" | tee -a "$REPORT"
+    echo "CLEANUP=REFUSED reason=LIVE_STARTUP_MISSING" >> "$REPORT"
+    echo "CLEANUP=REFUSED reason=LIVE_STARTUP_MISSING"
     exit 1
 }
 
@@ -301,7 +321,8 @@ fi
 capture_df "$DF_BEFORE"
 record_live_checksums "$CHECK_BEFORE"
 STARTUP_CKSUM_BEFORE=$(file_cksum "$STARTUP") || {
-    echo "CLEANUP=REFUSED reason=STARTUP_CHECKSUM_FAILED" | tee -a "$REPORT"
+    echo "CLEANUP=REFUSED reason=STARTUP_CHECKSUM_FAILED" >> "$REPORT"
+    echo "CLEANUP=REFUSED reason=STARTUP_CHECKSUM_FAILED"
     exit 1
 }
 
@@ -460,11 +481,11 @@ if [ "$SYSTEM_COUNT" -gt 0 ]; then
     done < "$SYSTEM_LIST"
 
     sync >/dev/null 2>&1 || true
-    mount_system_ro || {
-        SYSTEM_RW=0
+    if ! mount_system_ro; then
         echo "CLEANUP=FAIL reason=SYSTEM_REMOUNT_RO_FAILED" >> "$REPORT"
+        cleanup_mounts
         exit 1
-    }
+    fi
     SYSTEM_RW=0
 fi
 
@@ -521,11 +542,11 @@ if [ "$APP_COUNT" -gt 0 ]; then
     done < "$APP_LIST"
 
     sync >/dev/null 2>&1 || true
-    mount_app_ro || {
-        APP_RW=0
+    if ! mount_app_ro; then
         echo "CLEANUP=FAIL reason=APP_REMOUNT_RO_FAILED" >> "$REPORT"
+        cleanup_mounts
         exit 1
-    }
+    fi
     APP_RW=0
 fi
 
@@ -575,6 +596,7 @@ fi
 } >> "$REPORT"
 printf '%s\n' "$RUN_DIR" > "$LOG_ROOT/LAST_CLEANUP.txt" 2>/dev/null || true
 printf '%s\n' "CLEANUP_COMPLETE=YES" > "$RUN_DIR/CLEANUP_COMPLETE"
+rm -rf "$TXN_DIR" 2>/dev/null || true
 trap - 1 2 15
 
 echo "CLEANUP=PASS"
