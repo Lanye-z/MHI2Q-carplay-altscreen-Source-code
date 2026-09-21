@@ -1,0 +1,19 @@
+###########################################################################################
+# MMI-Cockpit-Carplay - Historical Storage Recovery Scanner
+# Read-only scanner: no delete, no mount-rw, no vehicle-file mutation.
+###########################################################################################
+screen "MMI-Cockpit-Carplay Storage Recovery" Customization
+
+keyValue
+    value   String sys 0x00000000 0
+    label   "Historical AltScreen storage scanner. READ ONLY - no files are deleted."
+    poll    0
+
+keyValue
+    value   String sys 0x00000000 0
+    label   "Report: SD/MMI-Cockpit-Carplay/logs/storage-recovery/ (fallback: /tmp)"
+    poll    0
+
+script
+   value   sys 1 0x0100 "/eso/hmi/engdefs/scripts/mqb/altscreen_storage_recovery_scan.sh"
+   label   "SCAN STORAGE - READ ONLY"
