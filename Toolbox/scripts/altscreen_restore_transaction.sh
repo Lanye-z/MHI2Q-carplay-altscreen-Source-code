@@ -45,7 +45,7 @@ same_dir_hint(){ [ -d "$1" ] && [ -d "$2" ] && [ "$(dir_file_count "$1")" = "$(d
 finish_mounts(){ r=0; sync >/dev/null 2>&1 || r=1; [ "$APP_RW" = 0 ] || { mount_app_ro >/dev/null 2>&1 || r=1; APP_RW=0; }; [ "$SYS_RW" = 0 ] || { mount_system_ro >/dev/null 2>&1 || r=1; SYS_RW=0; }; return "$r"; }
 
 snap_file(){ src=$1; name=$2; dst="$TXN/files/$name"; if [ -f "$src" ]; then cp "$src" "$dst" && same "$src" "$dst" && touch "$dst.present"; else touch "$dst.absent"; fi; }
-restore_file(){ dst=$1; name=$2; mode=$3; src="$TXN/files/$name"; ensure_dirs "$(dirname -- "$dst")" || return 1; if [ -f "$src.present" ]; then tmp="${dst}.restore.new"; rm -f "$tmp"; cp "$src" "$tmp" && chmod "$mode" "$tmp" && same "$src" "$tmp" && mv "$tmp" "$dst"; elif [ -f "$src.absent" ]; then rm -f "$dst"; else return 1; fi; }
+restore_file(){ dst=$1; name=$2; mode=$3; src="$TXN/files/$name"; if [ -f "$src.present" ]; then ensure_dirs "$(dirname -- "$dst")" || return 1; tmp="${dst}.restore.new"; rm -f "$tmp"; cp "$src" "$tmp" && chmod "$mode" "$tmp" && same "$src" "$tmp" && mv "$tmp" "$dst"; elif [ -f "$src.absent" ]; then rm -f "$dst"; else return 1; fi; }
 snap_dir(){ src=$1; name=$2; dst="$TXN/dirs/$name"; if [ -d "$src" ]; then ensure_dirs "$dst" && cp -R "$src/." "$dst/" && same_dir_hint "$src" "$dst" && touch "$TXN/dirs/$name.present"; else touch "$TXN/dirs/$name.absent"; fi; }
 restore_dir(){ dst=$1; name=$2; src="$TXN/dirs/$name"; rm -rf "$dst"; if [ -f "$TXN/dirs/$name.present" ]; then tmp="${dst}.restore.$$"; rm -rf "$tmp"; ensure_dirs "$tmp" && cp -R "$src/." "$tmp/" && mv "$tmp" "$dst"; elif [ -f "$TXN/dirs/$name.absent" ]; then :; else return 1; fi; }
 
