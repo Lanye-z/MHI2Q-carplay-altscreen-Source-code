@@ -577,8 +577,8 @@ grep -Fq 'meaning=destination_first_successful_gles_present' "$START" ||
     fail "destination-ready semantics missing"
 grep -Fq 'LD_PRELOAD= "$BIN"' "$LAUNCH" ||
     fail "sidecar LD_PRELOAD isolation missing"
-grep -Fq 'DIRECT_DISPLAY_SIDECAR=STOPPED' "$STOP" ||
-    fail "restore script is not aligned with direct-display V1"
+grep -Fq 'DIRECT_DISPLAY_SIDECAR=STOPPED' "$RESTORE_APPLY" ||
+    fail "transactional restore APPLY step is not aligned with direct-display V3"
 
 check_release_sha(){
     rel_name="$1"
