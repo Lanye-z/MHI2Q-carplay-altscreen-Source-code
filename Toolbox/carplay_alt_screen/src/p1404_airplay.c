@@ -889,6 +889,7 @@ struct alt111_event_context {
     uint32_t generation;
     int event_kind;
     int event_value;
+    uint32_t event_seq;
     volatile int refs;
     volatile int callback_called;
 };
@@ -905,14 +906,20 @@ static void alt111_event_response(int status, void *response, void *opaque) {
      * the submit path must not release both references while callback code is
      * already using this context. */
     __sync_lock_test_and_set(&ctx->callback_called, 1);
-    altscreen_log("PHASE=ALT111_EVENT_RESPONSE receiver=%p stream=%p generation=%u event=%d status=%d response=%p",
+    altscreen_log("PHASE=ALT111_EVENT_RESPONSE receiver=%p stream=%p generation=%u event=%d value=%d seq=%u status=%d response=%p",
                   ctx->receiver, ctx->stream, ctx->generation,
-                  ctx->event_kind, status, response);
+                  ctx->event_kind, ctx->event_value, ctx->event_seq,
+                  status, response);
     if (ctx->stream && ctx->generation) {
         if (ctx->event_kind == ALT111_EVENT_UPDATE_VIEW_AREA)
             p1404_cockpit_native_view_area_result(
                 ctx->receiver, ctx->stream, ctx->generation,
                 ctx->event_value, status, response != NULL);
+        else if (ctx->event_kind == ALT111_EVENT_ZOOM)
+            p1404_cockpit_native_zoom_result(
+                ctx->receiver, ctx->stream, ctx->generation,
+                ctx->event_seq, ctx->event_value,
+                status, response != NULL);
         else
             p1404_cockpit_native_event_result(ctx->receiver, ctx->stream,
                                           ctx->generation, ctx->event_kind,
@@ -1073,6 +1080,76 @@ done:
     }
     return rc;
 }
+
+int alt_send_cluster_zoom(void *receiver, void *stream,
+                          uint32_t generation, uint32_t event_seq,
+                          int direction) {
+    airplay_send_command_fn send_command;
+    struct alt111_event_context *ctx = NULL;
+    const struct altscreen_display *display = altscreen_cluster_display();
+    cf_obj command = NULL, params = NULL, type = NULL, uuid = NULL;
+    int rc = -1;
+
+    if (!receiver || !stream || !generation || !event_seq ||
+        !display || !display->uuid || (direction != 0 && direction != 1))
+        return -1;
+
+    send_command = (airplay_send_command_fn)
+        p1404_stock_symbol_named("AirPlayReceiverSessionSendCommand");
+    if (!send_command || !cf_dict_create_mutable || !cf_str_new ||
+        !cf_num_new || !cf_dict_set || !cf_release)
+        goto done;
+
+    command = cf_dict_create_mutable(NULL, 0, NULL, NULL, NULL);
+    params = cf_dict_create_mutable(NULL, 0, NULL, NULL, NULL);
+    type = cf_str_new("changeMapZoomLevel", -1);
+    uuid = cf_str_new(display->uuid, -1);
+    if (!command || !params || !type || !uuid) goto done;
+
+    if (!cf_dict_set_cstr_obj(command, "type", type) ||
+        !cf_dict_set_cstr_obj(params, "uuid", uuid) ||
+        !set_i64(params, "zoomDirection", (int64_t)direction) ||
+        !cf_dict_set_cstr_obj(command, "params", params))
+        goto done;
+
+    ctx = (struct alt111_event_context *)calloc(1u, sizeof(*ctx));
+    if (!ctx) goto done;
+    ctx->receiver = receiver;
+    ctx->stream = stream;
+    ctx->generation = generation;
+    ctx->event_kind = ALT111_EVENT_ZOOM;
+    ctx->event_value = direction;
+    ctx->event_seq = event_seq;
+    ctx->refs = 2;
+
+    rc = send_command(receiver, command, alt111_event_response, ctx);
+    altscreen_log(
+        "PHASE=CLUSTER_ZOOM_SUBMIT receiver=%p stream=%p generation=%u "
+        "seq=%u type=changeMapZoomLevel uuid=%s direction=%d action=%s rc=%d "
+        "response_callback=1",
+        receiver, stream, generation, event_seq, display->uuid, direction,
+        direction == 0 ? "ZOOM_IN" : "ZOOM_OUT", rc);
+
+    if (rc == 0) {
+        alt111_event_context_release(ctx);
+        ctx = NULL;
+    } else if (__sync_fetch_and_add(&ctx->callback_called, 0)) {
+        alt111_event_context_release(ctx);
+        ctx = NULL;
+    }
+
+done:
+    cf_release_safe(uuid);
+    cf_release_safe(type);
+    cf_release_safe(params);
+    cf_release_safe(command);
+    if (ctx) {
+        alt111_event_context_release(ctx);
+        alt111_event_context_release(ctx);
+    }
+    return rc;
+}
+
 
 /* LIVI requests the Alt UUID when Main110 becomes ready, before the phone has
  * necessarily requested type111. This request has no private stream yet and
