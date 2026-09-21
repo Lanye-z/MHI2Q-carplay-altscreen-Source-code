@@ -32,6 +32,7 @@ PERSIST_DIAG="$ROOT/Toolbox/scripts/altscreen_persistent_diag.sh"
 BOOT_DIAG="$ROOT/Toolbox/scripts/altscreen_boot_diag.sh"
 START_TX_TEST="$ROOT/Toolbox/carplay_alt_screen/tests/test_start_autostart_transaction.sh"
 STORAGE_POLICY_TEST="$ROOT/Toolbox/carplay_alt_screen/tests/test_storage_policy.sh"
+RESTORE_TX_TEST="$ROOT/Toolbox/carplay_alt_screen/tests/test_restore_transaction.sh"
 TOP="$ROOT/SHA256SUMS.txt"
 MAP="$ROOT/PACKAGE_SOURCE_MAP.json"
 
@@ -42,11 +43,11 @@ sha256_file(){
 }
 binary_strings(){ strings "$1" 2>/dev/null || grep -a -o '[[:print:]][[:print:]]*' "$1"; }
 
-for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$AIRPLAY_SRC" "$RESOLVE" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$GL_RENDERER_CPP" "$MAIN_CPP" "$HMI_BUILD_INFO" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$STOP" "$INSTALL" "$STATUS" "$CHAIN" "$RESTORE_TXN" "$RESTORE_APPLY" "$PERSIST_DIAG" "$BOOT_DIAG" "$START_TX_TEST" "$STORAGE_POLICY_TEST"; do
+for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$AIRPLAY_SRC" "$RESOLVE" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$GL_RENDERER_CPP" "$MAIN_CPP" "$HMI_BUILD_INFO" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$STOP" "$INSTALL" "$STATUS" "$CHAIN" "$RESTORE_TXN" "$RESTORE_APPLY" "$PERSIST_DIAG" "$BOOT_DIAG" "$START_TX_TEST" "$STORAGE_POLICY_TEST" "$RESTORE_TX_TEST"; do
     [ -s "$f" ] || fail "missing/empty: $f"
 done
 
-for s in "$START" "$CTRL" "$CHAIN" "$RESTORE_TXN" "$RESTORE_APPLY" "$PERSIST_DIAG" "$LAUNCH" "$STOP" "$BOOT_DIAG" "$START_TX_TEST" "$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh"; do
+for s in "$START" "$CTRL" "$CHAIN" "$RESTORE_TXN" "$RESTORE_APPLY" "$PERSIST_DIAG" "$LAUNCH" "$STOP" "$BOOT_DIAG" "$START_TX_TEST" "$RESTORE_TX_TEST" "$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh"; do
     sh -n "$s" || fail "shell syntax: $s"
 done
 
@@ -568,6 +569,7 @@ grep -Fq '"$BASE/operations"' "$BOOT_DIAG" ||
 
 sh "$START_TX_TEST" || fail "START/autostart host transaction fixture failed"
 sh "$STORAGE_POLICY_TEST" || fail "storage policy fixture failed"
+sh "$RESTORE_TX_TEST" || fail "RESTORE rollback fault-injection fixture failed"
 
 grep -Fq 'touch /tmp/mmi-mirror-active' "$START" ||
     fail "Java80 demand boot marker missing"
