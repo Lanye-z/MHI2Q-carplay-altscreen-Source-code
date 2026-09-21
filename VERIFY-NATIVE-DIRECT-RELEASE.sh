@@ -26,6 +26,9 @@ STOP="$ROOT/Toolbox/scripts/stop_mmi_cockpit_carplay_test.sh"
 INSTALL="$ROOT/Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh"
 STATUS="$ROOT/Toolbox/scripts/status_mmi_cockpit_carplay_test.sh"
 CHAIN="$ROOT/Toolbox/scripts/altscreen_chain_test.sh"
+RESTORE_TXN="$ROOT/Toolbox/scripts/altscreen_restore_transaction.sh"
+RESTORE_APPLY="$ROOT/Toolbox/scripts/altscreen_restore_apply.sh"
+PERSIST_DIAG="$ROOT/Toolbox/scripts/altscreen_persistent_diag.sh"
 BOOT_DIAG="$ROOT/Toolbox/scripts/altscreen_boot_diag.sh"
 START_TX_TEST="$ROOT/Toolbox/carplay_alt_screen/tests/test_start_autostart_transaction.sh"
 STORAGE_POLICY_TEST="$ROOT/Toolbox/carplay_alt_screen/tests/test_storage_policy.sh"
@@ -39,13 +42,40 @@ sha256_file(){
 }
 binary_strings(){ strings "$1" 2>/dev/null || grep -a -o '[[:print:]][[:print:]]*' "$1"; }
 
-for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$AIRPLAY_SRC" "$RESOLVE" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$GL_RENDERER_CPP" "$MAIN_CPP" "$HMI_BUILD_INFO" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$STOP" "$INSTALL" "$STATUS" "$CHAIN" "$BOOT_DIAG" "$START_TX_TEST" "$STORAGE_POLICY_TEST"; do
+for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$AIRPLAY_SRC" "$RESOLVE" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$GL_RENDERER_CPP" "$MAIN_CPP" "$HMI_BUILD_INFO" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$STOP" "$INSTALL" "$STATUS" "$CHAIN" "$RESTORE_TXN" "$RESTORE_APPLY" "$PERSIST_DIAG" "$BOOT_DIAG" "$START_TX_TEST" "$STORAGE_POLICY_TEST"; do
     [ -s "$f" ] || fail "missing/empty: $f"
 done
 
-for s in "$START" "$CTRL" "$LAUNCH" "$STOP" "$BOOT_DIAG" "$START_TX_TEST" "$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh"; do
+for s in "$START" "$CTRL" "$CHAIN" "$RESTORE_TXN" "$RESTORE_APPLY" "$PERSIST_DIAG" "$LAUNCH" "$STOP" "$BOOT_DIAG" "$START_TX_TEST" "$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh"; do
     sh -n "$s" || fail "shell syntax: $s"
 done
+
+# ---- V3 transactional restore safety contract ----
+grep -Fq 'RESTORE_ENTRY=TRANSACTIONAL_V3' "$STOP" ||
+    fail "V3 RESTORE ORIGINAL does not enter the transactional wrapper"
+grep -Fq 'RESTORE_TRANSACTION=PREPARED' "$RESTORE_TXN" ||
+    fail "restore transaction PREPARED marker/log missing"
+grep -Fq 'ROLLBACK=PASS persistent_state=PRE_RESTORE' "$RESTORE_TXN" ||
+    fail "restore rollback contract missing"
+grep -Fq 'STALE_RESTORE_TRANSACTION=DETECTED action=ROLLBACK_FIRST' "$RESTORE_TXN" ||
+    fail "stale restore transaction recovery missing"
+grep -Fq 'RESTORE_VERIFY=PASS' "$RESTORE_TXN" ||
+    fail "full-state restore verification marker missing"
+grep -Fq 'DO_NOT_TEST_CARPLAY_BEFORE_FULL_MMI_REBOOT' "$RESTORE_TXN" ||
+    fail "post-restore reboot safety gate missing"
+grep -Fq 'restore-precheck) cmd_restore_precheck' "$CTRL" ||
+    fail "universal non-mutating restore precheck missing"
+grep -Fq 'restore-precheck)' "$CHAIN" ||
+    fail "router restore-precheck route missing"
+grep -Fq 'restore transaction is active; START is blocked' "$CHAIN" ||
+    fail "START is not blocked during an incomplete restore transaction"
+grep -Fq 'restore transaction is active; recover/finish RESTORE ORIGINAL before INSTALL' "$CHAIN" ||
+    fail "INSTALL is not blocked during an incomplete restore transaction"
+grep -Fq 'STAGING_ROOT/controller-txn' "$CTRL" ||
+    fail "universal restore scratch still depends on fragile nested /tmp storage"
+grep -Fq 'staging/diag-txn' "$PERSIST_DIAG" ||
+    fail "persistent diagnostics restore scratch still depends on fragile nested /tmp storage"
+
 
 AUTH_MARKER="/mnt/app/root/carplay-altscreen/state/fullchain_probe"
 LEGACY_AUTH_MARKER="/mnt/app/root/hooks/.mibcarplay_fullchain_probe"
