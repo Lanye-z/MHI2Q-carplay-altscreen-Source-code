@@ -49,6 +49,7 @@ mkdir -p \
 
 printf '%s\n' '#!/bin/sh' > "$live/mnt/system/etc/boot/startup.sh"
 printf '%s\n' 'legacy-clean' > "$live/mnt/system/etc/boot/startup.sh.basevideo3.clean.111"
+printf '%s\n' 'legacy-mirror-clean' > "$live/mnt/system/etc/boot/startup.sh.mirror.clean.112"
 printf '%s\n' 'stock-json' > "$live/mnt/system/etc/eso/production/smartphone_integrator.json"
 printf '%s\n' 'partial-json' > "$live/mnt/system/etc/eso/production/.smartphone_integrator.json.new.222"
 printf '%s\n' 'dio-json' > "$live/mnt/system/etc/eso/production/dio_manager.json"
@@ -108,7 +109,9 @@ report=$(cat "$last")
 [ -s "$report/sd_backup.txt" ] || fail "SD backup listing missing"
 
 grep -Fq '/mnt/system/etc/boot/startup.sh.basevideo3.clean.111' "$report/project_candidates.txt" ||
-    fail "historical startup temp not detected"
+    fail "historical BaseVideo3 startup temp not detected"
+grep -Fq '/mnt/system/etc/boot/startup.sh.mirror.clean.112' "$report/project_candidates.txt" ||
+    fail "historical Mirror startup temp not detected"
 grep -Fq '/mnt/system/etc/eso/production/.smartphone_integrator.json.new.222' "$report/project_candidates.txt" ||
     fail "historical JSON staging not detected"
 grep -Fq '/mnt/app/root/.carplay-altscreen.new.333' "$report/project_candidates.txt" ||
