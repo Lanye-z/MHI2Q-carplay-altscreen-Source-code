@@ -46,7 +46,10 @@ const struct anchor kAnchor[] = {
     { NULL, 0u }
 };
 
-#define ALTSCREEN_PROBE_MARKER "/mnt/app/root/hooks/.mibcarplay_fullchain_probe"
+/* Keep this authorization marker under the owned persistent runtime root.
+ * It must stay byte-for-byte aligned with altscreen_chain_test_universal.sh
+ * and the release-binary contract verified by VERIFY-NATIVE-DIRECT-RELEASE.sh. */
+#define ALTSCREEN_PROBE_MARKER "/mnt/app/root/carplay-altscreen/state/fullchain_probe"
 #define AUTH_RUN_ID_MAX 64u
 #ifndef RTLD_NOW
 #define RTLD_NOW 2
