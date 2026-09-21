@@ -29,16 +29,34 @@ if [ "${ALTS_START_CAPTURED:-0}" != 1 ]; then
         journal_root=${ALTSCREEN_CHAIN_ROOT:-}
         case "$journal_root" in /tmp/*|/var/tmp/*) ;; *) exit 2 ;; esac
     fi
-    journal_dir="$journal_root/tmp/MMI-Cockpit-Carplay/diagnostics/operations"
     journal_stamp=$(date +%Y%m%d_%H%M%S 2>/dev/null || echo unknown)
-    journal_name="start_${journal_stamp}_$.log"
-    if ensure_dirs "$journal_dir" 2>/dev/null; then
-        journal="$journal_dir/$journal_name"
+    journal_name="start_${journal_stamp}_$$.log"
+    journal_volume=""
+    if [ "${ALTSCREEN_CHAIN_TESTING:-0}" = 1 ]; then
+        journal_volume=${ALTSCREEN_CHAIN_VOLUME:-}
     else
-        journal="$journal_root/tmp/altscreen_$journal_name"
+        for candidate in /net/mmx/fs/sda0 /net/mmx/fs/sda1 /net/mmx/fs/sdb0 /net/mmx/fs/sdb1 /fs/sda0 /fs/sda1 /fs/sdb0 /fs/sdb1; do
+            if [ -d "$candidate/Toolbox" ]; then journal_volume=$candidate; break; fi
+        done
+    fi
+    journal_storage=TMP
+    if [ -n "$journal_volume" ] && [ -d "$journal_volume/Toolbox" ]; then
+        journal_dir="$journal_volume/MMI-Cockpit-Carplay/logs/operations"
+        if ensure_dirs "$journal_dir" 2>/dev/null; then
+            journal="$journal_dir/$journal_name"
+            journal_storage=SD
+        fi
+    fi
+    if [ "$journal_storage" = TMP ]; then
+        journal_dir="$journal_root/tmp/MMI-Cockpit-Carplay/diagnostics/operations"
+        if ensure_dirs "$journal_dir" 2>/dev/null; then
+            journal="$journal_dir/$journal_name"
+        else
+            journal="$journal_root/tmp/altscreen_$journal_name"
+        fi
     fi
 
-    if ! (printf 'OP_BEGIN action=START script=%s\n' "$CAPTURE_ENTRY" > "$journal") 2>/dev/null; then
+    if ! (printf 'OP_BEGIN action=START script=%s storage=%s\n' "$CAPTURE_ENTRY" "$journal_storage" > "$journal") 2>/dev/null; then
         echo "WARN: START diagnostic journal unavailable; continuing operation"
         ALTS_START_CAPTURED=1; export ALTS_START_CAPTURED
         if [ "$#" -gt 0 ]; then exec /bin/sh "$CAPTURE_ENTRY" "$@"; else exec /bin/sh "$CAPTURE_ENTRY"; fi
@@ -52,21 +70,15 @@ if [ "${ALTS_START_CAPTURED:-0}" != 1 ]; then
     journal_rc=$?
     printf 'OP_END action=START rc=%s\n' "$journal_rc" >> "$journal"
 
-    journal_volume=""
-    if [ "${ALTSCREEN_CHAIN_TESTING:-0}" = 1 ]; then
-        journal_volume=${ALTSCREEN_CHAIN_VOLUME:-}
-    else
-        for candidate in /net/mmx/fs/sda0 /net/mmx/fs/sda1 /net/mmx/fs/sdb0 /net/mmx/fs/sdb1 /fs/sda0 /fs/sda1 /fs/sdb0 /fs/sdb1; do
-            if [ -d "$candidate/Toolbox" ]; then journal_volume=$candidate; break; fi
-        done
-    fi
     if [ -n "$journal_volume" ] && [ -d "$journal_volume/Toolbox" ]; then
         printf 'DIAGNOSTICS_VOLUME=%s\n' "$journal_volume" >> "$journal"
-        journal_target_dir="$journal_volume/MMI-Cockpit-Carplay/logs/operations"
-        if ensure_dirs "$journal_target_dir" 2>/dev/null; then
-            cp "$journal" "$journal_target_dir/$journal_name.new" 2>/dev/null &&
-                mv "$journal_target_dir/$journal_name.new" "$journal_target_dir/$journal_name" 2>/dev/null ||
-                rm -f "$journal_target_dir/$journal_name.new" 2>/dev/null || true
+        if [ "$journal_storage" = TMP ]; then
+            journal_target_dir="$journal_volume/MMI-Cockpit-Carplay/logs/operations"
+            if ensure_dirs "$journal_target_dir" 2>/dev/null; then
+                cp "$journal" "$journal_target_dir/$journal_name.new" 2>/dev/null &&
+                    mv "$journal_target_dir/$journal_name.new" "$journal_target_dir/$journal_name" 2>/dev/null ||
+                    rm -f "$journal_target_dir/$journal_name.new" 2>/dev/null || true
+            fi
         fi
     fi
     cat "$journal"
