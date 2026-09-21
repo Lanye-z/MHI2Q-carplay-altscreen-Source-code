@@ -50,10 +50,13 @@ BACKUP_ROOT="$VOLUME/MMI-Cockpit-Carplay/cleanup-backup"
 RUN_DIR="$LOG_ROOT/$RUN_NAME"
 BACKUP_DIR="$BACKUP_ROOT/$RUN_NAME"
 FILES_DIR="$BACKUP_DIR/files"
-TXN_DIR="$(p /tmp/MMI-Cockpit-Carplay/txn/storage-cleanup.$$)"
+# Some MHI2Q QNX /tmp providers accept flat files but reject mkdir with ENOSYS.
+# Keep cleanup transaction scratch as flat /tmp files; never require a /tmp
+# directory tree just to run storage recovery.
+TXN_PREFIX="$(p /tmp/MMI-Cockpit-Carplay-storage-cleanup.$)"
 
-if ! ensure_dirs "$RUN_DIR" "$FILES_DIR" "$TXN_DIR"; then
-    echo "CLEANUP=REFUSED reason=SD_OR_TMP_NOT_WRITABLE"
+if ! ensure_dirs "$RUN_DIR" "$FILES_DIR"; then
+    echo "CLEANUP=REFUSED reason=SD_NOT_WRITABLE"
     exit 1
 fi
 if ! printf '%s\n' "MMI-Cockpit-Carplay Storage Recovery cleanup" > "$RUN_DIR/CLEANUP_REPORT.txt" 2>/dev/null; then
@@ -77,8 +80,8 @@ DF_BEFORE="$RUN_DIR/DF.before.txt"
 DF_AFTER="$RUN_DIR/DF.after.txt"
 CHECK_BEFORE="$RUN_DIR/checksums.before.txt"
 CHECK_AFTER="$RUN_DIR/checksums.after.txt"
-SYSTEM_LIST="$TXN_DIR/system_candidates.list"
-APP_LIST="$TXN_DIR/app_candidates.list"
+SYSTEM_LIST="${TXN_PREFIX}.system_candidates.list"
+APP_LIST="${TXN_PREFIX}.app_candidates.list"
 : > "$MANIFEST"
 : > "$RESULTS"
 : > "$SKIPPED"
@@ -607,7 +610,7 @@ fi
 } >> "$REPORT"
 printf '%s\n' "$RUN_DIR" > "$LOG_ROOT/LAST_CLEANUP.txt" 2>/dev/null || true
 printf '%s\n' "CLEANUP_COMPLETE=YES" > "$RUN_DIR/CLEANUP_COMPLETE"
-rm -rf "$TXN_DIR" 2>/dev/null || true
+rm -f "${TXN_PREFIX}."* 2>/dev/null || true
 trap - 1 2 15
 
 echo "CLEANUP=PASS"
