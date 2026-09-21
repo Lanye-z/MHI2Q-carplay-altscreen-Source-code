@@ -53,7 +53,7 @@ FILES_DIR="$BACKUP_DIR/files"
 # Some MHI2Q QNX /tmp providers accept flat files but reject mkdir with ENOSYS.
 # Keep cleanup transaction scratch as flat /tmp files; never require a /tmp
 # directory tree just to run storage recovery.
-TXN_PREFIX="$(p /tmp/MMI-Cockpit-Carplay-storage-cleanup.$)"
+TXN_PREFIX="$(p /tmp/MMI-Cockpit-Carplay-storage-cleanup.$$)"
 
 if ! ensure_dirs "$RUN_DIR" "$FILES_DIR"; then
     echo "CLEANUP=REFUSED reason=SD_NOT_WRITABLE"
