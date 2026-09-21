@@ -3,6 +3,8 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 START="$ROOT/Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh"
 STOP="$ROOT/Toolbox/scripts/stop_mmi_cockpit_carplay_test.sh"
+RESTORE_TXN="$ROOT/Toolbox/scripts/altscreen_restore_transaction.sh"
+RESTORE_APPLY="$ROOT/Toolbox/scripts/altscreen_restore_apply.sh"
 CHAIN="$ROOT/Toolbox/scripts/altscreen_chain_test.sh"
 CTRL="$ROOT/Toolbox/scripts/altscreen_chain_test_universal.sh"
 DIAG="$ROOT/Toolbox/scripts/altscreen_persistent_diag.sh"
@@ -10,14 +12,19 @@ ADAPT="$ROOT/Toolbox/scripts/altscreen_adaptive_diag.sh"
 INSTALL="$ROOT/Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh"
 fail(){ echo "STORAGE_POLICY_TEST=FAIL: $*" >&2; exit 1; }
 
-for f in "$START" "$STOP" "$CHAIN" "$CTRL" "$DIAG" "$ADAPT" "$INSTALL"; do
+for f in "$START" "$STOP" "$RESTORE_TXN" "$RESTORE_APPLY" "$CHAIN" "$CTRL" "$DIAG" "$ADAPT" "$INSTALL"; do
     sh -n "$f" || fail "shell syntax: $f"
 done
 
-grep -Fq '/tmp/MMI-Cockpit-Carplay/txn/start.$$' "$START" || fail "START transaction is not volatile"
-grep -Fq '/tmp/MMI-Cockpit-Carplay/txn/restore.$$' "$STOP" || fail "RESTORE transaction is not volatile"
-grep -Fq '/tmp/MMI-Cockpit-Carplay/txn' "$DIAG" || fail "diagnostics transaction is not volatile"
-if grep -Fq 'CLEAN="$STARTUP.basevideo3' "$START" || grep -Fq 'CLEAN="$STARTUP.basevideo3' "$STOP"; then
+grep -Fq '/tmp/MMI-Cockpit-Carplay/txn/start.$' "$START" || fail "START transaction is not volatile"
+# RESTORE is intentionally reboot-recoverable. Its transaction journal/snapshot
+# therefore lives on SD, not vehicle persistent storage and not fragile nested
+# QNX /tmp. Every path is fixed/bounded and cleaned after COMMIT/ROLLBACK.
+grep -Fq 'restore-transaction/active' "$RESTORE_TXN" || fail "RESTORE transaction is not reboot-recoverable on SD"
+grep -Fq 'staging/restore-apply' "$RESTORE_APPLY" || fail "RESTORE APPLY scratch is not bounded to SD staging"
+grep -Fq 'STAGING_ROOT/controller-txn' "$CTRL" || fail "controller restore scratch is not bounded to SD staging"
+grep -Fq 'staging/diag-txn' "$DIAG" || fail "diagnostics restore scratch is not bounded to SD staging"
+if grep -Fq 'CLEAN="$STARTUP.basevideo3' "$START" || grep -Fq 'CLEAN="$STARTUP.basevideo3' "$RESTORE_APPLY"; then
     fail "BaseVideo transaction scratch still lives beside /mnt/system startup.sh"
 fi
 grep -Fq 'RUNTIME_ROLLBACK_SLOT_CLEANED=PASS' "$CHAIN" || fail "runtime rollback slot is not cleaned after successful INSTALL"
@@ -46,4 +53,4 @@ grep -Fq 'MMI-Cockpit-Carplay/backup' "$INSTALL" || fail "HMI original backup is
 grep -Fq 'basevideo3.enabled' "$START" || fail "persistent boot demand marker missing"
 grep -Fq 'diagnostics.enabled' "$DIAG" || fail "persistent diagnostics marker missing"
 
-echo "STORAGE_POLICY_TEST=PASS logs=sd_preferred_tmp_fallback backups=sd txn=tmp persistent_state=mnt_app system=final_only"
+echo "STORAGE_POLICY_TEST=PASS logs=sd_preferred_tmp_fallback backups=sd start_txn=tmp restore_txn=sd_reboot_recoverable bounded_sd_staging=YES persistent_state=mnt_app system=final_only"
