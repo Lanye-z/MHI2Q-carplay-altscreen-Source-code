@@ -77,8 +77,10 @@ LIVE_LIBAIRPLAY="/eso/lib/libairplay.so"
 
 RUNTIME_ROOT="$(p /mnt/app/root/carplay-altscreen)"
 RUNTIME_BIN="$RUNTIME_ROOT/bin"
-RUNTIME_STAGE="$(p /mnt/app/root/.carplay-altscreen.new.$$)"
+RUNTIME_STAGE="$(p /mnt/app/root/.carplay-altscreen.new)"
+RUNTIME_STAGE_PARENT="$(p /mnt/app/root)"
 RUNTIME_PREV="$(p /mnt/app/root/.carplay-altscreen.previous)"
+ROUTER_TXN_ROOT="$(p /tmp/MMI-Cockpit-Carplay/txn)"
 RUNTIME_OWNER=.mmi-cockpit-carplay-runtime-owner
 RUNTIME_PUBLISHED=0
 RUNTIME_HAD_CURRENT=0
@@ -179,11 +181,14 @@ validate_runtime_sources(){
 
 precheck_app_runtime(){
     parent="$(p /mnt/app/root)"
-    probe="$parent/.altscreen-write-test.$$"
-    token="altscreen-write-test-$$"
+    probe="$parent/.altscreen-write-test"
+    token="altscreen-write-test-$"
     mount_app_rw || { echo "FAIL: cannot mount /mnt/app writable" >&2; return 1; }
     ok=1
     ensure_dirs "$parent" || ok=0
+    # The probe uses one fixed project-owned path so an interrupted precheck can
+    # never accumulate PID-suffixed files on persistent /mnt/app.
+    rm -f "$probe" 2>/dev/null || true
     if [ "$ok" = 1 ]; then printf '%s\n' "$token" > "$probe" 2>/dev/null || ok=0; fi
     if [ "$ok" = 1 ]; then [ "$(cat "$probe" 2>/dev/null)" = "$token" ] || ok=0; fi
     rm -f "$probe" 2>/dev/null || true
@@ -208,8 +213,15 @@ install_runtime_scripts(){
         return 1
     }
     mount_app_rw || return 1
+    # New packages use one fixed project-owned staging directory. Also reap
+    # legacy PID-suffixed staging left by an interrupted older installer.
     rm -rf "$RUNTIME_STAGE" 2>/dev/null || true
+    for stale in "$RUNTIME_STAGE_PARENT"/.carplay-altscreen.new.*; do
+        [ -e "$stale" ] || continue
+        rm -rf "$stale" 2>/dev/null || { mount_app_ro >/dev/null 2>&1 || true; return 1; }
+    done
     ensure_dirs "$RUNTIME_STAGE/bin" "$RUNTIME_STAGE/lib" "$RUNTIME_STAGE/state" || { mount_app_ro >/dev/null 2>&1 || true; return 1; }
+    echo "RUNTIME_STAGING_POLICY=BOUNDED path=/mnt/app/root/.carplay-altscreen.new legacy_pid_staging=reaped"
     for name in $RUNTIME_SCRIPTS; do
         src="$SD_SCRIPTS/$name"; dst="$RUNTIME_STAGE/bin/$name"
         cp "$src" "$dst" && cmp -s "$src" "$dst" || {
@@ -383,8 +395,10 @@ delegate(){
 
 delegate_install(){
     route=$1
-    ensure_dirs "$STATE_DIR" "$LOG_ROOT" "$BACKUP_ROOT" "$STAGING_ROOT" || return 1
-    tmp="$STATE_DIR/.child-install.$$"
+    ensure_dirs "$STATE_DIR" "$LOG_ROOT" "$BACKUP_ROOT" "$STAGING_ROOT" "$ROUTER_TXN_ROOT" || return 1
+    # Child controller output is transaction scratch, not persistent state.
+    # Keep it volatile so interruption/reboot cannot grow SD state metadata.
+    tmp="$ROUTER_TXN_ROOT/router-child-install.$"
     delegate "$route" install > "$tmp" 2>&1
     rc=$?
     sed 's/^INSTALL=PASS /CHILD_INSTALL=PASS /' "$tmp"
