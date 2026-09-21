@@ -62,7 +62,7 @@
   "Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so": "7aa81cfbd87a204981802ae4943224ad76cf25e75f13b05fdeebd500f7a08ae9",
   "Toolbox/scripts/altscreen_adaptive_diag.sh": "ed77f50522c0d78e024d5441bc75884785a32e5f40f038c18c7ef4830025db7c",
   "Toolbox/scripts/altscreen_boot_diag.sh": "6c570c48fd83b802950a29b3df90d1df089751757901ab07d545c07ead2a12db",
-  "Toolbox/scripts/altscreen_chain_test.sh": "e99b9aec0e042baab14831f90f821b32a77b7b312f109c993ab97ae786105c17",
+  "Toolbox/scripts/altscreen_chain_test.sh": "df8178e4a80c589a30ad954c5bdc18e5b2209ae246bb6a7f8de8e3aa17e3aaad",
   "Toolbox/scripts/altscreen_chain_test_known.sh": "88a325320f90218d1b8e0fb092902cac687c68db32b7686a617647108553c4b0",
   "Toolbox/scripts/altscreen_chain_test_universal.sh": "8bc2168e098d2250361eac601bfbf08471e49613c734d57e222b633e9c54fa23",
   "Toolbox/scripts/altscreen_live_diag.sh": "c1e7178e290e9e944e3a3600c317cb27bcc436b04714238d87951d15adaec071",
@@ -88,6 +88,6 @@
   "Toolbox/carplay_alt_screen/hmi/vendor/carplay_hook-wheel-v25.jar": "eafebf9fd1a7f4d3962fa5330b6908f45570756ade24676baf1f2bf66edc2c8a",
   "OEM-LAYOUT-SECOND-SCREEN-V3-WHEEL-ZOOM.md": "4e880316f6a67d57f00657f226f96c7f4b5bdd298b5c61d7c9fb143f738bad4f",
   ".github/workflows/wheel-zoom-v3.yml": "72f92be486381787c5e949ad8678bea408b0e50dd639b15df8bcbc17408905d1",
-  "BRANCH-ZIP-READY.txt": "80ccad1f938f5da577a8f807343468e8d292944b1172192b4191cb2ff19e0234",
+  "BRANCH-ZIP-READY.txt": "0322efd1a9ef91a5a36367f0d5dcac70c1e7772a02d3b6c8b723ec9e2efd3d31",
   "VERIFY-BRANCH-ZIP-READY.sh": "67f1e07589c7191e76533e9ff5ca851745f6d6686bbb3fe5859e946546ea2e9b"
 }
