@@ -42,7 +42,7 @@ find_startup(){ for f in "$(p /mnt/system/etc/boot/startup.sh)" "$(p /etc/boot/s
 finish_mounts(){ r=0; sync >/dev/null 2>&1 || r=1; [ "$APP_RW" = 0 ] || { mount_app_ro >/dev/null 2>&1 || r=1; APP_RW=0; }; [ "$SYS_RW" = 0 ] || { mount_system_ro >/dev/null 2>&1 || r=1; SYS_RW=0; }; return "$r"; }
 
 snap_file(){ src=$1; name=$2; dst="$TXN/files/$name"; if [ -f "$src" ]; then cp "$src" "$dst" && same "$src" "$dst" && touch "$dst.present"; else touch "$dst.absent"; fi; }
-restore_file(){ dst=$1; name=$2; mode=$3; src="$TXN/files/$name"; if [ -f "$src.present" ]; then tmp="${dst}.restore.$$"; rm -f "$tmp"; cp "$src" "$tmp" && chmod "$mode" "$tmp" && same "$src" "$tmp" && mv "$tmp" "$dst"; elif [ -f "$src.absent" ]; then rm -f "$dst"; else return 1; fi; }
+restore_file(){ dst=$1; name=$2; mode=$3; src="$TXN/files/$name"; ensure_dirs "$(dirname -- "$dst")" || return 1; if [ -f "$src.present" ]; then tmp="${dst}.restore.$"; rm -f "$tmp"; cp "$src" "$tmp" && chmod "$mode" "$tmp" && same "$src" "$tmp" && mv "$tmp" "$dst"; elif [ -f "$src.absent" ]; then rm -f "$dst"; else return 1; fi; }
 snap_dir(){ src=$1; name=$2; dst="$TXN/dirs/$name"; if [ -d "$src" ]; then ensure_dirs "$dst" && cp -R "$src/." "$dst/" && touch "$TXN/dirs/$name.present"; else touch "$TXN/dirs/$name.absent"; fi; }
 restore_dir(){ dst=$1; name=$2; src="$TXN/dirs/$name"; rm -rf "$dst"; if [ -f "$TXN/dirs/$name.present" ]; then tmp="${dst}.restore.$$"; rm -rf "$tmp"; ensure_dirs "$tmp" && cp -R "$src/." "$tmp/" && mv "$tmp" "$dst"; elif [ -f "$TXN/dirs/$name.absent" ]; then :; else return 1; fi; }
 
@@ -90,7 +90,7 @@ recover_stale || fail "previous restore transaction could not be recovered"
 [ -f "$CONTROLLER" ] && [ -f "$APPLY" ] || fail "restore controller/apply helper missing"
 verify_hmi || fail "trusted HMI backup unavailable/damaged"
 /bin/sh "$CONTROLLER" restore-precheck || fail "native restore precheck failed"
-snapshot || fail "pre-restore transaction snapshot failed"
+snapshot || { rm -rf "$TXN" 2>/dev/null || true; fail "pre-restore transaction snapshot failed"; }
 touch "$TXN/APPLYING" || fail "cannot mark transaction APPLYING"
 /bin/sh "$APPLY" || fail "restore APPLY step failed"
 
@@ -102,7 +102,10 @@ if [ -f "$HMI/present" ]; then same "$HMI/carplay_hook.jar" "$JAR" || fail "carp
 STARTUP=$(find_startup) || fail "startup.sh missing after restore"
 ! grep -E 'BEGIN ALT111 (MIRROR|BASEVIDEO3) AUTOSTART|BEGIN ALTSCREEN DIAGNOSTICS' "$STARTUP" >/dev/null 2>&1 || fail "AltScreen autostart/diagnostic block remains"
 
-touch "$TXN/COMMITTED" || fail "cannot commit restore transaction"; TXN_READY=0; sync >/dev/null 2>&1 || fail "sync failed"
+sync >/dev/null 2>&1 || fail "sync failed before restore commit"
+touch "$TXN/COMMITTED" || fail "cannot commit restore transaction"
+TXN_READY=0
+sync >/dev/null 2>&1 || log "WARN: final post-commit sync reported failure; on-disk restore was already verified and committed"
 log "RESTORE_VERIFY=PASS"
 log "RESTORE=PASS transaction=COMMITTED persistent_state=PRE_INSTALL reboot_required=YES"
 log "IMPORTANT=DO_NOT_TEST_CARPLAY_BEFORE_FULL_MMI_REBOOT"
