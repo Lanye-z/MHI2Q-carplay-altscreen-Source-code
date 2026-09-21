@@ -105,6 +105,7 @@ system_space_snapshot(){
     say "SYSTEM_SPACE_END label=$label"
 }
 cleanup_txn(){ [ ! -e "$TXN_DIR" ] || rm -rf "$TXN_DIR" 2>/dev/null || true; }
+trap cleanup_txn 0
 stage_and_publish() (
     src=$1; dst=$2; mode=$3; dir=$(dirname -- "$dst"); base=$(basename -- "$dst")
     tmp="$dir/.$base.new.$$"
@@ -115,7 +116,9 @@ stage_and_publish() (
         return 0
     fi
     rm -f "$dir/.$base.new."* 2>/dev/null || true
-    if ! cp "$src" "$tmp"; then
+    if cp "$src" "$tmp"; then
+        :
+    else
         rc=$?
         rm -f "$tmp" 2>/dev/null || true
         case "$dst" in "$(p /mnt/system)/"*) say "SYSTEM_WRITE_FAILED stage=copy target=$dst"; system_space_snapshot publish_copy_failed ;; esac

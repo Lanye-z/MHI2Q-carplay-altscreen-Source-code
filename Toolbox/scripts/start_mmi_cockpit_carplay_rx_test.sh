@@ -291,7 +291,9 @@ publish_system_file(){
         return 0
     fi
     rm -f "$tmp" 2>/dev/null || true
-    if ! cp "$src" "$tmp"; then
+    if cp "$src" "$tmp"; then
+        :
+    else
         rc=$?
         rm -f "$tmp" 2>/dev/null || true
         echo "SYSTEM_WRITE_FAILED stage=copy target=$dst"

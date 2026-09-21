@@ -70,13 +70,14 @@ publish_system_file(){
     src=$1; dst=$2; mode=$3; dir=${dst%/*}; base=${dst##*/}; tmp="$dir/.$base.altscreen.new.$$"
     if cmp -s "$src" "$dst" 2>/dev/null; then chmod "$mode" "$dst" 2>/dev/null || return 1; echo "SYSTEM_PUBLISH=SKIP_IDENTICAL target=$dst"; return 0; fi
     rm -f "$tmp" 2>/dev/null || true
-    if ! cp "$src" "$tmp"; then rc=$?; rm -f "$tmp" 2>/dev/null || true; echo "SYSTEM_WRITE_FAILED stage=copy target=$dst"; system_space_snapshot restore_publish_failed; return "$rc"; fi
+    if cp "$src" "$tmp"; then :; else rc=$?; rm -f "$tmp" 2>/dev/null || true; echo "SYSTEM_WRITE_FAILED stage=copy target=$dst"; system_space_snapshot restore_publish_failed; return "$rc"; fi
     chmod "$mode" "$tmp" || { rc=$?; rm -f "$tmp" 2>/dev/null || true; return "$rc"; }
     cmp -s "$src" "$tmp" || { rm -f "$tmp" 2>/dev/null || true; return 1; }
     mv "$tmp" "$dst" || { rc=$?; rm -f "$tmp" 2>/dev/null || true; return "$rc"; }
 }
 cleanup_txn(){ [ ! -e "$TXN_DIR" ] || rm -rf "$TXN_DIR" 2>/dev/null || true; }
-trap cleanup_txn 0 1 2 15
+trap cleanup_txn 0
+trap 'cleanup_txn; exit 130' 1 2 15
 
 verify_backup(){
     [ -f "$BACKUP/COMPLETE" ] || return 1

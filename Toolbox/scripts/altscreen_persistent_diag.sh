@@ -45,7 +45,7 @@ publish_system_file(){
     src=$1; dst=$2; mode=$3; dir=${dst%/*}; base=${dst##*/}; tmp="$dir/.$base.altscreen.new.$$"
     if cmp -s "$src" "$dst" 2>/dev/null; then chmod "$mode" "$dst" 2>/dev/null || return 1; echo "SYSTEM_PUBLISH=SKIP_IDENTICAL target=$dst"; return 0; fi
     rm -f "$tmp" 2>/dev/null || true
-    if ! cp "$src" "$tmp"; then rc=$?; rm -f "$tmp" 2>/dev/null || true; return "$rc"; fi
+    if cp "$src" "$tmp"; then :; else rc=$?; rm -f "$tmp" 2>/dev/null || true; return "$rc"; fi
     chmod "$mode" "$tmp" || { rc=$?; rm -f "$tmp" 2>/dev/null || true; return "$rc"; }
     cmp -s "$src" "$tmp" || { rm -f "$tmp" 2>/dev/null || true; return 1; }
     mv "$tmp" "$dst" || { rc=$?; rm -f "$tmp" 2>/dev/null || true; return "$rc"; }
@@ -96,7 +96,8 @@ install_diag(){
     sys_rw=0; app_rw=0
     txn="$TXN_ROOT/diag-install.$$"
     ensure_dirs "$txn" || return 1
-    trap 'rm -rf "$txn" 2>/dev/null || true' 0 1 2 15
+    trap 'rm -rf "$txn" 2>/dev/null || true' 0
+    trap 'rm -rf "$txn" 2>/dev/null || true; exit 130' 1 2 15
     if ! mount_app_rw; then return 1; fi
     app_rw=1
 
@@ -202,7 +203,8 @@ remove_diag(){
     sys_rw=0; app_rw=0
     txn="$TXN_ROOT/diag-remove.$$"
     ensure_dirs "$txn" || return 1
-    trap 'rm -rf "$txn" 2>/dev/null || true' 0 1 2 15
+    trap 'rm -rf "$txn" 2>/dev/null || true' 0
+    trap 'rm -rf "$txn" 2>/dev/null || true; exit 130' 1 2 15
     clean="$txn/startup.clean"
     if ! strip_block "$startup" > "$clean" || ! sh -n "$clean"; then return 1; fi
     if ! mount_app_rw; then return 1; fi
