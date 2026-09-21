@@ -54,7 +54,20 @@ jobs:
       - name: Install ARM build inspection tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends clang lld binutils-arm-linux-gnueabihf python3-pyelftools
+          sudo apt-get install -y --no-install-recommends clang lld g++ libgles2-mesa-dev binutils-arm-linux-gnueabihf python3-pyelftools
+
+      - name: Syntax-check V3.1 sidecar geometry sources
+        if: github.ref == 'refs/heads/experiment/oem-layout-second-screen_v3.1'
+        run: |
+          set -euo pipefail
+          g++ -std=c++98 -Wall -Wextra -Werror -fsyntax-only \
+            -IToolbox/carplay_alt_screen/mirror_display/src \
+            -IToolbox/carplay_alt_screen/src \
+            Toolbox/carplay_alt_screen/mirror_display/src/main.cpp
+          g++ -std=c++98 -Wall -Wextra -Werror -fsyntax-only \
+            -IToolbox/carplay_alt_screen/mirror_display/src \
+            Toolbox/carplay_alt_screen/mirror_display/src/gl_renderer.cpp
+          echo "V31_SIDECAR_SOURCE_SYNTAX=PASS"
 
       - name: Verify authorization marker source contract
         run: |
