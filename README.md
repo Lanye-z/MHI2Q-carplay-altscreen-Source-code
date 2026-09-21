@@ -332,7 +332,21 @@ Cluster visible area
 
 ### 1. 准备测试 SD 卡
 
-下载目标分支 ZIP 并解压，保持仓库目录结构完整，将测试文件放入 SD 卡。
+V3 分支已经按“**分支 ZIP 可直接安装**”方式发布。下载本分支的 GitHub `Download ZIP` 后解压，确认根目录存在：
+
+```text
+BRANCH-ZIP-READY.txt
+VERIFY-BRANCH-ZIP-READY.sh
+Toolbox/
+```
+
+其中 `BRANCH-ZIP-READY.txt` 必须包含 `BRANCH_ZIP_READY=YES`。如在电脑上具备 `sha256sum`，还可以在仓库根目录执行：
+
+```bash
+sh VERIFY-BRANCH-ZIP-READY.sh
+```
+
+看到 `BRANCH_ZIP_VERIFY=PASS` 后即可将**解压后的仓库根目录内容**复制到 SD 卡根目录。不要把 GitHub 自动生成的最外层 `altscreen-test-...` 文件夹本身再套一层复制到 SD 卡，否则车机会找不到根目录下的 `Toolbox/`。
 
 进入工程菜单中的：
 
