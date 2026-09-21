@@ -42,7 +42,8 @@ EXPECTED_CKSUM=180684234
 file_size(){ n=$(wc -c < "$1" 2>/dev/null) || { echo 0; return; }; set -- $n; echo "${1:-0}"; }
 file_cksum(){ if command -v cksum >/dev/null 2>&1; then cksum < "$1" 2>/dev/null | awk '{print $1}'; else echo unavailable; fi; }
 
-echo "=== CarPlay private111 Direct Display V2 ==="
+echo "=== CarPlay private111 Direct Display V3 Wheel Zoom ==="
+echo "DISPLAY_BASELINE=V2_UNCHANGED control=changeMapZoomLevel"
 echo "SOURCE_PATH=private111_ScreenStreamProcessData"
 echo "H264_TAP=/carplay111_h264"
 echo "DECODER_BACKEND=stock_omx_screen_linearized_shm decoded_shm=/carplay111_decoded"

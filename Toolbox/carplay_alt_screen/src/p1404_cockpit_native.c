@@ -636,6 +636,34 @@ static int native_read_view_area_target(void) {
     return target;
 }
 
+/*
+ * V3 wheel control follows the proven Java-owned Context80 route, not the
+ * retired native Context76/displayable58 route.  Java publishes this small
+ * state atomically and only sets cluster_owned=1 after Context80 readback has
+ * succeeded for an active CarPlay session.  Missing/partial/old state fails
+ * closed so a wheel event can never escape to a stale or non-CarPlay session.
+ */
+static int native_read_cluster_owned_for_zoom(void) {
+    FILE *f;
+    char line[192];
+    int carplay_session = 0;
+    int cluster_owned = 0;
+
+    f = fopen("/tmp/mmi-mirror-hmi.state", "r");
+    if (!f) return 0;
+
+    while (fgets(line, sizeof(line), f)) {
+        if (!strncmp(line, "carplay_session=1", 17u) &&
+            (line[17] == '\n' || line[17] == '\r' || line[17] == 0))
+            carplay_session = 1;
+        else if (!strncmp(line, "cluster_owned=1", 15u) &&
+                 (line[15] == '\n' || line[15] == '\r' || line[15] == 0))
+            cluster_owned = 1;
+    }
+    fclose(f);
+    return carplay_session && cluster_owned;
+}
+
 #define WHEEL_ZOOM_EVENT_FILE "/tmp/mmi-mirror-wheel-zoom.events"
 #define WHEEL_ZOOM_BATCH_MAX 32u
 
@@ -723,7 +751,7 @@ static void *native_monitor_worker(void *arg) {
     uint32_t state_generation = job ? job->state_generation : 0;
     uint64_t now;
     int visible, pending, live, route_ready, event_kind, send_rc;
-    int desired_view_area, view_area_send_index, zoom_gate;
+    int desired_view_area, view_area_send_index, zoom_gate, cluster_owned;
     struct wheel_zoom_event zoom_events[WHEEL_ZOOM_BATCH_MAX];
     unsigned zoom_count, zoom_i;
     uint32_t zoom_last_seq = native_wheel_zoom_max_seq();
@@ -741,6 +769,7 @@ static void *native_monitor_worker(void *arg) {
         usleep(100000u);
         now = obs_now_us();
         desired_view_area = native_read_view_area_target();
+        cluster_owned = native_read_cluster_owned_for_zoom();
         zoom_count = native_read_wheel_zoom_events(
             zoom_last_seq, zoom_events, WHEEL_ZOOM_BATCH_MAX);
         event_kind = 0;
@@ -829,7 +858,7 @@ static void *native_monitor_worker(void *arg) {
 
         if (!live) break;
 
-        zoom_gate = route_ready && visible && native_route_requested();
+        zoom_gate = route_ready && cluster_owned;
 
         if (event_kind == ALT111_EVENT_UPDATE_VIEW_AREA) {
             send_rc = alt_send_cluster_view_area(
@@ -863,7 +892,8 @@ static void *native_monitor_worker(void *arg) {
                 ze->direction, ze->magnification, ze->delta,
                 ze->step, ze->steps,
                 zoom_gate ? "queued" : "dropped",
-                zoom_gate ? "cluster_owned_route_ready" : "route_not_ready_or_not_visible");
+                zoom_gate ? "java80_cluster_owned_route_ready" :
+                            "route_not_ready_or_java80_cluster_not_owned");
             if (!zoom_gate) continue;
             send_rc = alt_send_cluster_zoom(
                 receiver, stream, generation, ze->seq, ze->direction);

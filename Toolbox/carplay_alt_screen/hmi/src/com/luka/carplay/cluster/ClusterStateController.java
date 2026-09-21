@@ -153,7 +153,7 @@ public final class ClusterStateController {
     }
 
     public static boolean isClusterOwned() {
-        return ownershipIntent;
+        return carPlaySessionActive && ownershipIntent && compositeApplied;
     }
 
     public static boolean isContextWriterThread() {
@@ -410,6 +410,7 @@ public final class ClusterStateController {
         String signature = layout + "/" + view + "/" + layoutName + "/"
             + smallDx + "/" + smallDy
             + "/cp=" + (carPlaySessionActive ? "1" : "0")
+            + "/owned=" + (isClusterOwned() ? "1" : "0")
             + "/rgi=" + (rgiPresentationActive ? "1" : "0");
         if (!signature.equals(lastStateSignature)) {
             lastStateSignature = signature;
@@ -1180,6 +1181,7 @@ public final class ClusterStateController {
                 + "small_stage_dx=" + smallDx + "\n"
                 + "small_stage_dy=" + smallDy + "\n"
                 + "carplay_session=" + (carPlaySessionActive ? "1" : "0") + "\n"
+                + "cluster_owned=" + (isClusterOwned() ? "1" : "0") + "\n"
                 + "rgi_active=" + (rgiPresentationActive ? "1" : "0") + "\n";
             out.write(text.getBytes("UTF-8"));
             out.flush();

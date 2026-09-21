@@ -8,7 +8,17 @@ on:
       - '.github/workflows/wheel-zoom-v3.yml'
       - 'Toolbox/carplay_alt_screen/src/**'
       - 'Toolbox/carplay_alt_screen/hmi/**'
+      - 'Toolbox/carplay_alt_screen/mirror_display/**'
+      - 'Toolbox/carplay_alt_screen/universal/**'
+      - 'Toolbox/carplay_alt_screen/tests/**'
+      - 'Toolbox/scripts/altscreen_*.sh'
+      - 'Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh'
+      - 'Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh'
+      - 'Toolbox/scripts/stop_mmi_cockpit_carplay_test.sh'
       - 'Toolbox/scripts/status_mmi_cockpit_carplay_test.sh'
+      - 'VERIFY-NATIVE-DIRECT-RELEASE.sh'
+      - 'PACKAGE_SOURCE_MAP.json'
+      - 'SHA256SUMS.txt'
       - 'OEM-LAYOUT-SECOND-SCREEN-V3-WHEEL-ZOOM.md'
       - 'README.md'
   workflow_dispatch:
@@ -312,9 +322,18 @@ jobs:
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
           grep -Fq 'stale_events_before_attach=discarded' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
-          grep -Fq \
-            'zoom_gate = route_ready && visible && native_route_requested();' \
+          grep -Fq 'static int native_read_cluster_owned_for_zoom(void)' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'cluster_owned = native_read_cluster_owned_for_zoom();' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'zoom_gate = route_ready && cluster_owned;' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          if grep -Fq \
+            'zoom_gate = route_ready && visible && native_route_requested();' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c; then
+            echo 'ERROR: V3 wheel gate still depends on retired Context76 route state' >&2
+            exit 1
+          fi
 
           grep -Fq 'delta < 0 ? 0 : 1' \
             Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
@@ -322,10 +341,20 @@ jobs:
             Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
           grep -Fq 'if (!active) WheelZoomBridge.reset();' \
             Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java
+          grep -Fq \
+            'return carPlaySessionActive && ownershipIntent && compositeApplied;' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java
+          grep -Fq 'cluster_owned=' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java
+          grep -Fq 'mode=PRIVATE111_DIRECT_DISPLAY_V3_WHEEL_ZOOM' \
+            Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh
+          grep -Fq 'wheel_zoom_build_status=COMPILED_READY_FOR_VEHICLE_TEST' \
+            Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh
 
+          sh -n Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh
           sh -n Toolbox/scripts/status_mmi_cockpit_carplay_test.sh
 
-          echo "WHEEL_PROTOCOL_STATIC=PASS wire=changeMapZoomLevel params=uuid+zoomDirection direction=0_in_1_out local_pixel_zoom=NO"
+          echo "WHEEL_PROTOCOL_STATIC=PASS wire=changeMapZoomLevel params=uuid+zoomDirection direction=0_in_1_out local_pixel_zoom=NO gate=java80_verified_ownership"
 
       - name: Refresh package identities in test artifact
         run: |
@@ -490,8 +519,14 @@ jobs:
 
           grep -Fq 'CARPLAY_WHEEL_ZOOM_PROTOCOL=changeMapZoomLevel' \
             Toolbox/scripts/status_mmi_cockpit_carplay_test.sh
+          grep -Fq 'mode=PRIVATE111_DIRECT_DISPLAY_V3_WHEEL_ZOOM' \
+            Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt
+          grep -Fq 'wheel_zoom_build_status=COMPILED_READY_FOR_VEHICLE_TEST' \
+            Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt
+          grep -Fq 'ACTION=RUN_WHEEL_ZOOM_V3_BUILD' \
+            Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh
 
-          echo "V3_VEHICLE_TEST_CONTRACT=PASS"
+          echo "V3_VEHICLE_TEST_CONTRACT=PASS gate=java80_verified_ownership installer_fail_closed=YES"
 
       - name: Stage complete vehicle-test SD package
         run: |
