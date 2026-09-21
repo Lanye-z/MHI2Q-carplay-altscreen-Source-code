@@ -23,6 +23,9 @@ on:
       - 'Toolbox/carplay_alt_screen/tests/test_start_autostart_transaction.sh'
       - 'Toolbox/carplay_alt_screen/tests/test_storage_policy.sh'
       - 'VERIFY-NATIVE-DIRECT-RELEASE.sh'
+      - 'VERIFY-BRANCH-ZIP-READY.sh'
+      - 'Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt'
+      - 'BRANCH-ZIP-READY.txt'
       - '.github/workflows/altscreen-probe-marker-contract.yml'
   workflow_dispatch:
 
@@ -86,43 +89,102 @@ jobs:
           cp "$out/libcarplay_altscreen.so" "$dst"
 
           python3 <<'PY'
-          import hashlib, json, pathlib
+          import hashlib, json, os, pathlib, re
           root = pathlib.Path('.')
+          hook_rel = 'Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so'
+          hmi_rel = 'Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt'
+          jar_rel = 'Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar'
+          ready_rel = 'BRANCH-ZIP-READY.txt'
+          branch_verify_rel = 'VERIFY-BRANCH-ZIP-READY.sh'
+
+          def digest(rel):
+              return hashlib.sha256((root / rel).read_bytes()).hexdigest()
+
+          hook_sha = digest(hook_rel)
+          jar_sha = digest(jar_rel)
+
+          hmi = root / hmi_rel
+          text = hmi.read_text()
+          updates = {
+              'universal_runtime_sha256': hook_sha,
+              'branch_zip_status': 'READY_FOR_VEHICLE_TEST',
+              'branch_zip_policy': 'GITHUB_BRANCH_ZIP_INSTALLABLE',
+          }
+          for key, value in updates.items():
+              pattern = r'^' + re.escape(key) + r'=.*$'
+              line = key + '=' + value
+              if re.search(pattern, text, flags=re.M):
+                  text = re.sub(pattern, line, text, flags=re.M)
+              else:
+                  if text and not text.endswith('\n'):
+                      text += '\n'
+                  text += line + '\n'
+          hmi.write_text(text)
+
+          info = {}
+          for line in text.splitlines():
+              if '=' in line:
+                  key, value = line.split('=', 1)
+                  info[key] = value
+
+          ready = root / ready_rel
+          ready.write_text(
+              'BRANCH_ZIP_READY=YES\n'
+              'branch=' + os.environ.get('GITHUB_REF_NAME', 'unknown') + '\n'
+              'validated_source_commit=' + os.environ.get('GITHUB_SHA', 'unknown') + '\n'
+              'mode=' + info.get('mode', 'unknown') + '\n'
+              'jar_size=' + info.get('jar_size', 'unknown') + '\n'
+              'jar_cksum=' + info.get('jar_cksum', 'unknown') + '\n'
+              'jar_sha256=' + jar_sha + '\n'
+              'universal_runtime_sha256=' + hook_sha + '\n'
+              'display_chain=V2_BASELINE\n'
+              'install_policy=EXTRACT_BRANCH_ZIP_CONTENTS_TO_SD_ROOT\n'
+              'verifier=VERIFY-BRANCH-ZIP-READY.sh\n'
+          )
+
           p = root / 'PACKAGE_SOURCE_MAP.json'
           data = json.loads(p.read_text())
           for rel in list(data):
               path = root / rel
               if path.is_file():
-                  data[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
-          hook_rel = 'Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so'
-          data[hook_rel] = hashlib.sha256((root / hook_rel).read_bytes()).hexdigest()
+                  data[rel] = digest(rel)
+          for rel in [hook_rel, hmi_rel, jar_rel, ready_rel, branch_verify_rel]:
+              if (root / rel).is_file():
+                  data[rel] = digest(rel)
           p.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n')
 
           sums = root / 'SHA256SUMS.txt'
-          lines = []
-          seen = set()
+          table = {}
           for line in sums.read_text().splitlines():
               parts = line.split(None, 1)
               if len(parts) == 2:
                   rel = parts[1].strip()
                   path = root / rel
                   if path.is_file():
-                      line = f"{hashlib.sha256(path.read_bytes()).hexdigest()} {rel}"
-                      seen.add(rel)
-              lines.append(line)
-          if hook_rel not in seen:
-              lines.append(f"{hashlib.sha256((root / hook_rel).read_bytes()).hexdigest()} {hook_rel}")
-          sums.write_text('\n'.join(lines) + '\n')
+                      table[rel] = digest(rel)
+          for rel in [hook_rel, hmi_rel, jar_rel, ready_rel, branch_verify_rel,
+                      'PACKAGE_SOURCE_MAP.json']:
+              if (root / rel).is_file():
+                  table[rel] = digest(rel)
+          table.pop('SHA256SUMS.txt', None)
+          sums.write_text(''.join(f"{table[rel]} {rel}\n" for rel in sorted(table)))
           PY
 
           sh VERIFY-NATIVE-DIRECT-RELEASE.sh
+          sh VERIFY-BRANCH-ZIP-READY.sh
 
       - name: Commit promoted universal runtime
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so PACKAGE_SOURCE_MAP.json SHA256SUMS.txt
+          git add \
+            Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so \
+            Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt \
+            BRANCH-ZIP-READY.txt \
+            VERIFY-BRANCH-ZIP-READY.sh \
+            PACKAGE_SOURCE_MAP.json \
+            SHA256SUMS.txt
           if ! git diff --cached --quiet; then
             git commit -m "build(altscreen): promote authorization-marker fix [skip ci]"
             git fetch origin "$GITHUB_REF_NAME"
