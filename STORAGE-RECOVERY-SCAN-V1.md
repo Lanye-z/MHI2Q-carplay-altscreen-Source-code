@@ -52,6 +52,7 @@ The report contains:
 ## Scanned vehicle locations
 
 - `/mnt/system/etc/boot`
+- `/etc/boot` (alternate startup location used by some builds)
 - `/mnt/system/etc/eso/production`
 - `/mnt/system/etc`
 - `/mnt/app/root`
@@ -76,7 +77,9 @@ It only classifies evidence as:
 - `TEMP_CANDIDATE` — historical transaction/staging naming;
 - `ROLLBACK_REVIEW` — previous-runtime or previous-mirror rollback data;
 - `LEGACY_REVIEW` — historical hooks/markers that may still be referenced;
-- `SD_REVIEW` — old SD transaction/staging data.
+- `SD_REVIEW` — old SD transaction/staging data, including operation-lock evidence.
+
+Historical HMI JAR staging, legacy `lib-target`/`hooks` atomic staging, BaseVideo3 boot scratch, diagnostics scratch, firewall scratch, and previous-runtime rollback paths are explicitly included in the candidate scan.
 
 The generated summary always states:
 
