@@ -17,6 +17,7 @@ on:
       - 'Toolbox/scripts/status_mmi_cockpit_carplay_test.sh'
       - 'Toolbox/carplay_alt_screen/tests/test_start_autostart_transaction.sh'
       - 'Toolbox/carplay_alt_screen/tests/test_storage_policy.sh'
+      - 'Toolbox/carplay_alt_screen/tests/test_restore_transaction.sh'
       - 'VERIFY-NATIVE-DIRECT-RELEASE.sh'
       - 'VERIFY-BRANCH-ZIP-READY.sh'
       - 'Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt'
@@ -91,6 +92,7 @@ jobs:
           jar_rel = 'Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar'
           ready_rel = 'BRANCH-ZIP-READY.txt'
           branch_verify_rel = 'VERIFY-BRANCH-ZIP-READY.sh'
+          restore_tx_test_rel = 'Toolbox/carplay_alt_screen/tests/test_restore_transaction.sh'
 
           def digest(rel):
               return hashlib.sha256((root / rel).read_bytes()).hexdigest()
@@ -145,7 +147,8 @@ jobs:
               path = root / rel
               if path.is_file():
                   data[rel] = digest(rel)
-          for rel in [hook_rel, hmi_rel, jar_rel, ready_rel, branch_verify_rel]:
+          for rel in [hook_rel, hmi_rel, jar_rel, ready_rel, branch_verify_rel,
+                      restore_tx_test_rel]:
               if (root / rel).is_file():
                   data[rel] = digest(rel)
           p.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n')
@@ -160,7 +163,7 @@ jobs:
                   if path.is_file():
                       table[rel] = digest(rel)
           for rel in [hook_rel, hmi_rel, jar_rel, ready_rel, branch_verify_rel,
-                      'PACKAGE_SOURCE_MAP.json']:
+                      restore_tx_test_rel, 'PACKAGE_SOURCE_MAP.json']:
               if (root / rel).is_file():
                   table[rel] = digest(rel)
           table.pop('SHA256SUMS.txt', None)
