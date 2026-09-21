@@ -59,9 +59,11 @@ delta > 0 -> ZOOM_OUT
 
 Do **not** port the old local zoom levels, UV transform, destination scaling, or 0.50x..1.50x mapping.
 
-## Candidate CarPlay wire command — MUST be locally verified before enabling
+## Confirmed CarPlay wire command
 
-A public reverse-engineered CarPlay receiver implementation currently records the cluster map zoom command as:
+The 2026-09-21 local CarPlay Simulator static-binary audit confirmed the real command construction path. This is no longer a guessed/public-reference-only candidate.
+
+The command is:
 
 ```text
 type = "changeMapZoomLevel"
@@ -72,15 +74,19 @@ params:
   zoomDirection = 1   # zoom out / '-'
 ```
 
-It also identifies the SDK entry point:
+Static disassembly also confirms the SDK-facing signature `AirPlayReceiverSessionChangeMapZoomLevel(...)`, but that symbol is not exported by the target AirPlayReceiver runtime. The real transport path remains the already-used `AirPlayReceiverSessionSendCommand` dictionary sender.
 
-```text
-AirPlayReceiverSessionChangeMapZoomLevel(...)
-```
+Confirmed facts:
 
-Some reverse-engineering notes mention a `zoomFactor` key, while the working sender implementation emits only `uuid + zoomDirection`. Therefore V3 must **not** guess whether `zoomFactor` is required or what value/type it uses.
+- `type = "changeMapZoomLevel"`
+- params contain exactly `uuid` and `zoomDirection`
+- `zoomDirection` is an integer / CFNumber
+- `0 = Zoom In`
+- `1 = Zoom Out`
+- `zoomFactor` is not present in the command-construction path
+- transport is AirPlay RTSP `POST /command` with binary-plist payload
 
-Before enabling this command on the vehicle, verify the exact command dictionary using the local Xcode / CarPlay Simulator environment and preferably capture the actual argument passed to `AirPlayReceiverSessionSendCommand`.
+Runtime completion semantics and app-specific behavior remain vehicle-test items; they are logged without assuming that a non-null response is required for success.
 
 ## Current native integration point
 
@@ -200,14 +206,20 @@ Do not modify for this feature unless evidence proves it is necessary:
 - Sport Small `-476` translation;
 - Main110.
 
-## Implementation gate
+## Implementation / vehicle-test gate
 
-The branch is intentionally created before the zoom command is enabled.
+The protocol gate is now satisfied at STATIC_BINARY level. V3 implements the sender using the same active receiver, private111 stream generation and cluster display UUID already proven by `showUI` / `updateViewArea`.
 
-Next gate:
+The Java transport is an append-only discrete event queue. A callback with `delta=-3` emits three ordered Zoom In records; native scans all complete committed records, consumes them at most once, discards stale pre-attach records, and sends only while the current private111 generation is route-ready and visible.
+
+Vehicle-test acceptance now requires:
 
 ```text
-LOCAL_XCODE_PROTOCOL_CAPTURE == PASS
+wheel callback captured
+  -> every signed-delta step preserved
+  -> CLUSTER_ZOOM_SUBMIT issued on current generation
+  -> completion callback logged
+  -> incoming type111 content itself changes map scale
 ```
 
-Only after the local capture proves command type, parameter keys, value types, direction mapping, target UUID semantics, and callback/response behavior should V3 add the vehicle sender.
+Test Apple Maps and Amap separately. Completion callback semantics remain observational until the vehicle run provides evidence.
