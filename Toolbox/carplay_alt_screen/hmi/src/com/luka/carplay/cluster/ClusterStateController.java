@@ -448,7 +448,8 @@ public final class ClusterStateController {
             + "/" + (applied ? "1" : "0")
             + "/" + actual
             + "/" + (owned ? "1" : "0");
-        if (signature.equals(lastClusterOwnershipSignature)) return;
+        if (signature.equals(lastClusterOwnershipSignature)
+            && new File(CLUSTER_OWNERSHIP_STATE_FILE).exists()) return;
 
         String text = "version=1\n"
             + "carplay_session=" + (cp ? "1" : "0") + "\n"
