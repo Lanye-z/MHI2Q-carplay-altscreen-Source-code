@@ -1,4 +1,4 @@
-**V3 开发状态：已从实车稳定 V2 基线分叉，目标为“方向盘滚轮 → CarPlay Instrument Cluster 真正地图缩放”。** 当前 V3 暂未猜测或启用任何 zoom wire command；在本地 Xcode / CarPlay Simulator 完成 `changeMapZoomLevel` 协议字段、方向值、UUID 与响应语义验证前，V2 的 private111 / OMX / sidecar / displayable3 / Context80 显示链保持不动。开发说明见 [OEM-LAYOUT-SECOND-SCREEN-V3-WHEEL-ZOOM.md](OEM-LAYOUT-SECOND-SCREEN-V3-WHEEL-ZOOM.md)。
+**V3 开发状态：CarPlay Instrument Cluster 真地图缩放协议已完成 STATIC_BINARY 级逆向确认，V3 已接入“方向盘滚轮 → 离散事件队列 → `changeMapZoomLevel` → iPhone 地图重渲染”控制链。** Wire contract 为 `params{uuid, zoomDirection}`，其中 `0=Zoom In`、`1=Zoom Out`、无 `zoomFactor`；V2 的 private111 / OMX / sidecar / displayable3 / Context80 显示链保持不动。实车仍需验证 completion 语义以及 Apple Maps / Amap 的真实缩放响应，详见 [OEM-LAYOUT-SECOND-SCREEN-V3-WHEEL-ZOOM.md](OEM-LAYOUT-SECOND-SCREEN-V3-WHEEL-ZOOM.md)。
 
 **实车状态：已完成本分支实车验证。** 当前版本已验证 private111 → stock OMX → Screen linearizer → decoded SHM → source-driven sidecar → displayable3 → Context80 全链路可长期运行；FULL / SMALL 可在同一 CarPlay 会话内通过 `updateViewArea` 动态切换，Sport Small 的 `-476` 平移也已实车生效。当前主要剩余问题不再是“能否点亮”，而是 **1440×542 源画面 → 1440×455 displayable3 的几何实现是否值得进一步改成更接近 OEM 的 1:1 + position/cropping 路径**。
 
