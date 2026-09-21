@@ -1,21 +1,14 @@
 # Storage Recovery Scan V1
 
-This branch is derived from `experiment/oem-layout-second-screen_v2` and exists only to inspect historical AltScreen / MMI-Cockpit-Carplay storage residue.
+This branch is derived from `experiment/oem-layout-second-screen_v2` and provides a recovery toolbox for historical AltScreen / MMI-Cockpit-Carplay storage residue. It keeps the original read-only scanner and adds one reviewed, SD-backed cleanup action.
 
 ## Scope
 
-The V1 recovery tool is **read-only with respect to vehicle persistent filesystems**.
+The **SCAN** action remains read-only with respect to vehicle persistent filesystems.
 
-It does not:
+The **CLEAN** action is intentionally narrow. It only removes the reviewed legacy files listed below, after copying every target to SD and verifying the backup. It refuses to run without a writable Toolbox SD card, when the AltScreen operation lock is present, or when the live startup file cannot be checksummed.
 
-- remount `/mnt/system` writable;
-- remount `/mnt/app` writable;
-- delete files;
-- move files;
-- copy or overwrite vehicle files;
-- attempt INSTALL, START, RESTORE, or cleanup.
-
-It only reads known historical locations and writes a report.
+Neither action performs INSTALL, START, RESTORE, or rewrites the live `startup.sh` / JSON / firewall configuration.
 
 ## GEM page
 
@@ -23,9 +16,12 @@ A parallel `Customization` page is added:
 
 `MMI-Cockpit-Carplay Storage Recovery`
 
-The only action in V1 is:
+The page contains two actions:
 
-`SCAN STORAGE - READ ONLY`
+- `SCAN STORAGE - READ ONLY`
+- `CLEAN CONFIRMED LEGACY FILES`
+
+The cleanup button logs every candidate, backup, deletion, skip and refusal.
 
 ## Report destination
 
@@ -85,12 +81,30 @@ The generated summary always states:
 
 `CLASSIFICATION=SCAN_ONLY_NOT_DELETE_AUTHORITY`
 
-Deletion rules should only be added after a real vehicle scan has been reviewed.
+The reviewed cleanup whitelist is:
+
+- `/mnt/system/etc/boot/startup.sh.basevideo3.{block,clean,new,original}.<numeric PID>`
+- `/mnt/system/etc/boot/startup.sh.mirror.{block,clean,new,original}.<numeric PID>`
+- `/mnt/app/root/hooks/libcp_mirror.so` only when the MMI Mirror runtime is absent and no live config references the hook
+- `/mnt/app/root/carplay-altscreen/tmp/mirror.previous` only when the MMI Mirror runtime is absent
+
+No other scanned candidate is deleted by this cleanup action.
+
+Before deletion, each target is backed up under:
+
+`<SD>/MMI-Cockpit-Carplay/cleanup-backup/cleanup_<timestamp>_<pid>/`
+
+Cleanup logs are written under:
+
+`<SD>/MMI-Cockpit-Carplay/logs/storage-recovery/cleanup_<timestamp>_<pid>/`
+
+The cleanup report includes `DF.before.txt`, `DF.after.txt`, `delete_manifest.txt`, `delete_results.txt`, `skipped_files.txt`, live checksums before/after, a completion marker, and the automatic post-clean scan output.
 
 ## Recommended vehicle workflow
 
-1. Put this branch/package on the SD card.
+1. Put this branch/package on the SD card and update the Toolbox scripts/GEM.
 2. Open `Customization -> MMI-Cockpit-Carplay Storage Recovery`.
-3. Run `SCAN STORAGE - READ ONLY`.
-4. Copy the generated `storage_scan_*` directory from the SD card.
-5. Review the report before implementing or running any cleanup action.
+3. Run `SCAN STORAGE - READ ONLY` when a fresh inventory is desired.
+4. Run `CLEAN CONFIRMED LEGACY FILES` only for the reviewed historical residue described above.
+5. Wait for `CLEANUP=PASS`, `STARTUP_UNCHANGED=YES`, and `POST_SCAN=PASS`.
+6. Review or share the complete `logs/storage-recovery/cleanup_*` directory. The deleted originals remain recoverable from `cleanup-backup/cleanup_*` on the SD card.
