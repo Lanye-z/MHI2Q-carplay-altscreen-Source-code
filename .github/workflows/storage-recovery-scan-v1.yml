@@ -1,0 +1,42 @@
+name: Storage Recovery Scan V1
+
+on:
+  push:
+    branches:
+      - tool/storage-recovery-scan-v1
+    paths:
+      - 'Toolbox/GEM/mqb-carplayAltScreenStorageRecovery.esd'
+      - 'Toolbox/scripts/altscreen_storage_recovery_scan.sh'
+      - 'Toolbox/carplay_alt_screen/tests/test_storage_recovery_scan.sh'
+      - 'STORAGE-RECOVERY-SCAN-V1.md'
+      - '.github/workflows/storage-recovery-scan-v1.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-read-only-scanner:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run read-only storage recovery fixture
+        run: |
+          set -euo pipefail
+          sh Toolbox/carplay_alt_screen/tests/test_storage_recovery_scan.sh
+
+      - name: Verify scanner safety contract
+        run: |
+          set -euo pipefail
+          scan='Toolbox/scripts/altscreen_storage_recovery_scan.sh'
+          gem='Toolbox/GEM/mqb-carplayAltScreenStorageRecovery.esd'
+          grep -Fq 'READ_ONLY_SCAN=YES' "$scan"
+          grep -Fq 'DELETE_PERFORMED=NO' "$scan"
+          grep -Fq 'CLASSIFICATION=SCAN_ONLY_NOT_DELETE_AUTHORITY' "$scan"
+          grep -Fq 'screen "MMI-Cockpit-Carplay Storage Recovery" Customization' "$gem"
+          if grep -Eq '(^|[[:space:]])(rm|mv|cp|mount)[[:space:]]' "$scan"; then
+            echo 'destructive or mount command found in read-only scanner' >&2
+            exit 1
+          fi
+          echo 'STORAGE_RECOVERY_READ_ONLY_CONTRACT=PASS'
