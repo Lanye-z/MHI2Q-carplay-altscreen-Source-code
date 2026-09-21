@@ -32,7 +32,7 @@ fi
 
 STATE="$VOLUME/MMI-Cockpit-Carplay/state"
 BOOT_BACKUP="$VOLUME/MMI-Cockpit-Carplay/backup/boot-diagnostics"
-TXN_ROOT="$ROOT/tmp/MMI-Cockpit-Carplay/txn"
+TXN_ROOT="$VOLUME/MMI-Cockpit-Carplay/staging/diag-txn"
 ENABLED="$ROOT/mnt/app/root/carplay-altscreen/state/diagnostics.enabled"
 DEVICE_SCRIPTS="$ROOT/mnt/app/root/carplay-altscreen/bin"
 ensure_dirs "$STATE" || exit 1
