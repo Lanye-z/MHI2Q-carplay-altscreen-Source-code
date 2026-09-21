@@ -7,6 +7,7 @@ on:
       - experiment/oem-layout-second-screen_v3
     paths:
       - 'Toolbox/carplay_alt_screen/src/p1404_resolve.c'
+      - 'Toolbox/scripts/altscreen_chain_test.sh'
       - 'Toolbox/scripts/altscreen_chain_test_universal.sh'
       - 'Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh'
       - 'Toolbox/scripts/stop_mmi_cockpit_carplay_test.sh'
