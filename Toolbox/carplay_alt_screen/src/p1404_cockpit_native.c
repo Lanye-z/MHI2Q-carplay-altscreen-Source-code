@@ -643,31 +643,46 @@ static int native_read_view_area_target(void) {
  * succeeded for an active CarPlay session.  Missing/partial/old state fails
  * closed so a wheel event can never escape to a stale or non-CarPlay session.
  */
+#define CLUSTER_OWNERSHIP_STATE_FILE "/tmp/mmi-mirror-cluster-ownership.state"
+
 static int native_read_cluster_owned_for_zoom(void) {
     FILE *f;
     char line[192];
+    int version = 0;
     int carplay_session = 0;
     int cluster_owned = 0;
+    int composite_applied = 0;
+    int context = -1;
 
-    f = fopen("/tmp/mmi-mirror-hmi.state", "r");
+    f = fopen(CLUSTER_OWNERSHIP_STATE_FILE, "r");
     if (!f) return 0;
 
     while (fgets(line, sizeof(line), f)) {
-        if (!strncmp(line, "carplay_session=1", 17u) &&
-            (line[17] == '\n' || line[17] == '\r' || line[17] == 0))
+        if (!strncmp(line, "version=1", 9u) &&
+            (line[9] == '\n' || line[9] == '\r' || line[9] == 0))
+            version = 1;
+        else if (!strncmp(line, "carplay_session=1", 17u) &&
+                 (line[17] == '\n' || line[17] == '\r' || line[17] == 0))
             carplay_session = 1;
         else if (!strncmp(line, "cluster_owned=1", 15u) &&
                  (line[15] == '\n' || line[15] == '\r' || line[15] == 0))
             cluster_owned = 1;
+        else if (!strncmp(line, "composite_applied=1", 19u) &&
+                 (line[19] == '\n' || line[19] == '\r' || line[19] == 0))
+            composite_applied = 1;
+        else if (!strncmp(line, "context=", 8u))
+            (void)sscanf(line, "context=%d", &context);
     }
     fclose(f);
-    return carplay_session && cluster_owned;
+    return version == 1 && carplay_session && cluster_owned &&
+           composite_applied && context == 80;
 }
 
 #define WHEEL_ZOOM_EVENT_FILE "/tmp/mmi-mirror-wheel-zoom.events"
 #define WHEEL_ZOOM_BATCH_MAX 32u
 
 struct wheel_zoom_event {
+    uint32_t epoch;
     uint32_t seq;
     int direction;
     int magnification;
@@ -677,7 +692,8 @@ struct wheel_zoom_event {
 };
 
 static unsigned native_read_wheel_zoom_events(
-        uint32_t after_seq, struct wheel_zoom_event *events, unsigned cap) {
+        uint32_t after_epoch, uint32_t after_seq,
+        struct wheel_zoom_event *events, unsigned cap) {
     FILE *f;
     char line[256];
     unsigned count = 0;
@@ -688,7 +704,7 @@ static unsigned native_read_wheel_zoom_events(
 
     while (fgets(line, sizeof(line), f)) {
         struct wheel_zoom_event e;
-        unsigned commit = 0;
+        unsigned epoch = 0, commit = 0;
         size_t n = strlen(line);
         int fields;
 
@@ -696,14 +712,15 @@ static unsigned native_read_wheel_zoom_events(
         memset(&e, 0, sizeof(e));
         fields = sscanf(
             line,
-            "seq=%u direction=%d magnification=%d delta=%d step=%d steps=%d commit=%u",
-            &e.seq, &e.direction, &e.magnification, &e.delta,
+            "epoch=%u seq=%u direction=%d magnification=%d delta=%d step=%d steps=%d commit=%u",
+            &epoch, &e.seq, &e.direction, &e.magnification, &e.delta,
             &e.step, &e.steps, &commit);
-        if (fields != 7 || !e.seq || commit != e.seq ||
+        e.epoch = (uint32_t)epoch;
+        if (fields != 8 || !e.epoch || !e.seq || commit != e.seq ||
             (e.direction != 0 && e.direction != 1) ||
             e.step < 1 || e.steps < 1 || e.step > e.steps)
             continue;
-        if (e.seq <= after_seq) continue;
+        if (e.epoch == after_epoch && e.seq <= after_seq) continue;
         events[count++] = e;
         if (count == cap) break;
     }
@@ -711,30 +728,36 @@ static unsigned native_read_wheel_zoom_events(
     return count;
 }
 
-static uint32_t native_wheel_zoom_max_seq(void) {
+static void native_wheel_zoom_tail(uint32_t *out_epoch, uint32_t *out_seq) {
     FILE *f;
     char line[256];
-    uint32_t max_seq = 0;
+    uint32_t tail_epoch = 0;
+    uint32_t tail_seq = 0;
 
+    if (out_epoch) *out_epoch = 0;
+    if (out_seq) *out_seq = 0;
     f = fopen(WHEEL_ZOOM_EVENT_FILE, "r");
-    if (!f) return 0;
+    if (!f) return;
     while (fgets(line, sizeof(line), f)) {
-        unsigned seq = 0, commit = 0;
+        unsigned epoch = 0, seq = 0, commit = 0;
         int direction = -1, magnification = 0, delta = 0, step = 0, steps = 0;
         size_t n = strlen(line);
         if (!n || line[n - 1] != '\n') continue;
         if (sscanf(
                 line,
-                "seq=%u direction=%d magnification=%d delta=%d step=%d steps=%d commit=%u",
-                &seq, &direction, &magnification, &delta,
-                &step, &steps, &commit) == 7 &&
-            seq && seq == commit && (direction == 0 || direction == 1) &&
-            step >= 1 && steps >= 1 && step <= steps &&
-            seq > max_seq)
-            max_seq = (uint32_t)seq;
+                "epoch=%u seq=%u direction=%d magnification=%d delta=%d step=%d steps=%d commit=%u",
+                &epoch, &seq, &direction, &magnification, &delta,
+                &step, &steps, &commit) == 8 &&
+            epoch && seq && seq == commit &&
+            (direction == 0 || direction == 1) &&
+            step >= 1 && steps >= 1 && step <= steps) {
+            tail_epoch = (uint32_t)epoch;
+            tail_seq = (uint32_t)seq;
+        }
     }
     fclose(f);
-    return max_seq;
+    if (out_epoch) *out_epoch = tail_epoch;
+    if (out_seq) *out_seq = tail_seq;
 }
 
 /*
@@ -754,12 +777,14 @@ static void *native_monitor_worker(void *arg) {
     int desired_view_area, view_area_send_index, zoom_gate, cluster_owned;
     struct wheel_zoom_event zoom_events[WHEEL_ZOOM_BATCH_MAX];
     unsigned zoom_count, zoom_i;
-    uint32_t zoom_last_seq = native_wheel_zoom_max_seq();
+    uint32_t zoom_last_epoch = 0;
+    uint32_t zoom_last_seq = 0;
 
+    native_wheel_zoom_tail(&zoom_last_epoch, &zoom_last_seq);
     altscreen_log(
         "PHASE=WHEEL_ZOOM_QUEUE_RESET receiver=%p stream=%p generation=%u "
-        "baseline_seq=%u stale_events_before_attach=discarded",
-        receiver, stream, generation, zoom_last_seq);
+        "baseline_epoch=%u baseline_seq=%u stale_events_before_attach=discarded",
+        receiver, stream, generation, zoom_last_epoch, zoom_last_seq);
 
     for (;;) {
         /*
@@ -771,7 +796,8 @@ static void *native_monitor_worker(void *arg) {
         desired_view_area = native_read_view_area_target();
         cluster_owned = native_read_cluster_owned_for_zoom();
         zoom_count = native_read_wheel_zoom_events(
-            zoom_last_seq, zoom_events, WHEEL_ZOOM_BATCH_MAX);
+            zoom_last_epoch, zoom_last_seq,
+            zoom_events, WHEEL_ZOOM_BATCH_MAX);
         event_kind = 0;
         view_area_send_index = -1;
         zoom_gate = 0;
@@ -876,18 +902,27 @@ static void *native_monitor_worker(void *arg) {
 
         for (zoom_i = 0; zoom_i < zoom_count; ++zoom_i) {
             struct wheel_zoom_event *ze = &zoom_events[zoom_i];
+            if (ze->epoch != zoom_last_epoch) {
+                altscreen_log(
+                    "PHASE=WHEEL_ZOOM_EPOCH receiver=%p stream=%p generation=%u "
+                    "old_epoch=%u new_epoch=%u sequence_reset=1",
+                    receiver, stream, generation, zoom_last_epoch, ze->epoch);
+                zoom_last_epoch = ze->epoch;
+                zoom_last_seq = 0;
+            }
             if (ze->seq <= zoom_last_seq) continue;
             if (zoom_last_seq && ze->seq != zoom_last_seq + 1u)
                 altscreen_log(
                     "WARN PHASE=WHEEL_ZOOM_QUEUE_GAP receiver=%p stream=%p "
-                    "generation=%u expected_seq=%u actual_seq=%u",
-                    receiver, stream, generation, zoom_last_seq + 1u, ze->seq);
+                    "generation=%u epoch=%u expected_seq=%u actual_seq=%u",
+                    receiver, stream, generation, ze->epoch,
+                    zoom_last_seq + 1u, ze->seq);
             zoom_last_seq = ze->seq;
             altscreen_log(
                 "PHASE=WHEEL_ZOOM_QUEUE receiver=%p stream=%p generation=%u "
-                "seq=%u action=%s direction=%d magnification=%d delta=%d "
+                "epoch=%u seq=%u action=%s direction=%d magnification=%d delta=%d "
                 "step=%d steps=%d result=%s reason=%s",
-                receiver, stream, generation, ze->seq,
+                receiver, stream, generation, ze->epoch, ze->seq,
                 ze->direction == 0 ? "ZOOM_IN" : "ZOOM_OUT",
                 ze->direction, ze->magnification, ze->delta,
                 ze->step, ze->steps,
@@ -1704,7 +1739,7 @@ int p1404_hook_cscreen_render(void *self, unsigned char *buffer) {
 
     memset(&snap, 0, sizeof(snap));
     if (!alt_state_snapshot(receiver, 1, &snap) ||
-        snap.generation != generation || snap.alt_screen_stream != stream)
+        snap.generation != state_generation || snap.alt_screen_stream != stream)
         return rc;
     if (posts >= NATIVE_MIN_POSTS && snap.video_config_seen &&
         now <= first_post_at + NATIVE_POST_WINDOW_SECONDS) {

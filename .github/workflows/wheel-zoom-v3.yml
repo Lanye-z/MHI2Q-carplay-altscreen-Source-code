@@ -322,6 +322,9 @@ jobs:
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
           grep -Fq 'stale_events_before_attach=discarded' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq \
+            'CLUSTER_OWNERSHIP_STATE_FILE "/tmp/mmi-mirror-cluster-ownership.state"' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
           grep -Fq 'static int native_read_cluster_owned_for_zoom(void)' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
           grep -Fq 'cluster_owned = native_read_cluster_owned_for_zoom();' \
@@ -344,8 +347,25 @@ jobs:
           grep -Fq \
             'return carPlaySessionActive && ownershipIntent && compositeApplied;' \
             Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java
+          grep -Fq 'publishClusterOwnershipState();' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java
+          grep -Fq 'mmi-mirror-cluster-ownership.state' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java
           grep -Fq 'cluster_owned=' \
             Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java
+          grep -Fq 'epoch=' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          grep -Fq 'MAX_LOG_BYTES' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          grep -Fq 'snap.generation != state_generation' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          if grep -Fq 'snap.generation != generation || snap.alt_screen_stream != stream' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c; then
+            echo 'ERROR: native local generation is still compared to control-fence generation' >&2
+            exit 1
+          fi
+          grep -Fq 'REUSE_ORIGINAL_SD_BACKUP_OR_RESTORE_STOCK_FIRST' \
+            Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh
           grep -Fq 'mode=PRIVATE111_DIRECT_DISPLAY_V3_WHEEL_ZOOM' \
             Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh
           grep -Fq 'wheel_zoom_build_status=COMPILED_READY_FOR_VEHICLE_TEST' \
@@ -554,9 +574,55 @@ jobs:
           test_apps=Apple_Maps,Amap
           EOF
 
+          python3 - "$PKG" <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import sys
+
+          root = pathlib.Path(sys.argv[1])
+
+          def digest(path):
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+
+          package_path = root / "PACKAGE_SOURCE_MAP.json"
+          data = json.loads(package_path.read_text())
+          filtered = {}
+          for rel in sorted(data):
+              path = root / rel
+              if path.is_file():
+                  filtered[rel] = digest(path)
+          filtered["VEHICLE_TEST_READY.txt"] = digest(
+              root / "VEHICLE_TEST_READY.txt"
+          )
+          package_path.write_text(
+              json.dumps(filtered, indent=2, ensure_ascii=False) + "\n"
+          )
+
+          sums_path = root / "SHA256SUMS.txt"
+          tracked = set()
+          for line in sums_path.read_text().splitlines():
+              parts = line.split(None, 1)
+              if len(parts) == 2 and (root / parts[1].strip()).is_file():
+                  tracked.add(parts[1].strip())
+          tracked.add("PACKAGE_SOURCE_MAP.json")
+          tracked.add("VEHICLE_TEST_READY.txt")
+          tracked.discard("SHA256SUMS.txt")
+          sums_path.write_text(
+              "".join(
+                  "%s %s\n" % (digest(root / rel), rel)
+                  for rel in sorted(tracked)
+              )
+          )
+          PY
+
           test -s "$PKG/Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar"
           test -s "$PKG/Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so"
           test -s "$PKG/VEHICLE_TEST_READY.txt"
+          (
+            cd "$PKG"
+            sha256sum -c SHA256SUMS.txt
+          )
 
       - name: Upload V3 vehicle-test package
         uses: actions/upload-artifact@v4

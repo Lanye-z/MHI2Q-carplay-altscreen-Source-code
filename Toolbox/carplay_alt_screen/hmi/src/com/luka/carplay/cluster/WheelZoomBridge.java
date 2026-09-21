@@ -20,15 +20,19 @@ public final class WheelZoomBridge {
     private static final String EVENT_FILE = "/tmp/mmi-mirror-wheel-zoom.events";
     private static final String LOG_FILE = "/tmp/mmi-mirror-wheel-zoom.log";
     private static final long MAX_EVENT_BYTES = 262144L;
+    private static final long MAX_LOG_BYTES = 262144L;
     private static final int MAX_STEPS_PER_CALLBACK = 16;
 
     private static boolean haveMagnification;
     private static int lastMagnification;
     private static int sequence;
+    private static int eventEpoch = initialEpoch();
+    private static boolean epochQueuePrepared;
 
     private WheelZoomBridge() {}
 
     public static synchronized void onMagnificationChanged(int magnification) {
+        prepareEpochQueue();
         if (!haveMagnification) {
             haveMagnification = true;
             lastMagnification = magnification;
@@ -61,7 +65,13 @@ public final class WheelZoomBridge {
         String action = direction == 0 ? "ZOOM_IN" : "ZOOM_OUT";
         int i;
         for (i = 1; i <= steps; ++i) {
-            if (sequence == Integer.MAX_VALUE) sequence = 0;
+            if (sequence == Integer.MAX_VALUE) {
+                sequence = 0;
+                eventEpoch = eventEpoch == Integer.MAX_VALUE ? 1 : eventEpoch + 1;
+                try { new File(EVENT_FILE).delete(); } catch (Throwable ignored) {}
+                diag("WHEEL_ZOOM_EPOCH reason=sequence_wrap epoch=" + eventEpoch
+                    + " queue=reset");
+            }
             ++sequence;
             boolean ok = appendEvent(
                 sequence, direction, magnification, delta, i, steps);
@@ -79,7 +89,21 @@ public final class WheelZoomBridge {
         haveMagnification = false;
         lastMagnification = 0;
         try { new File(EVENT_FILE).delete(); } catch (Throwable ignored) {}
-        diag("WHEEL_ZOOM_RESET queue=cleared sequence_preserved=" + sequence);
+        diag("WHEEL_ZOOM_RESET queue=cleared epoch=" + eventEpoch
+            + " sequence_preserved=" + sequence);
+    }
+
+    private static int initialEpoch() {
+        int value = (int)(System.currentTimeMillis() & 0x7fffffffL);
+        return value == 0 ? 1 : value;
+    }
+
+    private static void prepareEpochQueue() {
+        if (epochQueuePrepared) return;
+        try { new File(EVENT_FILE).delete(); } catch (Throwable ignored) {}
+        epochQueuePrepared = true;
+        diag("WHEEL_ZOOM_EPOCH reason=java_process_start epoch=" + eventEpoch
+            + " queue=reset");
     }
 
     private static boolean appendEvent(int seq, int direction,
@@ -93,7 +117,8 @@ public final class WheelZoomBridge {
                     + " bytes=" + f.length() + " seq=" + seq);
                 return false;
             }
-            String line = "seq=" + seq
+            String line = "epoch=" + eventEpoch
+                + " seq=" + seq
                 + " direction=" + direction
                 + " magnification=" + magnification
                 + " delta=" + delta
@@ -117,7 +142,14 @@ public final class WheelZoomBridge {
         try { Log.i(TAG, message); } catch (Throwable ignored) {}
         FileOutputStream out = null;
         try {
-            out = new FileOutputStream(LOG_FILE, true);
+            File f = new File(LOG_FILE);
+            if (f.exists() && f.length() > MAX_LOG_BYTES) {
+                FileOutputStream reset = new FileOutputStream(f, false);
+                reset.write(("--- wheel log reset at "
+                    + System.currentTimeMillis() + " ---\n").getBytes("UTF-8"));
+                reset.close();
+            }
+            out = new FileOutputStream(f, true);
             String line = System.currentTimeMillis() + " " + message + "\n";
             out.write(line.getBytes("UTF-8"));
             out.flush();

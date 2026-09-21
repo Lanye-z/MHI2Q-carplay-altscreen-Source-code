@@ -48,6 +48,8 @@ public final class ClusterStateController {
     private static final long DIAG_MAX_BYTES = 131072L;
 
     private static final String HMI_STATE_FILE = "/tmp/mmi-mirror-hmi.state";
+    private static final String CLUSTER_OWNERSHIP_STATE_FILE =
+        "/tmp/mmi-mirror-cluster-ownership.state";
     /*
      * OEM_LAYOUT_OBSERVER_V1
      *
@@ -95,6 +97,7 @@ public final class ClusterStateController {
     private static String lastOemProbeStatus = "";
     private static String lastOemModelAccess = "UNRESOLVED";
     private static String lastOwnershipSignature = "";
+    private static String lastClusterOwnershipSignature = "";
     private static long oemGeometryRevision;
     private static long lastOemProbeMs;
     private static long lastOwnershipProbeMs;
@@ -137,6 +140,7 @@ public final class ClusterStateController {
         if (carPlaySessionActive == active) return;
         carPlaySessionActive = active;
         lastStateSignature = "";
+        lastClusterOwnershipSignature = "";
         diag("carplay_session=" + (active ? "1" : "0"));
         if (!active) WheelZoomBridge.reset();
     }
@@ -188,6 +192,7 @@ public final class ClusterStateController {
                  * ctx80 acquisition/reconcile.
                  */
                 pollContextPolicy();
+                publishClusterOwnershipState();
                 pollOwnershipDiagnostics();
                 pollHmiState();
             } catch (Throwable t) {
@@ -419,6 +424,46 @@ public final class ClusterStateController {
                     + " layoutClass=" + layoutName
                     + " c80=" + smallDx + " c81=" + smallDy);
             }
+        }
+    }
+
+    /*
+     * Publish the V3 wheel-control ownership gate independently of the OEM
+     * layout observer.  This path depends only on the proven Java80 context
+     * lifecycle and an explicit getCurrentContextID(1) readback, so a missing
+     * NAV_VIEW_SIZE_CHOICE/ListModel176 can never disable wheel control.
+     */
+    private static void publishClusterOwnershipState() {
+        boolean cp = carPlaySessionActive;
+        boolean intent = ownershipIntent;
+        boolean applied = compositeApplied;
+        int actual = -1;
+        if (cp && intent && applied) {
+            Object dm = displayManager();
+            actual = currentContext(dm);
+        }
+        boolean owned = cp && intent && applied && actual == CTX_COMPOSITE;
+        String signature = (cp ? "1" : "0")
+            + "/" + (intent ? "1" : "0")
+            + "/" + (applied ? "1" : "0")
+            + "/" + actual
+            + "/" + (owned ? "1" : "0");
+        if (signature.equals(lastClusterOwnershipSignature)) return;
+
+        String text = "version=1\n"
+            + "carplay_session=" + (cp ? "1" : "0") + "\n"
+            + "cluster_owned=" + (owned ? "1" : "0") + "\n"
+            + "ownership_intent=" + (intent ? "1" : "0") + "\n"
+            + "composite_applied=" + (applied ? "1" : "0") + "\n"
+            + "context=" + actual + "\n"
+            + "timestamp_ms=" + nowMs() + "\n";
+        if (writeAtomicState(CLUSTER_OWNERSHIP_STATE_FILE, text)) {
+            lastClusterOwnershipSignature = signature;
+            diag("cluster ownership published cp=" + (cp ? "1" : "0")
+                + " intent=" + (intent ? "1" : "0")
+                + " composite=" + (applied ? "1" : "0")
+                + " actual=" + actual
+                + " owned=" + (owned ? "1" : "0"));
         }
     }
 
@@ -1111,7 +1156,7 @@ public final class ClusterStateController {
             out.close();
             out = null;
             if (dst.exists() && !dst.delete()) {
-                diag("WARN could not delete old OEM geometry state before replace");
+                diag("WARN could not delete old state before replace path=" + path);
             }
             if (!tmp.renameTo(dst)) {
                 copyFile(tmp, dst);
@@ -1119,7 +1164,7 @@ public final class ClusterStateController {
             }
             return true;
         } catch (Throwable t) {
-            diag("ERROR OEM geometry state write failed: " + describe(t));
+            diag("ERROR state write failed path=" + path + ": " + describe(t));
             try { if (out != null) out.close(); } catch (Throwable ignored) {}
             return false;
         }

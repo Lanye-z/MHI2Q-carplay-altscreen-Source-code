@@ -28,6 +28,7 @@ ACTIVE="$DEVICE_ROOT/tmp/mmi-mirror-active"
 DEST_READY="$DEVICE_ROOT/tmp/mmi-mirror-basevideo.ready"
 STARTED="$DEVICE_ROOT/tmp/mmi-mirror-controller.started"
 JAVA_LOG="$DEVICE_ROOT/tmp/mmi-mirror-controller.log"
+CLUSTER_OWNERSHIP_STATE="$DEVICE_ROOT/tmp/mmi-mirror-cluster-ownership.state"
 OEM_GEOMETRY_STATE="$DEVICE_ROOT/tmp/carplay-oem-geometry.state"
 OEM_GEOMETRY_HISTORY="$DEVICE_ROOT/tmp/carplay-oem-geometry.log"
 OEM_DISPLAYMANAGER_API="$DEVICE_ROOT/tmp/carplay-oem-displaymanager-read-api.log"
@@ -185,6 +186,13 @@ else
 fi
 
 echo "CARPLAY_WHEEL_ZOOM_PROTOCOL=changeMapZoomLevel direction_0_in_1_out"
+if [ -f "$CLUSTER_OWNERSHIP_STATE" ]; then
+    echo "CLUSTER_OWNERSHIP_STATE_BEGIN"
+    cat "$CLUSTER_OWNERSHIP_STATE" 2>/dev/null || true
+    echo "CLUSTER_OWNERSHIP_STATE_END"
+else
+    echo "CLUSTER_OWNERSHIP_STATE=MISSING"
+fi
 if [ -f "$WHEEL_ZOOM_LOG" ]; then
     echo "WHEEL_ZOOM_JAVA_LOG_TAIL_BEGIN"
     tail -n 80 "$WHEEL_ZOOM_LOG" 2>/dev/null || true
