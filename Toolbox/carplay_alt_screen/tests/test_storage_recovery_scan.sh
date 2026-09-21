@@ -39,6 +39,7 @@ mkdir -p \
     "$live/mnt/system/etc/eso/production" \
     "$live/mnt/app/root/carplay-altscreen/lib" \
     "$live/mnt/app/root/hooks" \
+    "$live/mnt/app/root/lib-target" \
     "$live/mnt/app/eso/hmi/lsd/jars" \
     "$live/tmp" \
     "$vol/Toolbox" \
@@ -53,6 +54,7 @@ printf '%s\n' 'partial-json' > "$live/mnt/system/etc/eso/production/.smartphone_
 printf '%s\n' 'dio-json' > "$live/mnt/system/etc/eso/production/dio_manager.json"
 printf '%s\n' 'pf' > "$live/mnt/system/etc/pf.conf"
 printf '%s\n' 'jar' > "$live/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar"
+printf '%s\n' 'jar-stage' > "$live/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar.basevideo3.tmp"
 printf '%s\n' 'runtime' > "$live/mnt/app/root/carplay-altscreen/.mmi-cockpit-carplay-runtime-owner"
 printf '%s\n' 'hook' > "$live/mnt/app/root/carplay-altscreen/lib/libcarplay_altscreen.so"
 mkdir -p "$live/mnt/app/root/.carplay-altscreen.new.333"
@@ -60,7 +62,16 @@ printf '%s\n' 'partial-runtime' > "$live/mnt/app/root/.carplay-altscreen.new.333
 mkdir -p "$live/mnt/app/root/.carplay-altscreen.previous"
 printf '%s\n' 'old-runtime' > "$live/mnt/app/root/.carplay-altscreen.previous/.mmi-cockpit-carplay-runtime-owner"
 printf '%s\n' 'legacy-hook' > "$live/mnt/app/root/hooks/libcarplay_altscreen.so"
+printf '%s\n' 'legacy-partial' > "$live/mnt/app/root/lib-target/.libairplay.so.new.555"
 printf '%s\n' 'child-log' > "$vol/MMI-Cockpit-Carplay/state/.child-install.444"
+printf '%s\n' 'pf-clean' > "$vol/MMI-Cockpit-Carplay/state/pf.clean.666"
+printf '%s\n' 'diag-clean' > "$vol/MMI-Cockpit-Carplay/state/diag.clean.777"
+printf '%s\n' 'boot-new' > "$vol/MMI-Cockpit-Carplay/state/boot.new"
+mkdir -p "$vol/MMI-Cockpit-Carplay/state/.chain_test.lock"
+printf '%s\n' 'MMI-Cockpit-Carplay-Universal' > "$vol/MMI-Cockpit-Carplay/state/.chain_test.lock/owner"
+printf '%s\n' '12345' > "$vol/MMI-Cockpit-Carplay/state/.chain_test.lock/pid"
+printf '%s\n' 'install' > "$vol/MMI-Cockpit-Carplay/state/.chain_test.lock/action"
+printf '%s\n' 'boot-token' > "$vol/MMI-Cockpit-Carplay/state/.chain_test.lock/boot"
 
 snapshot_tree(){
     find "$1" -type f -exec cksum {} \; | sort
@@ -104,6 +115,23 @@ grep -Fq '/mnt/app/root/.carplay-altscreen.new.333' "$report/project_candidates.
     fail "historical runtime staging not detected"
 grep -Fq '/mnt/app/root/.carplay-altscreen.previous' "$report/project_candidates.txt" ||
     fail "rollback review entry not detected"
+grep -Fq '/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar.basevideo3.tmp' "$report/project_candidates.txt" ||
+    fail "historical HMI JAR staging not detected"
+grep -Fq '/mnt/app/root/lib-target/.libairplay.so.new.555' "$report/project_candidates.txt" ||
+    fail "historical legacy overlay staging not detected"
+grep -Fq 'pf.clean.666' "$report/project_candidates.txt" ||
+    fail "historical firewall state temp not detected"
+grep -Fq 'diag.clean.777' "$report/project_candidates.txt" ||
+    fail "historical diagnostics state temp not detected"
+grep -Fq 'boot.new' "$report/project_candidates.txt" ||
+    fail "historical boot state temp not detected"
+grep -Fq 'operation_lock_review' "$report/project_candidates.txt" ||
+    fail "operation lock review entry not detected"
+[ -s "$report/operation_lock.txt" ] || fail "operation lock report missing"
+grep -Fq 'STATUS=PRESENT_REVIEW_REQUIRED' "$report/operation_lock.txt" ||
+    fail "operation lock presence not reported"
+grep -Fq 'action=install' "$report/operation_lock.txt" ||
+    fail "operation lock action not reported"
 grep -Fq 'CLASSIFICATION=SCAN_ONLY_NOT_DELETE_AUTHORITY' "$report/SUMMARY.txt" ||
     fail "scan-only classification missing"
 
