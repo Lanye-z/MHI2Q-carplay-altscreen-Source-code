@@ -518,10 +518,10 @@ grep -Fq 'START_FAIL_STAGE=' "$START" ||
     fail "START persistent stage/failure diagnostics missing"
 grep -Fq 'diagnostics/operations' "$START" ||
     fail "START volatile operation journal path missing"
-grep -Fq '/tmp/MMI-Cockpit-Carplay/mirror/autostart.log' "$START" ||
+grep -Fq '/tmp/altscreen_autostart.log' "$START" ||
     fail "canonical Mirror autostart log path missing"
-if grep -Fq '/tmp/MMI-Cockpit-Carplay/mirror_autostart.log' "$START"; then
-    fail "retired non-canonical Mirror autostart log path remains"
+if grep -Eq '/tmp/MMI-Cockpit-Carplay/.+autostart\.log' "$START"; then
+    fail "retired nested Mirror autostart log path remains"
 fi
 grep -Fq 'MIRROR_START_RC=' "$START" ||
     fail "boot autostart launcher return code diagnostic missing"

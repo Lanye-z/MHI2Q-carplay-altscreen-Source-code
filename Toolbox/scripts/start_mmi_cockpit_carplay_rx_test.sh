@@ -48,12 +48,7 @@ if [ "${ALTS_START_CAPTURED:-0}" != 1 ]; then
         fi
     fi
     if [ "$journal_storage" = TMP ]; then
-        journal_dir="$journal_root/tmp/MMI-Cockpit-Carplay/diagnostics/operations"
-        if ensure_dirs "$journal_dir" 2>/dev/null; then
-            journal="$journal_dir/$journal_name"
-        else
-            journal="$journal_root/tmp/altscreen_$journal_name"
-        fi
+        journal="$journal_root/tmp/altscreen_$journal_name"
     fi
 
     journal_opened=0
@@ -63,12 +58,7 @@ if [ "${ALTS_START_CAPTURED:-0}" != 1 ]; then
         # A card may be present but temporarily read-only/unwritable. Logging
         # must degrade to volatile storage instead of running unjournaled.
         journal_storage=TMP
-        journal_dir="$journal_root/tmp/MMI-Cockpit-Carplay/diagnostics/operations"
-        if ensure_dirs "$journal_dir" 2>/dev/null; then
-            journal="$journal_dir/$journal_name"
-        else
-            journal="$journal_root/tmp/altscreen_$journal_name"
-        fi
+        journal="$journal_root/tmp/altscreen_$journal_name"
         if (printf 'OP_BEGIN action=START script=%s storage=%s\n' "$CAPTURE_ENTRY" "$journal_storage" > "$journal") 2>/dev/null; then
             printf 'START_JOURNAL_FALLBACK=TMP reason=sd_write_failed\n' >> "$journal" 2>/dev/null || true
             journal_opened=1
@@ -152,8 +142,8 @@ STARTED="$DEVICE_ROOT/tmp/mmi-mirror-controller.started"
 MIRROR="$RUNTIME/bin/mirror"
 MIRROR_START="$MIRROR/start_vehicle.sh"
 MIRROR_STOP="$MIRROR/stop_vehicle.sh"
-MIRROR_PID="$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/mirror/pid"
-MIRROR_LOG="$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/mirror/mirror.log"
+MIRROR_PID="$DEVICE_ROOT/tmp/altscreen_mirror.pid"
+MIRROR_LOG="$DEVICE_ROOT/tmp/altscreen_mirror.log"
 
 file_size(){ n=$(wc -c < "$1" 2>/dev/null) || { echo 0; return; }; set -- $n; echo "${1:-0}"; }
 file_cksum(){ if command -v cksum >/dev/null 2>&1; then cksum < "$1" 2>/dev/null | awk '{print $1}'; else echo unavailable; fi; }
@@ -275,7 +265,7 @@ verify_autostart_contract(){
       $0 == "# END ALT111 MIRROR AUTOSTART" { end_old++ }
       /\/mnt\/app\/root\/carplay-altscreen\/state\/basevideo3.enabled/ { enabled++ }
       /\/mnt\/app\/root\/carplay-altscreen\/bin\/mirror\/start_vehicle.sh/ { launcher++ }
-      /\/tmp\/MMI-Cockpit-Carplay\/mirror\/autostart.log/ { autolog++ }
+      /\/tmp\/altscreen_autostart.log/ { autolog++ }
       END {
         if (begin_new != 1 || end_new != 1 || begin_old != 0 || end_old != 0 ||
             enabled < 1 || launcher < 1 || autolog < 1) exit 1
@@ -283,12 +273,10 @@ verify_autostart_contract(){
     ' "$1"
 }
 
-TXN_DIR="$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/txn/start.$$"
-ensure_dirs "$TXN_DIR" || pre_fail "cannot create START transaction directory"
-CLEAN="$TXN_DIR/startup.clean"
-BLOCK="$TXN_DIR/startup.block"
-NEW="$TXN_DIR/startup.new"
-ORIGINAL="$TXN_DIR/startup.original"
+CLEAN="$DEVICE_ROOT/tmp/altscreen_start_$$.clean"
+BLOCK="$DEVICE_ROOT/tmp/altscreen_start_$$.block"
+NEW="$DEVICE_ROOT/tmp/altscreen_start_$$.new"
+ORIGINAL="$DEVICE_ROOT/tmp/altscreen_start_$$.original"
 
 system_space_snapshot(){
     label=$1
@@ -359,7 +347,7 @@ rollback_controller_start(){
     echo "START_ROLLBACK_CONTROLLER=DISARMED_NEW_TRANSACTION"
 }
 
-cleanup(){ [ ! -e "$TXN_DIR" ] || rm -rf "$TXN_DIR" 2>/dev/null || true; }
+cleanup(){ rm -f "$CLEAN" "$BLOCK" "$NEW" "$ORIGINAL" 2>/dev/null || true; }
 
 rollback(){
     echo "START_ROLLBACK_BEGIN stage=$CURRENT_STAGE"
@@ -455,9 +443,8 @@ stage COMPOSE_AUTOSTART
 cat > "$BLOCK" <<'BASEVIDEO3_BOOT'
 # BEGIN ALT111 BASEVIDEO3 AUTOSTART
 if [ -f /mnt/app/root/carplay-altscreen/state/basevideo3.enabled ]; then
-    mkdir -p /tmp/MMI-Cockpit-Carplay/mirror >/dev/null 2>&1 || true
     (
-        AUTOLOG=/tmp/MMI-Cockpit-Carplay/mirror/autostart.log
+        AUTOLOG=/tmp/altscreen_autostart.log
         echo "AUTOSTART_BEGIN component=private111_direct_display" >>"$AUTOLOG" 2>&1 || true
         rm -f /tmp/mmi-mirror-basevideo.ready >/dev/null 2>&1 || true
         touch /tmp/mmi-mirror-active >/dev/null 2>&1 || true
@@ -516,7 +503,6 @@ RC=$?
 [ "$RC" -eq 0 ] || fail_rc "$RC" "integrated AltScreen controller START failed"
 
 stage SIDECAR_START
-ensure_dirs "$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/mirror" 2>/dev/null || true
 /bin/sh "$MIRROR_START"
 MIRROR_RC=$?
 [ "$MIRROR_RC" -eq 0 ] || fail_rc "$MIRROR_RC" "direct-display sidecar START failed"

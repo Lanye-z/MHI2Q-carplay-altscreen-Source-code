@@ -46,7 +46,7 @@ CONTROLLER="$SCRIPTDIR/altscreen_chain_test.sh"
 [ -n "$VOLUME" ] || { echo "FAIL: SD card required to restore original Java HMI JAR"; exit 1; }
 
 RUNTIME="$DEVICE_ROOT/mnt/app/root/carplay-altscreen"
-TXN_DIR="$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/txn/restore.$$"
+TXN_DIR="$VOLUME/MMI-Cockpit-Carplay/staging/restore-apply"
 ENABLED="$RUNTIME/state/basevideo3.enabled"
 JAR="$DEVICE_ROOT/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar"
 JAR_DIR=$(dirname -- "$JAR")
@@ -150,7 +150,8 @@ for candidate in "$DEVICE_ROOT/mnt/system/etc/boot/startup.sh" "$DEVICE_ROOT/etc
     if [ -f "$candidate" ]; then STARTUP=$candidate; break; fi
 done
 if [ -n "$STARTUP" ]; then
-    ensure_dirs "$TXN_DIR" || { echo "FAIL: cannot create volatile RESTORE transaction directory"; exit 1; }
+    rm -rf "$TXN_DIR" 2>/dev/null || true
+    ensure_dirs "$TXN_DIR" || { echo "FAIL: cannot create SD RESTORE transaction directory"; exit 1; }
     CLEAN="$TXN_DIR/startup.clean"
     system_space_snapshot restore_begin
     strip_blocks "$STARTUP" > "$CLEAN" || { echo "FAIL: invalid BaseVideo3/Mirror autostart block"; exit 1; }

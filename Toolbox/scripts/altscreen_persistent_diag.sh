@@ -32,7 +32,7 @@ fi
 
 STATE="$VOLUME/MMI-Cockpit-Carplay/state"
 BOOT_BACKUP="$VOLUME/MMI-Cockpit-Carplay/backup/boot-diagnostics"
-TXN_ROOT="$ROOT/tmp/MMI-Cockpit-Carplay/txn"
+TXN_ROOT="$VOLUME/MMI-Cockpit-Carplay/staging/diag-txn"
 ENABLED="$ROOT/mnt/app/root/carplay-altscreen/state/diagnostics.enabled"
 DEVICE_SCRIPTS="$ROOT/mnt/app/root/carplay-altscreen/bin"
 ensure_dirs "$STATE" || exit 1
@@ -139,12 +139,8 @@ install_diag(){
     LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}:/proc/boot:/usr/lib:/armle/lib:/armle/lib/dll:/lib:/mnt/app/root/carplay-altscreen/lib:/eso/lib:/mnt/app/usr/lib:/mnt/app/armle/lib:/mnt/app/armle/lib/dll:/mnt/app/armle/usr/lib:/lib/dll
     export PATH LD_LIBRARY_PATH
     ALTS_RUNTIME=/mnt/app/root/carplay-altscreen/bin
-    ALTS_VOLATILE=/tmp/MMI-Cockpit-Carplay
-    ALTS_BOOT_ENTRY="$ALTS_VOLATILE/boot_entry.log"
-    if [ ! -d "$ALTS_VOLATILE" ]; then
-        mkdir -p "$ALTS_VOLATILE" 2>/dev/null || true
-    fi
-    [ -d "$ALTS_VOLATILE" ] || ALTS_BOOT_ENTRY=/tmp/MMI-Cockpit-Carplay.boot_entry.log
+    # Flat /tmp contract: this path is available without creating directories.
+    ALTS_BOOT_ENTRY=/tmp/altscreen_boot_entry.log
     if ( : >> "$ALTS_BOOT_ENTRY" ) 2>/dev/null; then
         exec >> "$ALTS_BOOT_ENTRY" 2>&1
     fi
@@ -193,7 +189,7 @@ BOOT_BLOCK
     app_rw=0
     rm -rf "$txn" 2>/dev/null || true
     trap - 0 1 2 15
-    echo "PERSISTENT_DIAGNOSTICS=ENABLED auto_sd=YES source=/tmp/MMI-Cockpit-Carplay/altscreen_hook.log runtime=/mnt/app/root/carplay-altscreen/bin adaptive_status=plaintext_filtered adaptive_failsafe=direct_sd full_stream=plaintext"
+    echo "PERSISTENT_DIAGNOSTICS=ENABLED auto_sd=YES source=/tmp/altscreen_hook.log runtime=/mnt/app/root/carplay-altscreen/bin adaptive_status=plaintext_filtered adaptive_failsafe=direct_sd full_stream=plaintext"
     return 0
 }
 

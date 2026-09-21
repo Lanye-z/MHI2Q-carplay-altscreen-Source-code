@@ -70,13 +70,13 @@ grep -Fq 'START=PASS integrated=' "$tmp/success1.log" || fail "first START pass 
 [ -f "$live/tmp/mmi-mirror-active" ] || fail "current-boot demand missing"
 [ "$(grep -c '^# BEGIN ALT111 BASEVIDEO3 AUTOSTART$' "$live/mnt/system/etc/boot/startup.sh")" = 1 ] ||
     fail "autostart block count is not one"
-grep -Fq '/tmp/MMI-Cockpit-Carplay/mirror/autostart.log' "$live/mnt/system/etc/boot/startup.sh" ||
+grep -Fq '/tmp/altscreen_autostart.log' "$live/mnt/system/etc/boot/startup.sh" ||
     fail "autostart log path is not canonical"
 if find "$live/mnt/system/etc/boot" -type f -name 'startup.sh.basevideo3.*' | grep -q .; then
     fail "START leaked transaction scratch into /mnt/system"
 fi
-if find "$live/tmp/MMI-Cockpit-Carplay/txn" -type f 2>/dev/null | grep -q .; then
-    fail "START left volatile transaction files after success"
+if find "$live/tmp" -maxdepth 1 -type f -name 'altscreen_start_*' 2>/dev/null | grep -q .; then
+    fail "START left flat volatile transaction files after success"
 fi
 ls "$vol/MMI-Cockpit-Carplay/logs/operations"/start_*.log >/dev/null 2>&1 ||
     fail "persistent START journal missing"

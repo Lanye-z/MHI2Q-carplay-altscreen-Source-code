@@ -32,8 +32,8 @@ OEM_GEOMETRY_STATE="$DEVICE_ROOT/tmp/carplay-oem-geometry.state"
 OEM_GEOMETRY_HISTORY="$DEVICE_ROOT/tmp/carplay-oem-geometry.log"
 OEM_DISPLAYMANAGER_API="$DEVICE_ROOT/tmp/carplay-oem-displaymanager-read-api.log"
 MIRROR="$RUNTIME/bin/mirror"
-MIRROR_PID="$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/mirror/pid"
-MIRROR_LOG="$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/mirror/mirror.log"
+MIRROR_PID="$DEVICE_ROOT/tmp/altscreen_mirror.pid"
+MIRROR_LOG="$DEVICE_ROOT/tmp/altscreen_mirror.log"
 EXPECTED_SIZE=149510
 EXPECTED_CKSUM=180684234
 
@@ -74,7 +74,7 @@ fi
 [ -x "$MIRROR/carplay-alt111-mirror-display" ] && echo "DIRECT_DISPLAY_BINARY=INSTALLED" || echo "DIRECT_DISPLAY_BINARY=MISSING"
 
 HOOK_LOG=""
-for candidate in "$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/altscreen_hook.log" "$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay.altscreen_hook.log" "$DEVICE_ROOT/tmp/altscreen_hook.log"; do
+for candidate in "$DEVICE_ROOT/tmp/altscreen_hook.log" "$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/altscreen_hook.log" "$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay.altscreen_hook.log"; do
     [ -f "$candidate" ] && { HOOK_LOG=$candidate; break; }
 done
 

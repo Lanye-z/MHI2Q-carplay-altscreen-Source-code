@@ -82,11 +82,11 @@ UNIVERSAL_BACKUP_DIR="$BACKUP_ROOT/universal-hook-original"
 UNIVERSAL_BACKUP_FILE="$UNIVERSAL_BACKUP_DIR/libcarplay_altscreen.so"
 UNIVERSAL_BACKUP_COMPLETE="$UNIVERSAL_BACKUP_DIR/COMPLETE"
 LOCK_FILE="$STATE_DIR/.chain_test.lock"
-LOCK_BOOT_TOKEN_FILE="$(p /tmp/MMI-Cockpit-Carplay/lock/boot_token)"
+LOCK_BOOT_TOKEN_FILE="$(p /tmp/altscreen_boot_token)"
 LOCK_OWNER_TAG="MMI-Cockpit-Carplay-Universal"
 INSTALLED_MARKER="$STATE_DIR/INSTALLED"
 PROBE_MARKER="$(p /mnt/app/root/carplay-altscreen/state/fullchain_probe)"
-TXN_ROOT="$(p /tmp/MMI-Cockpit-Carplay/txn)"
+TXN_ROOT="$STAGING_ROOT/controller-txn"
 TXN_DIR="$TXN_ROOT/universal.$$"
 FIREWALL_BEGIN="# BEGIN ALTSCREEN TYPE111 FIREWALL"
 FIREWALL_END="# END ALTSCREEN TYPE111 FIREWALL"
@@ -617,10 +617,11 @@ cmd_status(){
 cmd_collect(){
     cmd_status
     for candidate in \
+        "$(p /tmp/altscreen_hook.log)" \
         "$(p /tmp/MMI-Cockpit-Carplay/altscreen_hook.log)" \
         "$(p /tmp/MMI-Cockpit-Carplay.altscreen_hook.log)" \
-        "$(p /tmp/altscreen_hook.log)" \
         "$(p /tmp/CinemoDioManager.log)" \
+        "$(p /tmp/altscreen_boot_entry.log)" \
         "$(p /tmp/MMI-Cockpit-Carplay/boot_entry.log)" \
         "$(p /tmp/MMI-Cockpit-Carplay.boot_entry.log)" \
         "$(p /tmp/MMI-Cockpit-Carplay/mirror/autostart.log)" \
