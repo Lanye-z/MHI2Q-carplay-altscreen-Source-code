@@ -43,6 +43,8 @@ JAR_SOURCE="$VOLUME/Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar"
 HMI_INFO="$VOLUME/Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt"
 JAR_TARGET="$DEVICE_ROOT/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar"
 JAR_TARGET_DIR=$(dirname -- "$JAR_TARGET")
+LIVE_JSON_SI="$DEVICE_ROOT/mnt/system/etc/eso/production/smartphone_integrator.json"
+MANAGED_RUNTIME_OWNER="$DEVICE_ROOT/mnt/app/root/carplay-altscreen/.mmi-cockpit-carplay-runtime-owner"
 BACKUP="$VOLUME/MMI-Cockpit-Carplay/backup/basevideo3-hmi-original"
 BACKUP_TMP="$BACKUP.new.$$"
 EXPECTED_SIZE=149510
@@ -95,6 +97,24 @@ same_bytes(){
         cmp "$1" "$2" >/dev/null 2>&1
     fi
 }
+known_managed_jar(){
+    [ -f "$1" ] || return 1
+    size=$(file_size "$1")
+    sum=$(file_cksum "$1")
+    [ "$sum" != unavailable ] || return 1
+    [ "$size" = "$EXPECTED_SIZE" ] && [ "$sum" = "$EXPECTED_CKSUM" ] && return 0
+    case "$size:$sum" in
+      149510:180684234|149979:2362627699|150026:3028143795|150833:860551430) return 0 ;;
+      *) return 1 ;;
+    esac
+}
+live_managed_install_detected(){
+    [ -f "$MANAGED_RUNTIME_OWNER" ] && return 0
+    grep -Fq 'libcarplay_altscreen.so' "$LIVE_JSON_SI" 2>/dev/null && return 0
+    [ -f "$JAR_TARGET" ] && same_bytes "$JAR_SOURCE" "$JAR_TARGET" && return 0
+    [ -f "$JAR_TARGET" ] && known_managed_jar "$JAR_TARGET" && return 0
+    return 1
+}
 mount_app_rw(){ [ "$TESTING" = 1 ] || mount -uw /mnt/app; }
 mount_app_ro(){ [ "$TESTING" = 1 ] || mount -ur /mnt/app; }
 
@@ -120,8 +140,9 @@ backup_original_jar(){
         echo "HMI_BACKUP=PRESERVED path=$BACKUP"
         return 0
     fi
-    if [ -f "$JAR_TARGET" ] && same_bytes "$JAR_SOURCE" "$JAR_TARGET"; then
-        echo "FAIL: trusted original Java HMI backup is absent but the live JAR already matches this project; reuse the original SD backup or restore stock first"
+    if live_managed_install_detected; then
+        echo "FAIL: trusted original Java HMI backup is absent but the live system is already managed by this project; refusing to snapshot a V2/V3 JAR as OEM"
+        echo "ACTION=REUSE_ORIGINAL_SD_BACKUP_OR_RESTORE_STOCK_FIRST"
         return 1
     fi
     rm -rf "$BACKUP_TMP" 2>/dev/null || true
