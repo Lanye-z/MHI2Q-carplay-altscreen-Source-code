@@ -81,10 +81,11 @@ RUNTIME_STAGE="$(p /mnt/app/root/.carplay-altscreen.new)"
 RUNTIME_STAGE_PARENT="$(p /mnt/app/root)"
 RUNTIME_PREV="$(p /mnt/app/root/.carplay-altscreen.previous)"
 ROUTER_TXN_ROOT="$(p /tmp/MMI-Cockpit-Carplay/txn)"
+RESTORE_TXN_DIR="$SD_ROOT/restore-transaction/active"
 RUNTIME_OWNER=.mmi-cockpit-carplay-runtime-owner
 RUNTIME_PUBLISHED=0
 RUNTIME_HAD_CURRENT=0
-RUNTIME_SCRIPTS="altscreen_chain_test.sh altscreen_chain_test_known.sh altscreen_chain_test_universal.sh altscreen_persistent_diag.sh altscreen_adaptive_diag.sh altscreen_boot_diag.sh altscreen_live_diag.sh altscreen_preload.awk install_mmi_cockpit_carplay_rx.sh start_mmi_cockpit_carplay_test.sh start_mmi_cockpit_carplay_rx_test.sh force_start_mmi_cockpit_carplay_rx_test.sh stop_mmi_cockpit_carplay_test.sh status_mmi_cockpit_carplay_test.sh finish_mmi_cockpit_carplay_test.sh"
+RUNTIME_SCRIPTS="altscreen_chain_test.sh altscreen_chain_test_known.sh altscreen_chain_test_universal.sh altscreen_restore_transaction.sh altscreen_persistent_diag.sh altscreen_adaptive_diag.sh altscreen_boot_diag.sh altscreen_live_diag.sh altscreen_preload.awk install_mmi_cockpit_carplay_rx.sh start_mmi_cockpit_carplay_test.sh start_mmi_cockpit_carplay_rx_test.sh force_start_mmi_cockpit_carplay_rx_test.sh stop_mmi_cockpit_carplay_test.sh status_mmi_cockpit_carplay_test.sh finish_mmi_cockpit_carplay_test.sh"
 
 mount_app_rw(){ [ "$TESTING" = 1 ] || mount -uw /mnt/app; }
 mount_app_ro(){ [ "$TESTING" = 1 ] || mount -ur /mnt/app; }
@@ -370,6 +371,29 @@ route_for_existing(){
     return 1
 }
 
+route_for_restore(){
+    route_for_existing && return 0
+
+    # Recovery must not depend only on disposable state markers. If the
+    # trusted universal recovery set exists, it is sufficient proof to select
+    # UNIVERSAL even after an older partial uninstall removed route markers.
+    if [ -f "$BACKUP_ROOT/original/COMPLETE" ] &&
+       [ -f "$BACKUP_ROOT/universal-hook-original/COMPLETE" ]; then
+        echo UNIVERSAL
+        return 0
+    fi
+    if [ -f "$VOLUME/Backup/AltScreenChain/original/COMPLETE" ] &&
+       [ -f "$VOLUME/Backup/AltScreenChain/universal-hook-original/COMPLETE" ]; then
+        echo UNIVERSAL
+        return 0
+    fi
+    return 1
+}
+
+restore_transaction_active(){
+    [ -f "$RESTORE_TXN_DIR/PREPARED" ] || [ -f "$RESTORE_TXN_DIR/APPLYING" ]
+}
+
 delegate(){
     route=$1; shift
     case "$route" in
@@ -409,6 +433,7 @@ delegate_install(){
 CMD=${1:-}
 case "$CMD" in
   install)
+    restore_transaction_active && fail "restore transaction is active; recover/finish RESTORE ORIGINAL before INSTALL"
     route=$(select_install_route "${2:-}") || exit 1
     existing_route=""
     if [ -f "$INSTALLED_MARKER" ] && [ -f "$ROUTE_FILE" ]; then existing_route="$ROUTE_FILE";
@@ -449,10 +474,18 @@ case "$CMD" in
     commit_runtime_scripts || echo "WARN: installed runtime is valid but previous-runtime rollback slot cleanup failed" >&2
     echo "ROUTER_INSTALL=PASS profile=$route runtime=/mnt/app/root/carplay-altscreen/bin no_eso_write=YES"
     ;;
+  restore-precheck)
+    route=$(route_for_restore) || fail "no trusted restore route/recovery set is available"
+    echo "ROUTER_PROFILE=$route"
+    [ "$route" = UNIVERSAL ] || fail "transactional restore precheck currently requires UNIVERSAL recovery data"
+    delegate "$route" restore-precheck
+    ;;
   restore)
-    route=$(route_for_existing) || fail "no installed firmware route; run INSTALL first"
+    route=$(route_for_restore) || fail "no trusted restore route/recovery set is available"
     echo "ROUTER_PROFILE=$route"
     if [ "$route" = UNIVERSAL ]; then
+        # Verify every native recovery source before touching startup/runtime.
+        delegate "$route" restore-precheck || fail "universal restore precheck failed; production files unchanged"
         diag=$(persistent_diag_helper || true)
         [ -n "$diag" ] || fail "universal persistent diagnostics helper is missing; refusing partial restore"
         /bin/sh "$diag" remove || fail "could not disable universal persistent diagnostics"
@@ -461,10 +494,17 @@ case "$CMD" in
     remove_runtime_scripts || fail "originals restored but persistent runtime cleanup failed"
     cleanup_volatile_runtime
     ;;
-  start|status|collect)
+  start)
+    restore_transaction_active && fail "restore transaction is active; START is blocked until recovery/restore completes"
     route=$(route_for_existing) || fail "no installed firmware route; run INSTALL first"
     echo "ROUTER_PROFILE=$route"
     delegate "$route" "$CMD"
     ;;
-  *) echo "usage: altscreen_chain_test.sh {install|start|status|restore|collect}" >&2; exit 2 ;;
+  status|collect)
+    route=$(route_for_existing) || fail "no installed firmware route; run INSTALL first"
+    echo "ROUTER_PROFILE=$route"
+    restore_transaction_active && echo "RESTORE_TRANSACTION=ACTIVE path=$RESTORE_TXN_DIR"
+    delegate "$route" "$CMD"
+    ;;
+  *) echo "usage: altscreen_chain_test.sh {install|start|status|restore-precheck|restore|collect}" >&2; exit 2 ;;
 esac
