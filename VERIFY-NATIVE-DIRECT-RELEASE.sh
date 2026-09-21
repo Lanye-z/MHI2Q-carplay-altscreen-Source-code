@@ -27,6 +27,7 @@ STATUS="$ROOT/Toolbox/scripts/status_mmi_cockpit_carplay_test.sh"
 CHAIN="$ROOT/Toolbox/scripts/altscreen_chain_test.sh"
 BOOT_DIAG="$ROOT/Toolbox/scripts/altscreen_boot_diag.sh"
 START_TX_TEST="$ROOT/Toolbox/carplay_alt_screen/tests/test_start_autostart_transaction.sh"
+STORAGE_POLICY_TEST="$ROOT/Toolbox/carplay_alt_screen/tests/test_storage_policy.sh"
 TOP="$ROOT/SHA256SUMS.txt"
 MAP="$ROOT/PACKAGE_SOURCE_MAP.json"
 
@@ -37,7 +38,7 @@ sha256_file(){
 }
 binary_strings(){ strings "$1" 2>/dev/null || grep -a -o '[[:print:]][[:print:]]*' "$1"; }
 
-for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$AIRPLAY_SRC" "$RESOLVE" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$GL_RENDERER_CPP" "$MAIN_CPP" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$STOP" "$INSTALL" "$STATUS" "$CHAIN" "$BOOT_DIAG" "$START_TX_TEST"; do
+for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$AIRPLAY_SRC" "$RESOLVE" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$GL_RENDERER_CPP" "$MAIN_CPP" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$STOP" "$INSTALL" "$STATUS" "$CHAIN" "$BOOT_DIAG" "$START_TX_TEST" "$STORAGE_POLICY_TEST"; do
     [ -s "$f" ] || fail "missing/empty: $f"
 done
 
@@ -535,6 +536,7 @@ grep -Fq '"$BASE/operations"' "$BOOT_DIAG" ||
     fail "boot diagnostics do not flush volatile operation journals to SD"
 
 sh "$START_TX_TEST" || fail "START/autostart host transaction fixture failed"
+sh "$STORAGE_POLICY_TEST" || fail "storage policy fixture failed"
 
 grep -Fq 'touch /tmp/mmi-mirror-active' "$START" ||
     fail "Java80 demand boot marker missing"

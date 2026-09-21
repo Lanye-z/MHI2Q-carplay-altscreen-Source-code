@@ -46,6 +46,7 @@ CONTROLLER="$SCRIPTDIR/altscreen_chain_test.sh"
 [ -n "$VOLUME" ] || { echo "FAIL: SD card required to restore original Java HMI JAR"; exit 1; }
 
 RUNTIME="$DEVICE_ROOT/mnt/app/root/carplay-altscreen"
+TXN_DIR="$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/txn/restore.$$"
 ENABLED="$RUNTIME/state/basevideo3.enabled"
 JAR="$DEVICE_ROOT/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar"
 JAR_DIR=$(dirname -- "$JAR")
@@ -59,6 +60,24 @@ mount_app_rw(){ [ "$TESTING" = 1 ] || mount -uw /mnt/app; }
 mount_app_ro(){ [ "$TESTING" = 1 ] || mount -ur /mnt/app; }
 mount_system_rw(){ [ "$TESTING" = 1 ] || mount -uw /mnt/system; }
 mount_system_ro(){ [ "$TESTING" = 1 ] || mount -ur /mnt/system; }
+system_space_snapshot(){
+    label=$1; target="$DEVICE_ROOT/mnt/system"
+    echo "SYSTEM_SPACE_BEGIN label=$label path=$target"
+    df -k "$target" 2>/dev/null || df "$target" 2>/dev/null || true
+    echo "SYSTEM_SPACE_END label=$label"
+}
+publish_system_file(){
+    src=$1; dst=$2; mode=$3; dir=${dst%/*}; base=${dst##*/}; tmp="$dir/.$base.altscreen.new.$$"
+    if cmp -s "$src" "$dst" 2>/dev/null; then chmod "$mode" "$dst" 2>/dev/null || return 1; echo "SYSTEM_PUBLISH=SKIP_IDENTICAL target=$dst"; return 0; fi
+    rm -f "$tmp" 2>/dev/null || true
+    if cp "$src" "$tmp"; then :; else rc=$?; rm -f "$tmp" 2>/dev/null || true; echo "SYSTEM_WRITE_FAILED stage=copy target=$dst"; system_space_snapshot restore_publish_failed; return "$rc"; fi
+    chmod "$mode" "$tmp" || { rc=$?; rm -f "$tmp" 2>/dev/null || true; return "$rc"; }
+    cmp -s "$src" "$tmp" || { rm -f "$tmp" 2>/dev/null || true; return 1; }
+    mv "$tmp" "$dst" || { rc=$?; rm -f "$tmp" 2>/dev/null || true; return "$rc"; }
+}
+cleanup_txn(){ [ ! -e "$TXN_DIR" ] || rm -rf "$TXN_DIR" 2>/dev/null || true; }
+trap cleanup_txn 0
+trap 'cleanup_txn; exit 130' 1 2 15
 
 verify_backup(){
     [ -f "$BACKUP/COMPLETE" ] || return 1
@@ -131,20 +150,21 @@ for candidate in "$DEVICE_ROOT/mnt/system/etc/boot/startup.sh" "$DEVICE_ROOT/etc
     if [ -f "$candidate" ]; then STARTUP=$candidate; break; fi
 done
 if [ -n "$STARTUP" ]; then
-    CLEAN="$STARTUP.basevideo3.restore.$$"
-    mount_system_rw || { echo "FAIL: cannot mount /mnt/system writable"; exit 1; }
-    strip_blocks "$STARTUP" > "$CLEAN" || {
-        rm -f "$CLEAN"; mount_system_ro >/dev/null 2>&1 || true
-        echo "FAIL: invalid BaseVideo3/Mirror autostart block"; exit 1; }
-    sh -n "$CLEAN" || {
-        rm -f "$CLEAN"; mount_system_ro >/dev/null 2>&1 || true
-        echo "FAIL: startup.sh invalid after BaseVideo3 block removal"; exit 1; }
-    cp "$CLEAN" "$STARTUP" && chmod 755 "$STARTUP" && cmp -s "$CLEAN" "$STARTUP" || {
-        rm -f "$CLEAN"; mount_system_ro >/dev/null 2>&1 || true
-        echo "FAIL: cannot publish cleaned startup.sh"; exit 1; }
-    rm -f "$CLEAN"
-    sync >/dev/null 2>&1 || true
-    mount_system_ro || { echo "FAIL: cannot remount /mnt/system read-only"; exit 1; }
+    ensure_dirs "$TXN_DIR" || { echo "FAIL: cannot create volatile RESTORE transaction directory"; exit 1; }
+    CLEAN="$TXN_DIR/startup.clean"
+    system_space_snapshot restore_begin
+    strip_blocks "$STARTUP" > "$CLEAN" || { echo "FAIL: invalid BaseVideo3/Mirror autostart block"; exit 1; }
+    sh -n "$CLEAN" || { echo "FAIL: startup.sh invalid after BaseVideo3 block removal"; exit 1; }
+    if ! cmp -s "$CLEAN" "$STARTUP" 2>/dev/null; then
+        mount_system_rw || { echo "FAIL: cannot mount /mnt/system writable"; exit 1; }
+        rm -f "$STARTUP.basevideo3.clean."* "$STARTUP.basevideo3.block."* "$STARTUP.basevideo3.new."*               "$STARTUP.basevideo3.original."* "$STARTUP.basevideo3.restore."*               "${STARTUP%/*}/.${STARTUP##*/}.altscreen.new."* 2>/dev/null || true
+        publish_system_file "$CLEAN" "$STARTUP" 755 || { mount_system_ro >/dev/null 2>&1 || true; echo "FAIL: SYSTEM_WRITE_FAILED publishing cleaned startup.sh"; exit 1; }
+        sync >/dev/null 2>&1 || true
+        mount_system_ro || { echo "FAIL: cannot remount /mnt/system read-only"; exit 1; }
+    else
+        echo "RESTORE_AUTOSTART=ALREADY_CLEAN"
+    fi
+    system_space_snapshot restore_after_publish
 fi
 
 verify_backup || { echo "FAIL: original Java HMI backup unavailable or damaged: $BACKUP"; exit 1; }

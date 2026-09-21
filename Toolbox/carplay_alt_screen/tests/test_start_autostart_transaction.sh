@@ -72,6 +72,12 @@ grep -Fq 'START=PASS integrated=' "$tmp/success1.log" || fail "first START pass 
     fail "autostart block count is not one"
 grep -Fq '/tmp/MMI-Cockpit-Carplay/mirror/autostart.log' "$live/mnt/system/etc/boot/startup.sh" ||
     fail "autostart log path is not canonical"
+if find "$live/mnt/system/etc/boot" -type f -name 'startup.sh.basevideo3.*' | grep -q .; then
+    fail "START leaked transaction scratch into /mnt/system"
+fi
+if find "$live/tmp/MMI-Cockpit-Carplay/txn" -type f 2>/dev/null | grep -q .; then
+    fail "START left volatile transaction files after success"
+fi
 ls "$vol/MMI-Cockpit-Carplay/logs/operations"/start_*.log >/dev/null 2>&1 ||
     fail "persistent START journal missing"
 
@@ -125,5 +131,8 @@ grep -Fq 'START_ROLLBACK_CONTROLLER=DISARMED_NEW_TRANSACTION' "$tmp/fresh_fail.l
     fail "fresh failure controller rollback diagnostic missing"
 grep -Fq 'START_ROLLBACK_AUTOSTART=RESTORED' "$tmp/fresh_fail.log" ||
     fail "fresh failure startup rollback diagnostic missing"
+if find "$live2/mnt/system/etc/boot" -type f -name 'startup.sh.basevideo3.*' | grep -q .; then
+    fail "failed START leaked transaction scratch into /mnt/system"
+fi
 
-echo "START_AUTOSTART_TRANSACTION_TEST=PASS idempotent_state=1 persistent_journal=1 rollback=transactional canonical_autolog=1"
+echo "START_AUTOSTART_TRANSACTION_TEST=PASS idempotent_state=1 persistent_journal=1 rollback=transactional canonical_autolog=1 system_scratch=tmp_only"

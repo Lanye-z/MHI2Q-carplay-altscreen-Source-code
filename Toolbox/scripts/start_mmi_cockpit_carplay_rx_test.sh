@@ -29,17 +29,53 @@ if [ "${ALTS_START_CAPTURED:-0}" != 1 ]; then
         journal_root=${ALTSCREEN_CHAIN_ROOT:-}
         case "$journal_root" in /tmp/*|/var/tmp/*) ;; *) exit 2 ;; esac
     fi
-    journal_dir="$journal_root/tmp/MMI-Cockpit-Carplay/diagnostics/operations"
     journal_stamp=$(date +%Y%m%d_%H%M%S 2>/dev/null || echo unknown)
-    journal_name="start_${journal_stamp}_$.log"
-    if ensure_dirs "$journal_dir" 2>/dev/null; then
-        journal="$journal_dir/$journal_name"
+    journal_name="start_${journal_stamp}_$$.log"
+    journal_volume=""
+    if [ "${ALTSCREEN_CHAIN_TESTING:-0}" = 1 ]; then
+        journal_volume=${ALTSCREEN_CHAIN_VOLUME:-}
     else
-        journal="$journal_root/tmp/altscreen_$journal_name"
+        for candidate in /net/mmx/fs/sda0 /net/mmx/fs/sda1 /net/mmx/fs/sdb0 /net/mmx/fs/sdb1 /fs/sda0 /fs/sda1 /fs/sdb0 /fs/sdb1; do
+            if [ -d "$candidate/Toolbox" ]; then journal_volume=$candidate; break; fi
+        done
+    fi
+    journal_storage=TMP
+    if [ -n "$journal_volume" ] && [ -d "$journal_volume/Toolbox" ]; then
+        journal_dir="$journal_volume/MMI-Cockpit-Carplay/logs/operations"
+        if ensure_dirs "$journal_dir" 2>/dev/null; then
+            journal="$journal_dir/$journal_name"
+            journal_storage=SD
+        fi
+    fi
+    if [ "$journal_storage" = TMP ]; then
+        journal_dir="$journal_root/tmp/MMI-Cockpit-Carplay/diagnostics/operations"
+        if ensure_dirs "$journal_dir" 2>/dev/null; then
+            journal="$journal_dir/$journal_name"
+        else
+            journal="$journal_root/tmp/altscreen_$journal_name"
+        fi
     fi
 
-    if ! (printf 'OP_BEGIN action=START script=%s\n' "$CAPTURE_ENTRY" > "$journal") 2>/dev/null; then
-        echo "WARN: START diagnostic journal unavailable; continuing operation"
+    journal_opened=0
+    if (printf 'OP_BEGIN action=START script=%s storage=%s\n' "$CAPTURE_ENTRY" "$journal_storage" > "$journal") 2>/dev/null; then
+        journal_opened=1
+    elif [ "$journal_storage" = SD ]; then
+        # A card may be present but temporarily read-only/unwritable. Logging
+        # must degrade to volatile storage instead of running unjournaled.
+        journal_storage=TMP
+        journal_dir="$journal_root/tmp/MMI-Cockpit-Carplay/diagnostics/operations"
+        if ensure_dirs "$journal_dir" 2>/dev/null; then
+            journal="$journal_dir/$journal_name"
+        else
+            journal="$journal_root/tmp/altscreen_$journal_name"
+        fi
+        if (printf 'OP_BEGIN action=START script=%s storage=%s\n' "$CAPTURE_ENTRY" "$journal_storage" > "$journal") 2>/dev/null; then
+            printf 'START_JOURNAL_FALLBACK=TMP reason=sd_write_failed\n' >> "$journal" 2>/dev/null || true
+            journal_opened=1
+        fi
+    fi
+    if [ "$journal_opened" != 1 ]; then
+        echo "WARN: START diagnostic journal unavailable on SD and /tmp; continuing operation"
         ALTS_START_CAPTURED=1; export ALTS_START_CAPTURED
         if [ "$#" -gt 0 ]; then exec /bin/sh "$CAPTURE_ENTRY" "$@"; else exec /bin/sh "$CAPTURE_ENTRY"; fi
     fi
@@ -52,21 +88,15 @@ if [ "${ALTS_START_CAPTURED:-0}" != 1 ]; then
     journal_rc=$?
     printf 'OP_END action=START rc=%s\n' "$journal_rc" >> "$journal"
 
-    journal_volume=""
-    if [ "${ALTSCREEN_CHAIN_TESTING:-0}" = 1 ]; then
-        journal_volume=${ALTSCREEN_CHAIN_VOLUME:-}
-    else
-        for candidate in /net/mmx/fs/sda0 /net/mmx/fs/sda1 /net/mmx/fs/sdb0 /net/mmx/fs/sdb1 /fs/sda0 /fs/sda1 /fs/sdb0 /fs/sdb1; do
-            if [ -d "$candidate/Toolbox" ]; then journal_volume=$candidate; break; fi
-        done
-    fi
     if [ -n "$journal_volume" ] && [ -d "$journal_volume/Toolbox" ]; then
         printf 'DIAGNOSTICS_VOLUME=%s\n' "$journal_volume" >> "$journal"
-        journal_target_dir="$journal_volume/MMI-Cockpit-Carplay/logs/operations"
-        if ensure_dirs "$journal_target_dir" 2>/dev/null; then
-            cp "$journal" "$journal_target_dir/$journal_name.new" 2>/dev/null &&
-                mv "$journal_target_dir/$journal_name.new" "$journal_target_dir/$journal_name" 2>/dev/null ||
-                rm -f "$journal_target_dir/$journal_name.new" 2>/dev/null || true
+        if [ "$journal_storage" = TMP ]; then
+            journal_target_dir="$journal_volume/MMI-Cockpit-Carplay/logs/operations"
+            if ensure_dirs "$journal_target_dir" 2>/dev/null; then
+                cp "$journal" "$journal_target_dir/$journal_name.new" 2>/dev/null &&
+                    mv "$journal_target_dir/$journal_name.new" "$journal_target_dir/$journal_name" 2>/dev/null ||
+                    rm -f "$journal_target_dir/$journal_name.new" 2>/dev/null || true
+            fi
         fi
     fi
     cat "$journal"
@@ -253,11 +283,46 @@ verify_autostart_contract(){
     ' "$1"
 }
 
-CLEAN="$STARTUP.basevideo3.clean.$$"
-BLOCK="$STARTUP.basevideo3.block.$$"
-NEW="$STARTUP.basevideo3.new.$$"
-ORIGINAL="$STARTUP.basevideo3.original.$$"
-cleanup(){ rm -f "$CLEAN" "$BLOCK" "$NEW" "$ORIGINAL" 2>/dev/null || true; }
+TXN_DIR="$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/txn/start.$$"
+ensure_dirs "$TXN_DIR" || pre_fail "cannot create START transaction directory"
+CLEAN="$TXN_DIR/startup.clean"
+BLOCK="$TXN_DIR/startup.block"
+NEW="$TXN_DIR/startup.new"
+ORIGINAL="$TXN_DIR/startup.original"
+
+system_space_snapshot(){
+    label=$1
+    target="$DEVICE_ROOT/mnt/system"
+    echo "SYSTEM_SPACE_BEGIN label=$label path=$target"
+    df -k "$target" 2>/dev/null || df "$target" 2>/dev/null || true
+    echo "SYSTEM_SPACE_END label=$label"
+}
+cleanup_legacy_system_staging(){
+    rm -f "$STARTUP.basevideo3.clean."* "$STARTUP.basevideo3.block."*           "$STARTUP.basevideo3.new."* "$STARTUP.basevideo3.original."*           "$STARTUP.basevideo3.restore."*           "$SYSTEM_PROBE_DIR/.${STARTUP##*/}.altscreen.new."* 2>/dev/null || true
+}
+publish_system_file(){
+    src=$1; dst=$2; mode=$3; dir=${dst%/*}; base=${dst##*/}
+    tmp="$dir/.$base.altscreen.new.$$"
+    if cmp -s "$src" "$dst" 2>/dev/null; then
+        chmod "$mode" "$dst" 2>/dev/null || return 1
+        echo "SYSTEM_PUBLISH=SKIP_IDENTICAL target=$dst"
+        return 0
+    fi
+    rm -f "$tmp" 2>/dev/null || true
+    if cp "$src" "$tmp"; then
+        :
+    else
+        rc=$?
+        rm -f "$tmp" 2>/dev/null || true
+        echo "SYSTEM_WRITE_FAILED stage=copy target=$dst"
+        system_space_snapshot publish_copy_failed
+        return "$rc"
+    fi
+    chmod "$mode" "$tmp" || { rc=$?; rm -f "$tmp" 2>/dev/null || true; return "$rc"; }
+    cmp -s "$src" "$tmp" || { rm -f "$tmp" 2>/dev/null || true; return 1; }
+    mv "$tmp" "$dst" || { rc=$?; rm -f "$tmp" 2>/dev/null || true; return "$rc"; }
+    return 0
+}
 
 APP_RW=0
 SYSTEM_RW=0
@@ -294,11 +359,7 @@ rollback_controller_start(){
     echo "START_ROLLBACK_CONTROLLER=DISARMED_NEW_TRANSACTION"
 }
 
-cleanup(){
-    for f in "$CLEAN" "$BLOCK" "$NEW" "$ORIGINAL"; do
-        [ -n "$f" ] && rm -f "$f" 2>/dev/null || true
-    done
-}
+cleanup(){ [ ! -e "$TXN_DIR" ] || rm -rf "$TXN_DIR" 2>/dev/null || true; }
 
 rollback(){
     echo "START_ROLLBACK_BEGIN stage=$CURRENT_STAGE"
@@ -311,8 +372,7 @@ rollback(){
     if [ "$STARTUP_CHANGED" = 1 ] && [ -f "$ORIGINAL" ]; then
         [ "$SYSTEM_RW" = 1 ] || { mount_system_rw >/dev/null 2>&1 && SYSTEM_RW=1; }
         if [ "$SYSTEM_RW" = 1 ] &&
-           cp "$ORIGINAL" "$STARTUP" >/dev/null 2>&1 &&
-           chmod 755 "$STARTUP" >/dev/null 2>&1 &&
+           publish_system_file "$ORIGINAL" "$STARTUP" 755 >/dev/null 2>&1 &&
            cmp -s "$ORIGINAL" "$STARTUP" 2>/dev/null; then
             echo "START_ROLLBACK_AUTOSTART=RESTORED"
         else
@@ -359,6 +419,14 @@ fail_rc(){
     echo "FAIL: $msg" >&2
     exit "$rc"
 }
+on_signal(){
+    trap - 0 1 2 15
+    echo "START_FAIL_STAGE=$CURRENT_STAGE rc=130 reason=signal_interrupt"
+    rollback
+    exit 130
+}
+trap cleanup 0
+trap on_signal 1 2 15
 
 stage APP_STATE_RW
 mount_app_rw || fail "cannot mount /mnt/app writable"
@@ -376,12 +444,9 @@ sync >/dev/null 2>&1 || true
 mount_app_ro || fail "cannot remount /mnt/app read-only"
 APP_RW=0
 
-stage SYSTEM_RW
-mount_system_rw || fail "cannot mount startup filesystem writable"
-SYSTEM_RW=1
-
 stage SNAPSHOT_STARTUP
-cp "$STARTUP" "$ORIGINAL" || fail "cannot snapshot startup.sh"
+system_space_snapshot start_begin
+cp "$STARTUP" "$ORIGINAL" || fail "cannot snapshot startup.sh into volatile transaction storage"
 
 stage STRIP_AUTOSTART
 strip_blocks "$STARTUP" > "$CLEAN" || fail "invalid existing BaseVideo3/Mirror autostart block"
@@ -418,19 +483,19 @@ stage PUBLISH_AUTOSTART
 if cmp -s "$NEW" "$STARTUP" 2>/dev/null; then
     echo "AUTOSTART_PUBLISH=UNCHANGED"
 else
-    # Mark the file as transactionally changed before cp: even a partial cp
-    # failure must restore the snapshot.
+    mount_system_rw || fail "cannot mount startup filesystem writable"
+    SYSTEM_RW=1
+    cleanup_legacy_system_staging
     STARTUP_CHANGED=1
-    cp "$NEW" "$STARTUP" || fail "cannot publish BaseVideo3 autostart"
-    chmod 755 "$STARTUP" || fail "cannot chmod startup.sh"
+    publish_system_file "$NEW" "$STARTUP" 755 || fail "SYSTEM_WRITE_FAILED publishing BaseVideo3 autostart"
     cmp -s "$NEW" "$STARTUP" || fail "published startup.sh byte verification failed"
     echo "AUTOSTART_PUBLISH=UPDATED"
+    sync >/dev/null 2>&1 || true
+    stage SYSTEM_RO
+    mount_system_ro || fail "cannot remount startup filesystem read-only"
+    SYSTEM_RW=0
 fi
-sync >/dev/null 2>&1 || true
-
-stage SYSTEM_RO
-mount_system_ro || fail "cannot remount startup filesystem read-only"
-SYSTEM_RW=0
+system_space_snapshot start_after_publish
 
 stage CURRENT_BOOT_DEMAND
 if [ "$CURRENT_ACTIVE_WAS_PRESENT" != 1 ] || [ "$MIRROR_WAS_RUNNING" != 1 ]; then
@@ -459,6 +524,7 @@ MIRROR_RC=$?
 stage COMPLETE
 
 cleanup
+trap - 0 1 2 15
 echo "DISPLAY_PATH=PRIVATE111_DIRECT source=ScreenStreamProcessData h264_shm=/carplay111_h264 decoder_backend=stock_omx_screen_linearized_shm decoded_shm=/carplay111_decoded sink=displayable3_gles window58_readback=0"
 echo "HMI_CONTROL_PLANE=JAVA80 context=80 composite=98,101,102,3"
 echo "CONTEXT_POLICY=JAVA_ONLY native_dmdt=0 sidecar_dmdt=0"

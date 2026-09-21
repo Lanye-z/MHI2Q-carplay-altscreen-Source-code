@@ -120,6 +120,10 @@ backup_original_jar(){
         echo "HMI_BACKUP=PRESERVED path=$BACKUP"
         return 0
     fi
+    if [ -f "$JAR_TARGET" ] && same_bytes "$JAR_SOURCE" "$JAR_TARGET"; then
+        echo "FAIL: trusted original Java HMI backup is absent but the live JAR already matches this project; reuse the original SD backup or restore stock first"
+        return 1
+    fi
     rm -rf "$BACKUP_TMP" 2>/dev/null || true
     ensure_dirs "$(dirname -- "$BACKUP")" "$BACKUP_TMP" || return 1
     echo "/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar" > "$BACKUP_TMP/target" || return 1
