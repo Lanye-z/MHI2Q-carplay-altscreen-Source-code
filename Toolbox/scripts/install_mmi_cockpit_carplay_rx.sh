@@ -5,6 +5,16 @@
 # Window58 readback and RGI98 native renderer are not used by the sidecar.
 set -u
 
+# QNX compatibility: treat already-existing directories as success instead of
+# relying on target mkdir -p return semantics.
+ensure_dirs() {
+    for dir in "$@"; do
+        [ -d "$dir" ] && continue
+        mkdir -p "$dir" || return 1
+    done
+    return 0
+}
+
 BASE="$0"
 RESOLVED=$(command -v -- "$BASE" 2>/dev/null)
 [ -n "$RESOLVED" ] || RESOLVED="$BASE"
@@ -111,7 +121,7 @@ backup_original_jar(){
         return 0
     fi
     rm -rf "$BACKUP_TMP" 2>/dev/null || true
-    mkdir -p "$(dirname -- "$BACKUP")" "$BACKUP_TMP" || return 1
+    ensure_dirs "$(dirname -- "$BACKUP")" "$BACKUP_TMP" || return 1
     echo "/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar" > "$BACKUP_TMP/target" || return 1
     if [ -f "$JAR_TARGET" ]; then
         cp "$JAR_TARGET" "$BACKUP_TMP/carplay_hook.jar" || return 1
@@ -129,7 +139,7 @@ backup_original_jar(){
 
 restore_original_jar(){
     verify_backup || return 1
-    mkdir -p "$JAR_TARGET_DIR" || return 1
+    ensure_dirs "$JAR_TARGET_DIR" || return 1
     rm -f "$JAR_TARGET.basevideo3.tmp" 2>/dev/null || true
     if [ -f "$BACKUP/present" ]; then
         cp "$BACKUP/carplay_hook.jar" "$JAR_TARGET.basevideo3.tmp" || return 1
@@ -184,7 +194,7 @@ fail(){ msg=$1; rollback; echo "FAIL: $msg" >&2; exit 1; }
 
 mount_app_rw || fail "cannot mount /mnt/app writable"
 APP_RW=1
-mkdir -p "$JAR_TARGET_DIR" || fail "cannot create HMI JAR directory"
+ensure_dirs "$JAR_TARGET_DIR" || fail "cannot create HMI JAR directory"
 TMP="$JAR_TARGET.basevideo3.tmp"
 rm -f "$TMP" 2>/dev/null || true
 cp "$JAR_SOURCE" "$TMP" || fail "cannot stage Java80 HMI JAR"
