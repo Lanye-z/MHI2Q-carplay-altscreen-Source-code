@@ -1,4 +1,4 @@
-name: Storage Recovery Scan V1
+name: Storage Recovery V1
 
 on:
   push:
@@ -7,7 +7,9 @@ on:
     paths:
       - 'Toolbox/GEM/mqb-carplayAltScreenStorageRecovery.esd'
       - 'Toolbox/scripts/altscreen_storage_recovery_scan.sh'
+      - 'Toolbox/scripts/altscreen_storage_recovery_cleanup.sh'
       - 'Toolbox/carplay_alt_screen/tests/test_storage_recovery_scan.sh'
+      - 'Toolbox/carplay_alt_screen/tests/test_storage_recovery_cleanup.sh'
       - 'STORAGE-RECOVERY-SCAN-V1.md'
       - '.github/workflows/storage-recovery-scan-v1.yml'
   workflow_dispatch:
@@ -40,3 +42,23 @@ jobs:
             exit 1
           fi
           echo 'STORAGE_RECOVERY_READ_ONLY_CONTRACT=PASS'
+
+      - name: Run confirmed cleanup fixture
+        run: |
+          set -euo pipefail
+          sh Toolbox/carplay_alt_screen/tests/test_storage_recovery_cleanup.sh
+
+      - name: Verify cleanup safety contract
+        run: |
+          set -euo pipefail
+          clean='Toolbox/scripts/altscreen_storage_recovery_cleanup.sh'
+          gem='Toolbox/GEM/mqb-carplayAltScreenStorageRecovery.esd'
+          grep -Fq 'CLEAN CONFIRMED LEGACY FILES' "$gem"
+          grep -Fq 'SD_BACKUP_REQUIRED=YES' "$clean"
+          grep -Fq 'CHAIN_TEST_OPERATION_LOCK_PRESENT' "$clean"
+          grep -Fq 'STARTUP_UNCHANGED=YES' "$clean"
+          grep -Fq 'startup.sh.basevideo3.block.*' "$clean"
+          grep -Fq 'startup.sh.mirror.block.*' "$clean"
+          grep -Fq '/mnt/app/root/hooks/libcp_mirror.so' "$clean"
+          grep -Fq '/mnt/app/root/carplay-altscreen/tmp/mirror.previous' "$clean"
+          echo 'STORAGE_RECOVERY_CLEANUP_CONTRACT=PASS'
