@@ -147,45 +147,39 @@ elif grep -Fq 'release_binary_status=V2_BINARY_STALE_OWNERSHIP_REBUILD_REQUIRED'
         fail "ownership observer metadata missing"
 elif grep -Fq 'release_binary_status=V3_BINARY_STALE_V31_SOURCE_REBUILD_REQUIRED' "$INFO"; then
     SOURCE_ONLY=1
-    HOOK_PENDING=1
     NATIVE_REBUILDS=1
-    grep -Fq 'vehicle_zip_status=NOT_READY_NATIVE_REBUILDS_REQUIRED' "$INFO" ||
-        fail "V3.1 geometry source must remain blocked until hook and sidecar rebuild"
-    grep -Fq 'hook_runtime_rebuild_required=yes' "$INFO" ||
-        fail "V3.1 must declare universal hook rebuild pending"
     grep -Fq 'sidecar_source_driven_rebuild_required=yes' "$INFO" ||
         fail "V3.1 must declare QNX sidecar rebuild pending"
-    grep -Fq 'hook_layout_safearea_rebuild_required=yes' "$INFO" ||
-        fail "V3.1 must declare safeArea hook rebuild pending"
+
+    if grep -Fq 'hook_runtime_rebuild_required=yes' "$INFO"; then
+        HOOK_PENDING=1
+        grep -Fq 'hook_layout_safearea_rebuild_required=yes' "$INFO" ||
+            fail "V3.1 hook-pending state must declare safeArea rebuild pending"
+        grep -Fq 'vehicle_zip_status=NOT_READY_NATIVE_REBUILDS_REQUIRED' "$INFO" ||
+            fail "V3.1 hook+sidecar pending state must remain blocked"
+        if binary_strings "$HOOK" | grep -Fq 'safe_yh_mapping=map_local_unscaled'; then
+            fail "V3.1 hook metadata says pending but rebuilt safeArea marker is already present"
+        fi
+    else
+        HOOK_PENDING=0
+        grep -Fq 'hook_layout_safearea_rebuild_required=no' "$INFO" ||
+            fail "V3.1 rebuilt-hook state must clear safeArea rebuild flag"
+        grep -Fq 'vehicle_zip_status=NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED' "$INFO" ||
+            fail "V3.1 rebuilt-hook state must remain blocked on QNX sidecar only"
+        binary_strings "$HOOK" | grep -Fq 'safe_yh_mapping=map_local_unscaled' ||
+            fail "V3.1 rebuilt hook missing map-local safeArea marker"
+        binary_strings "$HOOK" | grep -Fq 'geometry_revision=V31_ONE_TO_ONE_CLIP' ||
+            fail "V3.1 rebuilt hook missing geometry revision marker"
+    fi
+
     for marker in 'carplay-private111-direct-display-v2-source-driven-layout-live-v4' 'PHASE=DECODED_SHM_WAIT_SIZE' 'PHASE=SOURCE_SESSION' 'PHASE=GATE_RECOVER_CURRENT_SESSION' 'matching_identity_plus_frame_progress' 'PHASE=DISPLAYABLE3_FIRST_PRESENT' 'PHASE=DISPLAYABLE3_OWNERSHIP' 'DISPLAYABLE3_OWNERSHIP_V1' 'PHASE=DIRECT111_ACTIVE'
     do
         binary_strings "$BIN" | grep -Fq "$marker" ||
             fail "previous V3 sidecar marker missing while awaiting V3.1 rebuild: $marker"
     done
     if binary_strings "$BIN" | grep -Fq 'carplay-private111-direct-display-v3.1-oem-map-1to1-clip'; then
-        fail "BUILD_INFO says V3.1 rebuild required but sidecar already contains V3.1 build id"
+        fail "BUILD_INFO says V3.1 sidecar rebuild required but binary already contains V3.1 build id"
     fi
-    if binary_strings "$HOOK" | grep -Fq 'safe_yh_mapping=map_local_unscaled'; then
-        fail "BUILD_INFO says V3.1 hook rebuild required but hook already contains V3.1 safeArea mapping"
-    fi
-elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V31' "$INFO"; then
-    grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$INFO" ||
-        fail "rebuilt V3.1 package has unknown vehicle-ready state"
-    grep -Fq 'hook_runtime_rebuild_required=no' "$INFO" ||
-        fail "vehicle-ready V3.1 package must declare rebuilt hook runtime"
-    grep -Fq 'sidecar_source_driven_rebuild_required=no' "$INFO" ||
-        fail "vehicle-ready V3.1 package must declare rebuilt sidecar"
-    grep -Fq 'hook_layout_safearea_rebuild_required=no' "$INFO" ||
-        fail "vehicle-ready V3.1 package must declare rebuilt safeArea hook"
-    for marker in 'carplay-private111-direct-display-v3.1-oem-map-1to1-clip' 'PHASE=OEM_GEOMETRY_V31' 'geometry_policy=OEM_MAP_PLANE_1TO1_CLIP_V31' 'PHASE=DECODED_SHM_WAIT_SIZE' 'PHASE=SOURCE_SESSION' 'PHASE=GATE_RECOVER_CURRENT_SESSION' 'matching_identity_plus_frame_progress' 'packed_tight_required=1' 'stream111_request_or_phone_marker' 'STREAM_111_REQUESTED=YES' 'PHASE=PIPELINE_SOURCE_PRIMED' 'startup_frame_progress_required=2' 'PHASE=DISPLAYABLE3_FIRST_PRESENT' 'PHASE=DISPLAYABLE3_OWNERSHIP' 'DISPLAYABLE3_OWNERSHIP_V1' '/tmp/mmi-mirror-displayable3.state' 'PHASE=DIRECT111_ACTIVE' 'present_policy=source-driven'
-    do
-        binary_strings "$BIN" | grep -Fq "$marker" ||
-            fail "V3.1 sidecar marker missing: $marker"
-    done
-    binary_strings "$HOOK" | grep -Fq 'safe_yh_mapping=map_local_unscaled' ||
-        fail "V3.1 universal hook is missing map-local safeArea mapping"
-    binary_strings "$HOOK" | grep -Fq 'geometry_revision=V31_ONE_TO_ONE_CLIP' ||
-        fail "V3.1 universal hook is missing geometry revision marker"
 elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$INFO"; then
     if grep -Fq 'vehicle_zip_status=NOT_READY_HOOK_REBUILD_REQUIRED' "$INFO"; then
         HOOK_PENDING=1
@@ -199,11 +193,27 @@ elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$INFO"; then
         grep -Fq 'hook_runtime_rebuild_required=no' "$INFO" ||
             fail "vehicle-ready V2 package must declare rebuilt hook runtime"
     fi
-    for marker in 'carplay-private111-direct-display-v2-source-driven-layout-live-v4' 'PHASE=DECODED_SHM_WAIT_SIZE' 'PHASE=SOURCE_SESSION' 'PHASE=GATE_RECOVER_CURRENT_SESSION' 'matching_identity_plus_frame_progress' 'packed_tight_required=1' 'stream111_request_or_phone_marker' 'STREAM_111_REQUESTED=YES' 'PHASE=PIPELINE_SOURCE_PRIMED' 'startup_frame_progress_required=2' 'PHASE=DISPLAYABLE3_FIRST_PRESENT' 'PHASE=DISPLAYABLE3_OWNERSHIP' 'DISPLAYABLE3_OWNERSHIP_V1' '/tmp/mmi-mirror-displayable3.state' 'PHASE=DIRECT111_ACTIVE' 'present_policy=source-driven'
-    do
-        binary_strings "$BIN" | grep -Fq "$marker" ||
-            fail "V2 sidecar marker missing: $marker"
-    done
+    if grep -Fq 'geometry_policy=OEM_MAP_PLANE_1TO1_CLIP_V31' "$INFO"; then
+        grep -Fq 'sidecar_source_driven_rebuild_required=no' "$INFO" ||
+            fail "vehicle-ready V3.1 package must clear sidecar rebuild flag"
+        grep -Fq 'hook_layout_safearea_rebuild_required=no' "$INFO" ||
+            fail "vehicle-ready V3.1 package must clear safeArea rebuild flag"
+        for marker in 'carplay-private111-direct-display-v3.1-oem-map-1to1-clip' 'PHASE=OEM_GEOMETRY_V31' 'geometry_policy=OEM_MAP_PLANE_1TO1_CLIP_V31' 'PHASE=DECODED_SHM_WAIT_SIZE' 'PHASE=SOURCE_SESSION' 'PHASE=GATE_RECOVER_CURRENT_SESSION' 'matching_identity_plus_frame_progress' 'packed_tight_required=1' 'stream111_request_or_phone_marker' 'STREAM_111_REQUESTED=YES' 'PHASE=PIPELINE_SOURCE_PRIMED' 'startup_frame_progress_required=2' 'PHASE=DISPLAYABLE3_FIRST_PRESENT' 'PHASE=DISPLAYABLE3_OWNERSHIP' 'DISPLAYABLE3_OWNERSHIP_V1' '/tmp/mmi-mirror-displayable3.state' 'PHASE=DIRECT111_ACTIVE' 'present_policy=source-driven'
+        do
+            binary_strings "$BIN" | grep -Fq "$marker" ||
+                fail "V3.1 sidecar marker missing: $marker"
+        done
+        binary_strings "$HOOK" | grep -Fq 'safe_yh_mapping=map_local_unscaled' ||
+            fail "V3.1 universal hook missing map-local safeArea mapping"
+        binary_strings "$HOOK" | grep -Fq 'geometry_revision=V31_ONE_TO_ONE_CLIP' ||
+            fail "V3.1 universal hook missing geometry revision marker"
+    else
+        for marker in 'carplay-private111-direct-display-v2-source-driven-layout-live-v4' 'PHASE=DECODED_SHM_WAIT_SIZE' 'PHASE=SOURCE_SESSION' 'PHASE=GATE_RECOVER_CURRENT_SESSION' 'matching_identity_plus_frame_progress' 'packed_tight_required=1' 'stream111_request_or_phone_marker' 'STREAM_111_REQUESTED=YES' 'PHASE=PIPELINE_SOURCE_PRIMED' 'startup_frame_progress_required=2' 'PHASE=DISPLAYABLE3_FIRST_PRESENT' 'PHASE=DISPLAYABLE3_OWNERSHIP' 'DISPLAYABLE3_OWNERSHIP_V1' '/tmp/mmi-mirror-displayable3.state' 'PHASE=DIRECT111_ACTIVE' 'present_policy=source-driven'
+        do
+            binary_strings "$BIN" | grep -Fq "$marker" ||
+                fail "V2 sidecar marker missing: $marker"
+        done
+    fi
 else
     fail "unknown sidecar release state"
 fi
