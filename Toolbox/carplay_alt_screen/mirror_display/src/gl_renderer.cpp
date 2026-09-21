@@ -308,11 +308,11 @@ bool GlRenderer::set_destination_rect(int x, int y, int width, int height) {
     }
 
     /*
-     * OEM map stages may translate the full-size plane partially outside the
-     * 1440x455 viewport (Sport + SMALL is -476 px on X).  Do not clamp that
-     * translation back into the viewport or rescale the texture: GLES clip
-     * space should naturally discard the off-screen portion, matching the
-     * stock map-plane behavior.
+     * OEM map stages may translate the full-size map canvas partially outside
+     * the 1440x455 viewport (Sport + SMALL is -476 px on X).  V3.1 may also
+     * pass a 1440x542 destination so the decoded canvas remains 1:1 vertically;
+     * GLES clip space naturally discards the 87 rows outside the sink plane.
+     * Do not clamp the translation or rescale the destination back to 455.
      */
     const long long right_px = (long long)x + (long long)width;
     const long long bottom_px = (long long)y + (long long)height;
