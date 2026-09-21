@@ -31,6 +31,8 @@ JAVA_LOG="$DEVICE_ROOT/tmp/mmi-mirror-controller.log"
 OEM_GEOMETRY_STATE="$DEVICE_ROOT/tmp/carplay-oem-geometry.state"
 OEM_GEOMETRY_HISTORY="$DEVICE_ROOT/tmp/carplay-oem-geometry.log"
 OEM_DISPLAYMANAGER_API="$DEVICE_ROOT/tmp/carplay-oem-displaymanager-read-api.log"
+WHEEL_ZOOM_EVENTS="$DEVICE_ROOT/tmp/mmi-mirror-wheel-zoom.events"
+WHEEL_ZOOM_LOG="$DEVICE_ROOT/tmp/mmi-mirror-wheel-zoom.log"
 MIRROR="$RUNTIME/bin/mirror"
 MIRROR_PID="$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/mirror/pid"
 MIRROR_LOG="$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/mirror/mirror.log"
@@ -116,7 +118,7 @@ if [ -n "$HOOK_LOG" ]; then
     case "$SLOW_READBACKS" in ''|*[!0-9]*) SLOW_READBACKS=0 ;; esac
     echo "FRAME_LINEARIZER_SLOW_EVENTS=$SLOW_READBACKS threshold_us=20000"
     echo "HOOK_DIRECT111_LOG_TAIL_BEGIN"
-    grep -E 'PHASE=(STREAM_111_|VIDEO_111_|H264_TAP_|H264_AVCC_|DIRECT111_TAP_|FRAME_TAP_|FRAME_LINEARIZER_|DECODER_)|ERROR PHASE=(H264_TAP_SHM_|FRAME_TAP_SHM_|FRAME_TAP_UNSUPPORTED_LAYOUT|FRAME_LINEARIZER_)' "$HOOK_LOG" 2>/dev/null | tail -n 120 || true
+    grep -E 'PHASE=(STREAM_111_|VIDEO_111_|H264_TAP_|H264_AVCC_|DIRECT111_TAP_|FRAME_TAP_|FRAME_LINEARIZER_|DECODER_|WHEEL_ZOOM_|CLUSTER_ZOOM_)|WARN PHASE=WHEEL_ZOOM_|ERROR PHASE=(H264_TAP_SHM_|FRAME_TAP_SHM_|FRAME_TAP_UNSUPPORTED_LAYOUT|FRAME_LINEARIZER_)' "$HOOK_LOG" 2>/dev/null | tail -n 160 || true
     echo "HOOK_DIRECT111_LOG_TAIL_END"
 else
     echo "H264_TAP_DATA=UNKNOWN hook_log_missing=1"
@@ -179,6 +181,22 @@ if [ -f "$JAVA_LOG" ]; then
 else
     echo "JAVA_CTX80_REQUEST=UNKNOWN log_missing=1"
     echo "JAVA_CTX80_ACTUAL=UNKNOWN log_missing=1"
+fi
+
+echo "CARPLAY_WHEEL_ZOOM_PROTOCOL=changeMapZoomLevel direction_0_in_1_out"
+if [ -f "$WHEEL_ZOOM_LOG" ]; then
+    echo "WHEEL_ZOOM_JAVA_LOG_TAIL_BEGIN"
+    tail -n 80 "$WHEEL_ZOOM_LOG" 2>/dev/null || true
+    echo "WHEEL_ZOOM_JAVA_LOG_TAIL_END"
+else
+    echo "WHEEL_ZOOM_JAVA_LOG=MISSING"
+fi
+if [ -f "$WHEEL_ZOOM_EVENTS" ]; then
+    echo "WHEEL_ZOOM_EVENT_QUEUE_TAIL_BEGIN"
+    tail -n 40 "$WHEEL_ZOOM_EVENTS" 2>/dev/null || true
+    echo "WHEEL_ZOOM_EVENT_QUEUE_TAIL_END"
+else
+    echo "WHEEL_ZOOM_EVENT_QUEUE=MISSING"
 fi
 
 # OEM layout observer is intentionally diagnostic-only in this branch.
