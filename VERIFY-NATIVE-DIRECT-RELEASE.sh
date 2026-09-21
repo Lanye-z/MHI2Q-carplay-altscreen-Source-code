@@ -567,6 +567,7 @@ grep -Fq 'START_ROLLBACK_CONTROLLER=DISARMED_NEW_TRANSACTION' "$START" ||
 grep -Fq '"$BASE/operations"' "$BOOT_DIAG" ||
     fail "boot diagnostics do not flush volatile operation journals to SD"
 
+# Release gate: the fault-injection fixture must prove full rollback before a V3 ZIP can be vehicle-ready.
 sh "$START_TX_TEST" || fail "START/autostart host transaction fixture failed"
 sh "$STORAGE_POLICY_TEST" || fail "storage policy fixture failed"
 sh "$RESTORE_TX_TEST" || fail "RESTORE rollback fault-injection fixture failed"
