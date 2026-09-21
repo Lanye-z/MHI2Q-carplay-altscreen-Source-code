@@ -275,13 +275,17 @@ static bool state_kv_int(const char *line, const char *key, int *out) {
  * Live OEM map-plane placement.
  *
  * The stock B9Sport SMALL stage translates map planes 33/58 by (-476,0).
- * Our displayable3 renderer keeps the same 1440x455 size and reproduces only
- * that translation.  Negative destination coordinates are intentionally left
- * to GLES clipping; there is no scale/crop-to-safe-area operation here.
+ * V3.1 keeps the decoded 1440x542 map canvas at 1:1 scale and projects it into
+ * the 1440x455 displayable3 viewport.  The extra 87 vertical pixels are clipped
+ * naturally by GLES instead of compressing 542 rows into 455 rows.
  *
- * CarPlay safeArea remains map/source-local and moves with the full map plane.
- * For Sport SMALL, source-safe x=490 plus renderer dx=-476 yields physical
- * x=14; do not compensate the safeArea back toward the center.
+ * CarPlay safeArea remains OEM map/source-local and moves with the full map
+ * plane. For Sport SMALL, source-safe x=490 plus renderer dx=-476 yields
+ * physical x=14; do not compensate the safeArea back toward the center.
+ *
+ * The OEM terminal-space Y=26 is map-plane placement metadata.  displayable3
+ * already represents that map plane, so Y=26 must not be applied again inside
+ * this renderer and is not interpreted as a source crop.
  */
 static OemMapPlacement load_session_map_placement() {
     OemMapPlacement p;
@@ -403,21 +407,22 @@ static bool reconcile_oem_map_placement(ClusterVideoDisplay &display,
                 "renderer_scale=0 live_switch=1\n",
                 reason ? reason : "poll");
         applied = true;
-    } else if (p.dx == 0 && p.dy == 0) {
-        display.set_fullscreen_destination();
-        fprintf(stderr,
-                "direct111: PHASE=OEM_MAP_PLACEMENT "
-                "reason=%s mode=%s layout=%s renderer_offset=0,0 "
-                "renderer_scale=0 live_switch=1\n",
-                reason ? reason : "poll", p.view, p.layout);
-        applied = true;
-    } else if (display.set_destination_rect(p.dx, p.dy, 1440, 455)) {
+    } else if (display.set_destination_rect(p.dx, p.dy, 1440, 542)) {
         fprintf(stderr,
                 "direct111: PHASE=OEM_MAP_PLACEMENT "
                 "reason=%s mode=%s layout=%s renderer_offset=%d,%d "
-                "size=1440x455 renderer_scale=0 natural_clip=1 "
-                "live_switch=1\n",
+                "source_canvas=1440x542 sink_viewport=1440x455 "
+                "destination_size=1440x542 geometry_policy=OEM_MAP_PLANE_1TO1_CLIP_V31 "
+                "renderer_scale=0 renderer_scale_y=1.000 natural_clip=1 "
+                "clip_bottom=87 live_switch=1\n",
                 reason ? reason : "poll", p.view, p.layout, p.dx, p.dy);
+        fprintf(stderr,
+                "direct111: PHASE=OEM_GEOMETRY_V31 "
+                "policy=ONE_TO_ONE_VIEWPORT_CLIP source_canvas=1440x542 "
+                "sink_plane=1440x455 map_plane_terminal_y=26 "
+                "map_plane_terminal_y_policy=metadata_only_not_renderer_offset "
+                "safearea_space=MAP_LOCAL_UNSCALED renderer_offset=%d,%d\n",
+                p.dx, p.dy);
         applied = true;
     } else {
         display.set_fullscreen_destination();
