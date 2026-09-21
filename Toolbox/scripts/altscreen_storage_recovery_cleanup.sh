@@ -88,6 +88,12 @@ APP_LIST="${TXN_PREFIX}.app_candidates.list"
 : > "$SYSTEM_LIST"
 : > "$APP_LIST"
 
+# Counts are kept per family because field logs may show /mnt/system/etc/boot
+# and /etc/boot as two views of the same underlying files. Cleanup targets only
+# the canonical persistent /mnt/system path, so physical files are counted once.
+BASEVIDEO3_COUNT=0
+MIRROR_COUNT=0
+
 display_path() {
     path=$1
     if [ -n "$ROOT" ]; then
@@ -191,6 +197,23 @@ record_live_checksums() {
     done
 }
 
+live_refers_to_altscreen_hook() {
+    # A storage cleanup must never "fix" this by deleting the live JSON.
+    # The field log that motivated this revision contained a live LD_PRELOAD
+    # reference while libcarplay_altscreen.so itself was already absent.
+    needle="/mnt/app/root/carplay-altscreen/lib/libcarplay_altscreen.so"
+    for logical in \
+        /mnt/system/etc/boot/startup.sh \
+        /mnt/system/etc/eso/production/smartphone_integrator.json \
+        /mnt/system/etc/eso/production/dio_manager.json \
+        /mnt/system/etc/pf.conf; do
+        f=$(p "$logical")
+        [ -f "$f" ] || continue
+        grep -F "$needle" "$f" >/dev/null 2>&1 && return 0
+    done
+    return 1
+}
+
 valid_startup_temp_name() {
     name=$1
     case "$name" in
@@ -213,6 +236,10 @@ add_system_candidate() {
         return 0
     }
     printf '%s\n' "$path" >> "$SYSTEM_LIST"
+    case "$name" in
+      startup.sh.basevideo3.*) BASEVIDEO3_COUNT=$((BASEVIDEO3_COUNT + 1)) ;;
+      startup.sh.mirror.*) MIRROR_COUNT=$((MIRROR_COUNT + 1)) ;;
+    esac
     bytes=$(path_bytes_hint "$path")
     {
         echo "[SYSTEM_STARTUP_TEMP]"
@@ -315,6 +342,22 @@ STARTUP="$(p /mnt/system/etc/boot/startup.sh)"
     exit 1
 }
 
+# Diagnose, but never delete or rewrite, a live preload configuration.  The
+# 2026-09-21 field scan showed smartphone_integrator.json still pointing at
+# libcarplay_altscreen.so while that library was absent. That is a restore
+# consistency problem, not a storage-residue file to delete.
+ALTSCREEN_HOOK="$(p /mnt/app/root/carplay-altscreen/lib/libcarplay_altscreen.so)"
+LIVE_ALTSCREEN_REFERENCE=NO
+LIVE_CONFIG_REPAIR_REQUIRED=NO
+if live_refers_to_altscreen_hook; then
+    LIVE_ALTSCREEN_REFERENCE=YES
+    if [ ! -f "$ALTSCREEN_HOOK" ]; then
+        LIVE_CONFIG_REPAIR_REQUIRED=YES
+        echo "WARNING=STALE_ALTSCREEN_PRELOAD live_reference=YES library=ABSENT" >> "$REPORT"
+        echo "PROTECTED path=/mnt/system/etc/eso/production/smartphone_integrator.json reason=LIVE_CONFIG_REPAIR_REQUIRED" >> "$SKIPPED"
+    fi
+fi
+
 MMI_RUNTIME="$(p /mnt/app/root/mmi-mirror)"
 if [ -e "$MMI_RUNTIME" ]; then
     echo "MMI_MIRROR_RUNTIME=PRESENT app_mirror_cleanup=REFUSED" >> "$SKIPPED"
@@ -384,6 +427,10 @@ done < "$APP_LIST"
     echo "BACKUP_DIR=$BACKUP_DIR"
     echo "SYSTEM_CANDIDATE_COUNT=$SYSTEM_COUNT"
     echo "SYSTEM_CANDIDATE_BYTES=$SYSTEM_BYTES"
+    echo "BASEVIDEO3_CANDIDATE_COUNT=$BASEVIDEO3_COUNT"
+    echo "MIRROR_CANDIDATE_COUNT=$MIRROR_COUNT"
+    echo "LIVE_ALTSCREEN_REFERENCE=$LIVE_ALTSCREEN_REFERENCE"
+    echo "LIVE_CONFIG_REPAIR_REQUIRED=$LIVE_CONFIG_REPAIR_REQUIRED"
     echo "APP_CANDIDATE_COUNT=$APP_COUNT"
     echo "APP_CANDIDATE_BYTES=$APP_BYTES"
     echo "MMI_MIRROR_RUNTIME_PRESENT=$([ -e "$MMI_RUNTIME" ] && echo YES || echo NO)"
@@ -587,6 +634,29 @@ while IFS= read -r path; do
     [ ! -e "$path" ] || REMAINING_SYSTEM=$((REMAINING_SYSTEM + 1))
 done < "$SYSTEM_LIST"
 
+# /etc/boot can be an alias/view of /mnt/system/etc/boot on MHI2Q. Never issue
+# a second delete pass there; only verify that the canonical deletion is visible
+# through the alternate path. This avoids double-deleting the same physical
+# files while still detecting a platform where the two paths are not aliases.
+ALT_BOOT="$(p /etc/boot)"
+ALT_BOOT_RESIDUE_REMAINING=0
+for path in \
+    "$ALT_BOOT"/startup.sh.basevideo3.block.* \
+    "$ALT_BOOT"/startup.sh.basevideo3.clean.* \
+    "$ALT_BOOT"/startup.sh.basevideo3.new.* \
+    "$ALT_BOOT"/startup.sh.basevideo3.original.* \
+    "$ALT_BOOT"/startup.sh.mirror.block.* \
+    "$ALT_BOOT"/startup.sh.mirror.clean.* \
+    "$ALT_BOOT"/startup.sh.mirror.new.* \
+    "$ALT_BOOT"/startup.sh.mirror.original.*; do
+    [ -f "$path" ] || continue
+    name=$(basename -- "$path")
+    if valid_startup_temp_name "$name"; then
+        ALT_BOOT_RESIDUE_REMAINING=$((ALT_BOOT_RESIDUE_REMAINING + 1))
+        echo "VERIFY_ONLY path=$(display_path "$path") reason=ALT_BOOT_RESIDUE_STILL_VISIBLE" >> "$SKIPPED"
+    fi
+done
+
 POST_SCAN_STATUS=NOT_RUN
 SCANNER="$(dirname -- "$0")/altscreen_storage_recovery_scan.sh"
 if [ -f "$SCANNER" ]; then
@@ -605,6 +675,8 @@ fi
 {
     echo "STARTUP_UNCHANGED=YES"
     echo "SYSTEM_TARGETS_REMAINING=$REMAINING_SYSTEM"
+    echo "ALT_BOOT_RESIDUE_REMAINING=$ALT_BOOT_RESIDUE_REMAINING"
+    echo "LIVE_CONFIG_REPAIR_REQUIRED=$LIVE_CONFIG_REPAIR_REQUIRED"
     echo "POST_SCAN=$POST_SCAN_STATUS"
     echo "CLEANUP=PASS"
 } >> "$REPORT"
@@ -619,6 +691,10 @@ echo "BACKUP_DIR=$BACKUP_DIR"
 echo "REPORT_DIR=$RUN_DIR"
 echo "SYSTEM_FILES_TARGETED=$SYSTEM_COUNT"
 echo "SYSTEM_BYTES_HINT=$SYSTEM_BYTES"
+echo "BASEVIDEO3_FILES_TARGETED=$BASEVIDEO3_COUNT"
+echo "MIRROR_FILES_TARGETED=$MIRROR_COUNT"
+echo "ALT_BOOT_RESIDUE_REMAINING=$ALT_BOOT_RESIDUE_REMAINING"
+echo "LIVE_CONFIG_REPAIR_REQUIRED=$LIVE_CONFIG_REPAIR_REQUIRED"
 echo "APP_ITEMS_TARGETED=$APP_COUNT"
 echo "APP_BYTES_HINT=$APP_BYTES"
 echo "STARTUP_UNCHANGED=YES"
