@@ -1,0 +1,117 @@
+name: AltScreen Probe Marker Contract Rebuild
+
+on:
+  push:
+    branches:
+      - experiment/oem-layout-second-screen_v2
+      - experiment/oem-layout-second-screen_v3
+    paths:
+      - 'Toolbox/carplay_alt_screen/src/p1404_resolve.c'
+      - 'Toolbox/scripts/altscreen_chain_test_universal.sh'
+      - 'VERIFY-NATIVE-DIRECT-RELEASE.sh'
+      - '.github/workflows/altscreen-probe-marker-contract.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: altscreen-probe-marker-contract-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  rebuild-universal-hook:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install ARM build inspection tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang lld binutils-arm-linux-gnueabihf python3-pyelftools
+
+      - name: Verify authorization marker source contract
+        run: |
+          set -euo pipefail
+          expected='/mnt/app/root/carplay-altscreen/state/fullchain_probe'
+          legacy='/mnt/app/root/hooks/.mibcarplay_fullchain_probe'
+          grep -Fq "#define ALTSCREEN_PROBE_MARKER \"$expected\"" Toolbox/carplay_alt_screen/src/p1404_resolve.c
+          grep -Fq "PROBE_MARKER=\"\$(p $expected)\"" Toolbox/scripts/altscreen_chain_test_universal.sh
+          if grep -Fq "$legacy" Toolbox/carplay_alt_screen/src/p1404_resolve.c; then
+            echo "legacy authorization marker still present in source" >&2
+            exit 1
+          fi
+          echo "AUTH_MARKER_SOURCE_CONTRACT=PASS path=$expected"
+
+      - name: Rebuild universal QNX hook
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/altscreen-marker-contract"
+          sh Toolbox/carplay_alt_screen/build_source_snapshot.sh universal "$out"
+          test -s "$out/libcarplay_altscreen.so"
+          expected='/mnt/app/root/carplay-altscreen/state/fullchain_probe'
+          legacy='/mnt/app/root/hooks/.mibcarplay_fullchain_probe'
+          strings "$out/libcarplay_altscreen.so" | grep -Fq "$expected"
+          if strings "$out/libcarplay_altscreen.so" | grep -Fq "$legacy"; then
+            echo "legacy authorization marker leaked into rebuilt runtime" >&2
+            exit 1
+          fi
+          strings "$out/libcarplay_altscreen.so" | grep -Fq 'PHASE=RUNTIME_AUTHORIZATION'
+          strings "$out/libcarplay_altscreen.so" | grep -Fq 'FORCED_BYPASS'
+          arm-linux-gnueabihf-readelf -d "$out/libcarplay_altscreen.so" | grep -q 'libc.so.3'
+          arm-linux-gnueabihf-readelf -d "$out/libcarplay_altscreen.so" | grep -q 'libm.so.2'
+          echo "AUTH_MARKER_BINARY_CONTRACT=PASS path=$expected"
+
+      - name: Promote rebuilt hook and refresh manifests
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/altscreen-marker-contract"
+          dst='Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so'
+          cp "$out/libcarplay_altscreen.so" "$dst"
+
+          python3 <<'PY'
+          import hashlib, json, pathlib
+          root = pathlib.Path('.')
+          p = root / 'PACKAGE_SOURCE_MAP.json'
+          data = json.loads(p.read_text())
+          for rel in list(data):
+              path = root / rel
+              if path.is_file():
+                  data[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+          hook_rel = 'Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so'
+          data[hook_rel] = hashlib.sha256((root / hook_rel).read_bytes()).hexdigest()
+          p.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n')
+
+          sums = root / 'SHA256SUMS.txt'
+          lines = []
+          seen = set()
+          for line in sums.read_text().splitlines():
+              parts = line.split(None, 1)
+              if len(parts) == 2:
+                  rel = parts[1].strip()
+                  path = root / rel
+                  if path.is_file():
+                      line = f"{hashlib.sha256(path.read_bytes()).hexdigest()} {rel}"
+                      seen.add(rel)
+              lines.append(line)
+          if hook_rel not in seen:
+              lines.append(f"{hashlib.sha256((root / hook_rel).read_bytes()).hexdigest()} {hook_rel}")
+          sums.write_text('\n'.join(lines) + '\n')
+          PY
+
+          sh VERIFY-NATIVE-DIRECT-RELEASE.sh
+
+      - name: Commit promoted universal runtime
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so PACKAGE_SOURCE_MAP.json SHA256SUMS.txt
+          if ! git diff --cached --quiet; then
+            git commit -m "build(altscreen): promote authorization-marker fix [skip ci]"
+            git fetch origin "$GITHUB_REF_NAME"
+            git rebase "origin/$GITHUB_REF_NAME"
+            git push origin "HEAD:$GITHUB_REF_NAME"
+          fi

@@ -9,6 +9,7 @@ REL="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS"
 NATIVE="$ROOT/Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c"
 TAP="$ROOT/Toolbox/carplay_alt_screen/src/private111_direct_tap.c"
 AIRPLAY_SRC="$ROOT/Toolbox/carplay_alt_screen/src/p1404_airplay.c"
+RESOLVE="$ROOT/Toolbox/carplay_alt_screen/src/p1404_resolve.c"
 SOURCE="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/private111_direct_source.cpp"
 BACKEND_H="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/mhi2q_backend.h"
 BACKEND_CPP="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/mhi2q_backend.cpp"
@@ -35,13 +36,23 @@ sha256_file(){
 }
 binary_strings(){ strings "$1" 2>/dev/null || grep -a -o '[[:print:]][[:print:]]*' "$1"; }
 
-for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$AIRPLAY_SRC" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$GL_RENDERER_CPP" "$MAIN_CPP" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$STOP" "$INSTALL" "$STATUS" "$CHAIN" "$BOOT_DIAG"; do
+for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$AIRPLAY_SRC" "$RESOLVE" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$GL_RENDERER_CPP" "$MAIN_CPP" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$STOP" "$INSTALL" "$STATUS" "$CHAIN" "$BOOT_DIAG"; do
     [ -s "$f" ] || fail "missing/empty: $f"
 done
 
 for s in "$START" "$CTRL" "$LAUNCH" "$STOP" "$BOOT_DIAG" "$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh"; do
     sh -n "$s" || fail "shell syntax: $s"
 done
+
+AUTH_MARKER="/mnt/app/root/carplay-altscreen/state/fullchain_probe"
+LEGACY_AUTH_MARKER="/mnt/app/root/hooks/.mibcarplay_fullchain_probe"
+grep -Fq "#define ALTSCREEN_PROBE_MARKER \"$AUTH_MARKER\"" "$RESOLVE" ||
+    fail "native authorization marker source is not aligned with persistent runtime"
+grep -Fq "PROBE_MARKER=\"\$(p $AUTH_MARKER)\"" "$CTRL" ||
+    fail "controller authorization marker is not aligned with native hook"
+if grep -Fq "$LEGACY_AUTH_MARKER" "$RESOLVE"; then
+    fail "legacy authorization marker remains in native source"
+fi
 
 SOURCE_ONLY=0
 HOOK_PENDING=0
@@ -127,6 +138,11 @@ if binary_strings "$BIN" | grep -Fq 'screen_read_window'; then
 fi
 
 if [ "$HOOK_PENDING" = 0 ]; then
+    binary_strings "$HOOK" | grep -Fq "$AUTH_MARKER" ||
+        fail "universal hook binary is stale: authorization marker path mismatch"
+    if binary_strings "$HOOK" | grep -Fq "$LEGACY_AUTH_MARKER"; then
+        fail "universal hook binary still embeds legacy authorization marker"
+    fi
     binary_strings "$HOOK" | grep -Fq 'rate_policy=uncapped_source_callbacks' ||
         fail "universal hook binary is stale: rebuild/promote uncapped source-callback readback"
     binary_strings "$HOOK" | grep -Fq 'ALTAREA_LAYOUT_SAFE_V3' ||
