@@ -573,6 +573,25 @@ cmd_start(){
     say "START=PASS profile=UNIVERSAL run_id=$run_id reboot_required=YES"
 }
 
+cmd_restore_precheck(){
+    lock_acquire
+    rc=0
+    verify_backup || { say "FAIL: original backup unavailable or damaged"; rc=1; }
+    if [ "$rc" = 0 ]; then
+        verify_universal_backup || { say "FAIL: universal hook backup unavailable or damaged"; rc=1; }
+    fi
+    if [ "$rc" = 0 ] && [ -e "$FIREWALL_BACKUP_DIR" ]; then
+        verify_firewall_backup || { say "FAIL: firewall backup is present but incomplete/damaged"; rc=1; }
+    fi
+    if [ "$rc" = 0 ]; then
+        say "RESTORE_PRECHECK=PASS profile=UNIVERSAL production_changed=NO"
+    else
+        say "RESTORE_PRECHECK=FAIL profile=UNIVERSAL production_changed=NO"
+    fi
+    lock_release || rc=1
+    return "$rc"
+}
+
 cmd_restore(){
     lock_acquire
     ensure_dirs "$TXN_DIR" || { lock_release; return 1; }
@@ -644,7 +663,8 @@ case "$CMD" in
   install) cmd_install ;;
   start) cmd_start ;;
   status) cmd_status ;;
+  restore-precheck) cmd_restore_precheck ;;
   restore) cmd_restore ;;
   collect) cmd_collect ;;
-  *) echo "usage: $PROG {install|start|status|restore|collect}" >&2; exit 2 ;;
+  *) echo "usage: $PROG {install|start|status|restore-precheck|restore|collect}" >&2; exit 2 ;;
 esac
