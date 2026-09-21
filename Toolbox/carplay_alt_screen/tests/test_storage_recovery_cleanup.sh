@@ -16,7 +16,7 @@ grep -Fq 'CLEAN CONFIRMED LEGACY FILES' "$GEM" || fail "cleanup GEM action missi
 grep -Fq 'SD_BACKUP_REQUIRED=YES' "$CLEAN" || fail "SD backup safety contract missing"
 grep -Fq 'STARTUP_UNCHANGED=YES' "$CLEAN" || fail "startup integrity contract missing"
 grep -Fq 'CHAIN_TEST_OPERATION_LOCK_PRESENT' "$CLEAN" || fail "operation lock refusal missing"
-grep -Fq 'TXN_PREFIX="$(p /tmp/MMI-Cockpit-Carplay-storage-cleanup.$)"' "$CLEAN" ||
+grep -Fq 'TXN_PREFIX="$(p /tmp/MMI-Cockpit-Carplay-storage-cleanup.$$)"' "$CLEAN" ||
     fail "cleanup transaction is not flat /tmp"
 if grep -Fq '/tmp/MMI-Cockpit-Carplay/txn/storage-cleanup' "$CLEAN"; then
     fail "cleanup still requires nested /tmp directories"
