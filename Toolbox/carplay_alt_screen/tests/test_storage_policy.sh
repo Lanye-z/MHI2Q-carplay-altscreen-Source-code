@@ -26,6 +26,8 @@ grep -Fq 'trusted original backup is absent' "$CTRL" || fail "native backup poll
 grep -Fq 'trusted original Java HMI backup is absent' "$INSTALL" || fail "HMI backup pollution guard missing"
 grep -Fq 'journal_storage=SD' "$START" || fail "START operation log does not prefer SD"
 grep -Fq 'journal_storage=TMP' "$START" || fail "START operation log lacks /tmp fallback"
+grep -Fq 'START_JOURNAL_FALLBACK=TMP reason=sd_write_failed' "$START" ||
+    fail "START does not fall back to /tmp when an inserted SD is unwritable"
 grep -Fq 'DEST_MODE=SD' "$ADAPT" || fail "adaptive log SD preference missing"
 grep -Fq 'DEST_MODE=TMP' "$ADAPT" || fail "adaptive log /tmp fallback missing"
 grep -Fq 'MMI-Cockpit-Carplay/backup' "$INSTALL" || fail "HMI original backup is not SD-scoped"

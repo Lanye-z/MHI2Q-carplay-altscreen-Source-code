@@ -56,8 +56,26 @@ if [ "${ALTS_START_CAPTURED:-0}" != 1 ]; then
         fi
     fi
 
-    if ! (printf 'OP_BEGIN action=START script=%s storage=%s\n' "$CAPTURE_ENTRY" "$journal_storage" > "$journal") 2>/dev/null; then
-        echo "WARN: START diagnostic journal unavailable; continuing operation"
+    journal_opened=0
+    if (printf 'OP_BEGIN action=START script=%s storage=%s\n' "$CAPTURE_ENTRY" "$journal_storage" > "$journal") 2>/dev/null; then
+        journal_opened=1
+    elif [ "$journal_storage" = SD ]; then
+        # A card may be present but temporarily read-only/unwritable. Logging
+        # must degrade to volatile storage instead of running unjournaled.
+        journal_storage=TMP
+        journal_dir="$journal_root/tmp/MMI-Cockpit-Carplay/diagnostics/operations"
+        if ensure_dirs "$journal_dir" 2>/dev/null; then
+            journal="$journal_dir/$journal_name"
+        else
+            journal="$journal_root/tmp/altscreen_$journal_name"
+        fi
+        if (printf 'OP_BEGIN action=START script=%s storage=%s\n' "$CAPTURE_ENTRY" "$journal_storage" > "$journal") 2>/dev/null; then
+            printf 'START_JOURNAL_FALLBACK=TMP reason=sd_write_failed\n' >> "$journal" 2>/dev/null || true
+            journal_opened=1
+        fi
+    fi
+    if [ "$journal_opened" != 1 ]; then
+        echo "WARN: START diagnostic journal unavailable on SD and /tmp; continuing operation"
         ALTS_START_CAPTURED=1; export ALTS_START_CAPTURED
         if [ "$#" -gt 0 ]; then exec /bin/sh "$CAPTURE_ENTRY" "$@"; else exec /bin/sh "$CAPTURE_ENTRY"; fi
     fi
