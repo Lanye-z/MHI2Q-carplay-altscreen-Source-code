@@ -189,18 +189,18 @@ capture_dir() {
         echo "PATH=$logical"
         if [ ! -e "$path" ]; then
             echo "STATUS=ABSENT"
-            exit 0
-        fi
-        echo "STATUS=PRESENT"
-        echo "--- ls -ld ---"
-        ls -ld "$path" 2>&1 || true
-        echo "--- du -sk ---"
-        du -sk "$path" 2>&1 || true
-        echo "--- listing ---"
-        if [ "$recursive" = 1 ]; then
-            ls -laR "$path" 2>&1 || true
         else
-            ls -la "$path" 2>&1 || true
+            echo "STATUS=PRESENT"
+            echo "--- ls -ld ---"
+            ls -ld "$path" 2>&1 || true
+            echo "--- du -sk ---"
+            du -sk "$path" 2>&1 || true
+            echo "--- listing ---"
+            if [ "$recursive" = 1 ]; then
+                ls -laR "$path" 2>&1 || true
+            else
+                ls -la "$path" 2>&1 || true
+            fi
         fi
     } > "$SCAN_DIR/$outfile" 2>&1
 }
@@ -212,11 +212,11 @@ capture_sd_dir() {
         echo "PATH=$path"
         if [ -z "$path" ] || [ ! -e "$path" ]; then
             echo "STATUS=ABSENT"
-            exit 0
+        else
+            echo "STATUS=PRESENT"
+            du -sk "$path" 2>&1 || true
+            ls -laR "$path" 2>&1 || true
         fi
-        echo "STATUS=PRESENT"
-        du -sk "$path" 2>&1 || true
-        ls -laR "$path" 2>&1 || true
     } > "$SCAN_DIR/$outfile" 2>&1
 }
 
