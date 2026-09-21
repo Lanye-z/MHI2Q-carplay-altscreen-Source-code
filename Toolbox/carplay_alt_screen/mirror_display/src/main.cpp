@@ -400,11 +400,14 @@ static bool reconcile_oem_map_placement(ClusterVideoDisplay &display,
 
     bool applied = false;
     if (!p.recognized) {
-        display.set_fullscreen_destination();
+        (void)display.set_destination_rect(0, 0, 1440, 542);
         fprintf(stderr,
                 "direct111: PHASE=OEM_MAP_PLACEMENT "
-                "reason=%s mode=fallback-fullscreen renderer_offset=0,0 "
-                "renderer_scale=0 live_switch=1\n",
+                "reason=%s mode=fallback-map-plane renderer_offset=0,0 "
+                "source_canvas=1440x542 sink_viewport=1440x455 "
+                "destination_size=1440x542 geometry_policy=OEM_MAP_PLANE_1TO1_CLIP_V31 "
+                "renderer_scale=0 renderer_scale_y=1.000 natural_clip=1 "
+                "clip_bottom=87 live_switch=1\n",
                 reason ? reason : "poll");
         applied = true;
     } else if (display.set_destination_rect(p.dx, p.dy, 1440, 542)) {
