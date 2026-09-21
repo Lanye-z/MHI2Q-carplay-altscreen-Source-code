@@ -246,6 +246,7 @@ capture_sd_dir() {
 } > "$DF_REPORT" 2>&1
 
 capture_dir system_boot.txt /mnt/system/etc/boot 0
+capture_dir alternate_etc_boot.txt /etc/boot 0
 capture_dir system_production.txt /mnt/system/etc/eso/production 0
 capture_dir system_etc.txt /mnt/system/etc 0
 capture_dir app_root.txt /mnt/app/root 0
@@ -271,16 +272,22 @@ fi
 : > "$REFS"
 
 BOOT=$(p /mnt/system/etc/boot)
+ALT_BOOT=$(p /etc/boot)
 PROD=$(p /mnt/system/etc/eso/production)
 SYS_ETC=$(p /mnt/system/etc)
 APP_ROOT=$(p /mnt/app/root)
 RUNTIME=$(p /mnt/app/root/carplay-altscreen)
 HOOKS=$(p /mnt/app/root/hooks)
+LEGACY_LIBTARGET=$(p /mnt/app/root/lib-target)
+HMI_JARS=$(p /mnt/app/eso/hmi/lsd/jars)
 
 for path in \
     "$BOOT"/startup.sh.basevideo3.* \
     "$BOOT"/.startup.sh.new.* \
-    "$BOOT"/.startup.sh.altscreen.new.*; do
+    "$BOOT"/.startup.sh.altscreen.new.* \
+    "$ALT_BOOT"/startup.sh.basevideo3.* \
+    "$ALT_BOOT"/.startup.sh.new.* \
+    "$ALT_BOOT"/.startup.sh.altscreen.new.*; do
     record_candidate TEMP_CANDIDATE historical_startup_transaction "$path"
 done
 
@@ -304,8 +311,17 @@ for path in \
     record_candidate TEMP_CANDIDATE historical_runtime_staging "$path"
 done
 
-for path in "$RUNTIME"/lib/.*.new.*; do
+for path in \
+    "$RUNTIME"/lib/.*.new.* \
+    "$HOOKS"/.*.new.* \
+    "$LEGACY_LIBTARGET"/.*.new.*; do
     record_candidate TEMP_CANDIDATE historical_runtime_atomic_publish "$path"
+done
+
+for path in \
+    "$HMI_JARS"/carplay_hook.jar.basevideo3.tmp \
+    "$HMI_JARS"/carplay_hook.jar.basevideo3.restore.tmp; do
+    record_candidate TEMP_CANDIDATE historical_hmi_jar_transaction "$path"
 done
 
 record_candidate ROLLBACK_REVIEW previous_runtime_rollback "$APP_ROOT/.carplay-altscreen.previous"
@@ -326,11 +342,40 @@ if [ -n "$VOLUME" ]; then
         "$STATE"/config.libpath \
         "$STATE"/config.stage1 \
         "$STATE"/config.stage2 \
+        "$STATE"/pf.clean \
+        "$STATE"/pf.clean.* \
+        "$STATE"/boot.clean \
+        "$STATE"/boot.block \
+        "$STATE"/boot.new \
+        "$STATE"/boot.restore \
+        "$STATE"/diag.clean.* \
+        "$STATE"/diag.block.* \
+        "$STATE"/diag.new.* \
+        "$STATE"/diag.restore.* \
         "$STAGING"/* \
         "$BACKUP"/*.new.* \
         "$BACKUP"/*/*.new.*; do
         record_candidate SD_REVIEW historical_sd_transaction "$path"
     done
+
+    record_candidate SD_REVIEW operation_lock_review "$STATE/.chain_test.lock"
+
+    {
+        echo "PATH=$STATE/.chain_test.lock"
+        if [ -d "$STATE/.chain_test.lock" ]; then
+            echo "STATUS=PRESENT_REVIEW_REQUIRED"
+            for field in owner pid boot action; do
+                if [ -f "$STATE/.chain_test.lock/$field" ]; then
+                    printf '%s=' "$field"
+                    cat "$STATE/.chain_test.lock/$field" 2>/dev/null || true
+                else
+                    echo "$field=ABSENT"
+                fi
+            done
+        else
+            echo "STATUS=ABSENT"
+        fi
+    } > "$SCAN_DIR/operation_lock.txt" 2>&1
 fi
 
 record_protected live_boot_script "$(p /mnt/system/etc/boot/startup.sh)"
@@ -338,6 +383,7 @@ record_protected live_carplay_environment "$(p /mnt/system/etc/eso/production/sm
 record_protected live_dio_environment "$(p /mnt/system/etc/eso/production/dio_manager.json)"
 record_protected live_firewall_config "$(p /mnt/system/etc/pf.conf)"
 record_protected live_hmi_jar "$(p /mnt/app/eso/hmi/lsd/jars/carplay_hook.jar)"
+record_protected alternate_live_boot_script "$(p /etc/boot/startup.sh)"
 record_protected current_runtime "$(p /mnt/app/root/carplay-altscreen)"
 record_protected persistent_boot_demand "$(p /mnt/app/root/carplay-altscreen/state/basevideo3.enabled)"
 record_protected persistent_diagnostics_demand "$(p /mnt/app/root/carplay-altscreen/state/diagnostics.enabled)"
