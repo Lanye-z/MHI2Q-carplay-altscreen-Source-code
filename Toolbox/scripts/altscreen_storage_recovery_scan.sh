@@ -281,13 +281,14 @@ HOOKS=$(p /mnt/app/root/hooks)
 LEGACY_LIBTARGET=$(p /mnt/app/root/lib-target)
 HMI_JARS=$(p /mnt/app/eso/hmi/lsd/jars)
 
+# Classify startup transaction residue only from the canonical persistent
+# /mnt/system path. /etc/boot is still listed above for diagnostics, but on MHI2Q
+# it may alias the same files and must not double-count candidates.
 for path in \
     "$BOOT"/startup.sh.basevideo3.* \
+    "$BOOT"/startup.sh.mirror.* \
     "$BOOT"/.startup.sh.new.* \
-    "$BOOT"/.startup.sh.altscreen.new.* \
-    "$ALT_BOOT"/startup.sh.basevideo3.* \
-    "$ALT_BOOT"/.startup.sh.new.* \
-    "$ALT_BOOT"/.startup.sh.altscreen.new.*; do
+    "$BOOT"/.startup.sh.altscreen.new.*; do
     record_candidate TEMP_CANDIDATE historical_startup_transaction "$path"
 done
 
