@@ -484,6 +484,11 @@ grep -Fq 'DISPLAY_PATH=PRIVATE111_DIRECT' "$CTRL" ||
     fail "controller does not report private111 direct path"
 grep -Fq 'decoder_backend=stock_omx_screen_linearized_shm' "$CTRL" ||
     fail "controller still reports stale V1 decoded backend"
+grep -Fq 'ensure_dirs()' "$INSTALL" ||
+    fail "integrated installer lacks QNX-safe directory helper"
+if grep -Fq 'mkdir -p "$JAR_TARGET_DIR"' "$INSTALL"; then
+    fail "integrated installer still uses fatal EEXIST-prone mkdir -p for HMI target"
+fi
 grep -Fq 'PACKAGE_MODE=CARPLAY_PRIVATE111_DIRECT_DISPLAY_V2' "$INSTALL" ||
     fail "integrated installer does not identify V2 package"
 grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$INSTALL" ||
