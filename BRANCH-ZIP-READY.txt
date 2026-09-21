@@ -1,0 +1,11 @@
+BRANCH_ZIP_READY=YES
+branch=experiment/oem-layout-second-screen_v2
+validated_source_commit=53ae2a73a4de12b7b294049a217f015cdde6a0b2
+mode=PRIVATE111_DIRECT_DISPLAY_V2
+jar_size=149510
+jar_cksum=180684234
+jar_sha256=b37b9bd30cd4c05bc22f7cb44c08641615c01a10cbc545327a69bca8f91335d5
+universal_runtime_sha256=d1cb534bbaafc9f12ed0e1ac843e4319ffdc20291cbd2b75c3ac6ca7e76cbd8e
+display_chain=V2_BASELINE
+install_policy=EXTRACT_BRANCH_ZIP_CONTENTS_TO_SD_ROOT
+verifier=VERIFY-BRANCH-ZIP-READY.sh
