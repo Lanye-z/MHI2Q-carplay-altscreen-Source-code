@@ -62,7 +62,7 @@
   "Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so": "7ac0fc965b9ea4ded8c9deda568d123ad4ed9b37f3f778acb0eabc7fa1685e9c",
   "Toolbox/scripts/altscreen_adaptive_diag.sh": "ed77f50522c0d78e024d5441bc75884785a32e5f40f038c18c7ef4830025db7c",
   "Toolbox/scripts/altscreen_boot_diag.sh": "6c570c48fd83b802950a29b3df90d1df089751757901ab07d545c07ead2a12db",
-  "Toolbox/scripts/altscreen_chain_test.sh": "d7aa3a767e011984738465cba2b229f4ac92a94cf9c89b4eb0a2c25bbdbdaf7a",
+  "Toolbox/scripts/altscreen_chain_test.sh": "e99b9aec0e042baab14831f90f821b32a77b7b312f109c993ab97ae786105c17",
   "Toolbox/scripts/altscreen_chain_test_known.sh": "88a325320f90218d1b8e0fb092902cac687c68db32b7686a617647108553c4b0",
   "Toolbox/scripts/altscreen_chain_test_universal.sh": "4939f7202aaf0c35059da47e1e0caea328a900727ddb2fa0641c8481eccea71d",
   "Toolbox/scripts/altscreen_live_diag.sh": "c1e7178e290e9e944e3a3600c317cb27bcc436b04714238d87951d15adaec071",
