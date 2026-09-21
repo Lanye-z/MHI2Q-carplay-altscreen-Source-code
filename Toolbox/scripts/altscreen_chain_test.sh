@@ -353,12 +353,15 @@ remove_runtime_scripts(){
 }
 
 persistent_diag_helper(){
-    if [ -f "$RUNTIME_BIN/altscreen_persistent_diag.sh" ]; then
-        printf '%s\n' "$RUNTIME_BIN/altscreen_persistent_diag.sh"
-        return 0
-    fi
+    # Prefer the SD package copy so RESTORE always uses the same audited
+    # transaction logic as the package being executed, even if an older runtime
+    # helper is still installed under /mnt/app from a previous V3 build.
     if [ -f "$PERSIST_DIAG_SD" ]; then
         printf '%s\n' "$PERSIST_DIAG_SD"
+        return 0
+    fi
+    if [ -f "$RUNTIME_BIN/altscreen_persistent_diag.sh" ]; then
+        printf '%s\n' "$RUNTIME_BIN/altscreen_persistent_diag.sh"
         return 0
     fi
     return 1
