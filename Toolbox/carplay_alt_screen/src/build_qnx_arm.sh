@@ -190,7 +190,9 @@ for marker in \
   '/tmp/mmi-mirror-hmi.state' \
   'safe_source=' \
   'safe_physical=' \
-  'safe_yh_mapping=reference455_to_canvas' \
+  'safe_yh_mapping=map_local_unscaled' \
+  'geometry_revision=V31_ONE_TO_ONE_CLIP' \
+  'map_plane_terminal_y_policy=metadata_only_not_renderer_offset' \
   'renderer_offset=' \
   'runtime_switch=updateViewArea' \
   'gate=LayoutMIB2HighB9' \
