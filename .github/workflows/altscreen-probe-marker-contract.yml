@@ -117,114 +117,21 @@ jobs:
           is_v31 = branch == 'experiment/oem-layout-second-screen_v3.1'
 
           # V3.1 changes both the universal safeArea hook and the QNX sidecar.
-          # This workflow can rebuild/promote the hook, but the proprietary QNX
-          # sidecar toolchain is intentionally external.  Keep the branch ZIP
-          # blocked until the V3.1 sidecar binary is separately rebuilt.
+          # This workflow can rebuild/promote the hook. Keep the branch ZIP
+          # blocked until the separately rebuilt V3.1 QNX sidecar is present.
           mirror_info = root / mirror_info_rel
           mirror_text = mirror_info.read_text()
-          if is_v31:
-              def replace_or_add(text, key, value):
-                  pattern = r'^' + re.escape(key) + r'=.*
-          for key, value in updates.items():
+
+          def replace_or_add(text, key, value):
               pattern = r'^' + re.escape(key) + r'=.*$'
               line = key + '=' + value
               if re.search(pattern, text, flags=re.M):
-                  text = re.sub(pattern, line, text, flags=re.M)
-              else:
-                  if text and not text.endswith('\n'):
-                      text += '\n'
-                  text += line + '\n'
-          hmi.write_text(text)
+                  return re.sub(pattern, line, text, flags=re.M)
+              if text and not text.endswith('\n'):
+                  text += '\n'
+              return text + line + '\n'
 
-          # A human-readable, machine-checkable marker for direct branch ZIP use.
-          info = {}
-          for line in text.splitlines():
-              if '=' in line:
-                  key, value = line.split('=', 1)
-                  info[key] = value
-          ready = root / ready_rel
-          ready.write_text(
-              'BRANCH_ZIP_READY=' + ('YES' if vehicle_ready else 'NO') + '\n'
-              'branch=' + branch + '\n'
-              'validated_source_commit=' + os.environ.get('GITHUB_SHA', 'unknown') + '\n'
-              'mode=' + info.get('mode', 'unknown') + '\n'
-              'jar_size=' + info.get('jar_size', 'unknown') + '\n'
-              'jar_cksum=' + info.get('jar_cksum', 'unknown') + '\n'
-              'jar_sha256=' + jar_sha + '\n'
-              'universal_runtime_sha256=' + hook_sha + '\n'
-              'display_chain='
-                  + ('V3_1_OEM_MAP_1TO1_CLIP' if is_v31 else 'V2_UNCHANGED')
-                  + '\n'
-              'install_policy=EXTRACT_BRANCH_ZIP_CONTENTS_TO_SD_ROOT\n'
-              'verifier=VERIFY-BRANCH-ZIP-READY.sh\n'
-          )
-
-          p = root / 'PACKAGE_SOURCE_MAP.json'
-          data = json.loads(p.read_text())
-          for rel in list(data):
-              path = root / rel
-              if path.is_file():
-                  data[rel] = digest(rel)
-          for rel in [hook_rel, hmi_rel, jar_rel, ready_rel, branch_verify_rel,
-                      restore_tx_test_rel, mirror_info_rel, mirror_sums_rel, mirror_bin_rel]:
-              if (root / rel).is_file():
-                  data[rel] = digest(rel)
-          p.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n')
-
-          sums = root / 'SHA256SUMS.txt'
-          table = {}
-          for line in sums.read_text().splitlines():
-              parts = line.split(None, 1)
-              if len(parts) == 2:
-                  rel = parts[1].strip()
-                  path = root / rel
-                  if path.is_file():
-                      table[rel] = digest(rel)
-          for rel in [hook_rel, hmi_rel, jar_rel, ready_rel, branch_verify_rel,
-                      restore_tx_test_rel, 'PACKAGE_SOURCE_MAP.json']:
-              if (root / rel).is_file():
-                  table[rel] = digest(rel)
-          table.pop('SHA256SUMS.txt', None)
-          sums.write_text(
-              ''.join(f"{table[rel]} {rel}\n" for rel in sorted(table))
-          )
-          PY
-
-          sh VERIFY-NATIVE-DIRECT-RELEASE.sh
-          if grep -Fq 'BRANCH_ZIP_READY=YES' BRANCH-ZIP-READY.txt; then
-            sh VERIFY-BRANCH-ZIP-READY.sh
-          else
-            echo "BRANCH_ZIP_VERIFY=SKIPPED reason=QNX_SIDECAR_REBUILD_REQUIRED"
-          fi
-
-      - name: Commit promoted universal runtime
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so \
-            Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt \
-            Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt \
-            Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS \
-            BRANCH-ZIP-READY.txt \
-            VERIFY-BRANCH-ZIP-READY.sh \
-            PACKAGE_SOURCE_MAP.json \
-            SHA256SUMS.txt
-          if ! git diff --cached --quiet; then
-            git commit -m "build(altscreen): promote authorization-marker fix [skip ci]"
-            git fetch origin "$GITHUB_REF_NAME"
-            git rebase "origin/$GITHUB_REF_NAME"
-            git push origin "HEAD:$GITHUB_REF_NAME"
-          fi
-
-                  line = key + '=' + value
-                  if re.search(pattern, text, flags=re.M):
-                      return re.sub(pattern, line, text, flags=re.M)
-                  if text and not text.endswith('\n'):
-                      text += '\n'
-                  return text + line + '\n'
-
+          if is_v31:
               mirror_text = replace_or_add(
                   mirror_text, 'hook_runtime_rebuild_required', 'no')
               mirror_text = replace_or_add(
@@ -247,8 +154,6 @@ jobs:
                   )
               mirror_info.write_text(mirror_text)
 
-              # BUILD_INFO is part of the release checksum set even while the
-              # previous V3 binary is intentionally retained pending QNX rebuild.
               release_table = {}
               release_sums = root / mirror_sums_rel
               for line in release_sums.read_text().splitlines():
@@ -305,15 +210,17 @@ jobs:
                   info[key] = value
           ready = root / ready_rel
           ready.write_text(
-              'BRANCH_ZIP_READY=YES\n'
-              'branch=' + os.environ.get('GITHUB_REF_NAME', 'unknown') + '\n'
+              'BRANCH_ZIP_READY=' + ('YES' if vehicle_ready else 'NO') + '\n'
+              'branch=' + branch + '\n'
               'validated_source_commit=' + os.environ.get('GITHUB_SHA', 'unknown') + '\n'
               'mode=' + info.get('mode', 'unknown') + '\n'
               'jar_size=' + info.get('jar_size', 'unknown') + '\n'
               'jar_cksum=' + info.get('jar_cksum', 'unknown') + '\n'
               'jar_sha256=' + jar_sha + '\n'
               'universal_runtime_sha256=' + hook_sha + '\n'
-              'display_chain=V2_UNCHANGED\n'
+              'display_chain='
+                  + ('V3_1_OEM_MAP_1TO1_CLIP' if is_v31 else 'V2_UNCHANGED')
+                  + '\n'
               'install_policy=EXTRACT_BRANCH_ZIP_CONTENTS_TO_SD_ROOT\n'
               'verifier=VERIFY-BRANCH-ZIP-READY.sh\n'
           )
@@ -340,7 +247,8 @@ jobs:
                   if path.is_file():
                       table[rel] = digest(rel)
           for rel in [hook_rel, hmi_rel, jar_rel, ready_rel, branch_verify_rel,
-                      restore_tx_test_rel, 'PACKAGE_SOURCE_MAP.json']:
+                      restore_tx_test_rel, mirror_info_rel, mirror_sums_rel,
+                      mirror_bin_rel, 'PACKAGE_SOURCE_MAP.json']:
               if (root / rel).is_file():
                   table[rel] = digest(rel)
           table.pop('SHA256SUMS.txt', None)
@@ -350,7 +258,11 @@ jobs:
           PY
 
           sh VERIFY-NATIVE-DIRECT-RELEASE.sh
-          sh VERIFY-BRANCH-ZIP-READY.sh
+          if grep -Fq 'BRANCH_ZIP_READY=YES' BRANCH-ZIP-READY.txt; then
+            sh VERIFY-BRANCH-ZIP-READY.sh
+          else
+            echo "BRANCH_ZIP_VERIFY=SKIPPED reason=QNX_SIDECAR_REBUILD_REQUIRED"
+          fi
 
       - name: Commit promoted universal runtime
         run: |
@@ -360,6 +272,8 @@ jobs:
           git add \
             Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so \
             Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt \
+            Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt \
+            Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS \
             BRANCH-ZIP-READY.txt \
             VERIFY-BRANCH-ZIP-READY.sh \
             PACKAGE_SOURCE_MAP.json \
