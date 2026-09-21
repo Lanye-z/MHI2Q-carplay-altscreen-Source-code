@@ -108,3 +108,12 @@ The cleanup report includes `DF.before.txt`, `DF.after.txt`, `delete_manifest.tx
 4. Run `CLEAN CONFIRMED LEGACY FILES` only for the reviewed historical residue described above.
 5. Wait for `CLEANUP=PASS`, `STARTUP_UNCHANGED=YES`, and `POST_SCAN=PASS`.
 6. Review or share the complete `logs/storage-recovery/cleanup_*` directory. The deleted originals remain recoverable from `cleanup-backup/cleanup_*` on the SD card.
+
+
+## QNX flat-/tmp compatibility
+
+Some MHI2Q QNX builds allow flat files under `/tmp` but return `ENOSYS / Function not implemented` for nested `mkdir` operations. Cleanup transaction scratch therefore uses flat files:
+
+`/tmp/MMI-Cockpit-Carplay-storage-cleanup.<pid>.*`
+
+and does not require `/tmp/MMI-Cockpit-Carplay/txn/` to exist.
