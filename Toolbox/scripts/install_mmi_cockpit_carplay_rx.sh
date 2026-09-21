@@ -111,6 +111,7 @@ known_managed_jar(){
     size=$(file_size "$1")
     sum=$(file_cksum "$1")
     [ "$sum" != unavailable ] || return 1
+    [ "$size" = "$EXPECTED_SIZE" ] && [ "$sum" = "$EXPECTED_CKSUM" ] && return 0
     case "$size:$sum" in
       149510:180684234|149979:2362627699|150026:3028143795) return 0 ;;
       *) return 1 ;;
