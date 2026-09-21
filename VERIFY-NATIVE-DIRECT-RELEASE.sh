@@ -506,8 +506,8 @@ grep -Fq 'FRAME_LINEARIZER_SLOW_EVENTS=' "$STATUS" ||
     fail "STATUS does not surface Screen readback latency evidence"
 grep -Fq 'select_controller_log_source' "$BOOT_DIAG" ||
     fail "boot diagnostics do not locate mmi-mirror-controller.log"
-grep -Fq 'tmp_mmi-mirror-controller.log' "$BOOT_DIAG" ||
-    fail "normal boot diagnostics do not persist Java Context80 controller log"
+grep -Fq 'flat_controller_offset=$(flat_capture_delta "$(select_controller_log_source)"' "$BOOT_DIAG" ||
+    fail "flat boot diagnostics do not persist Java Context80 controller log"
 grep -Fq 'streams/mmi-mirror-controller.log' "$BOOT_DIAG" ||
     fail "flat SD fallback does not persist Java Context80 controller log"
 if grep -Fq 'DISPLAY_PATH=WINDOW58_READBACK' "$CTRL"; then
@@ -516,8 +516,10 @@ fi
 
 grep -Fq 'START_FAIL_STAGE=' "$START" ||
     fail "START persistent stage/failure diagnostics missing"
-grep -Fq 'diagnostics/operations' "$START" ||
-    fail "START volatile operation journal path missing"
+grep -Fq 'logs/operations' "$START" ||
+    fail "START persistent operation journal path missing"
+grep -Fq 'tmp/altscreen_$journal_name' "$START" ||
+    fail "START flat /tmp journal fallback missing"
 grep -Fq '/tmp/altscreen_autostart.log' "$START" ||
     fail "canonical Mirror autostart log path missing"
 if grep -Eq '/tmp/MMI-Cockpit-Carplay/.+autostart\.log' "$START"; then
@@ -532,8 +534,10 @@ if grep -Fq 'mkdir -p "$STATE"' "$START"; then
 fi
 grep -Fq 'START_ROLLBACK_CONTROLLER=DISARMED_NEW_TRANSACTION' "$START" ||
     fail "START cannot transactionally disarm a newly-created controller state"
-grep -Fq '"$BASE/operations"' "$BOOT_DIAG" ||
-    fail "boot diagnostics do not flush volatile operation journals to SD"
+grep -Fq 'altscreen_start_*.log' "$BOOT_DIAG" ||
+    fail "boot diagnostics do not flush flat START journals to SD"
+grep -Fq 'altscreen_operation_*.log' "$BOOT_DIAG" ||
+    fail "boot diagnostics do not flush flat controller journals to SD"
 
 sh "$START_TX_TEST" || fail "START/autostart host transaction fixture failed"
 sh "$STORAGE_POLICY_TEST" || fail "storage policy fixture failed"

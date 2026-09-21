@@ -135,6 +135,22 @@ run_flat_plaintext() {
     FLAT_DEST="$VOLUME/MMI-Cockpit-Carplay/logs/boots/$BOOT_ID"
     FLAT_PREFIX="$ROOT/tmp/altscreen_diag_$$"
     ensure_dirs "$FLAT_DEST/streams" 2>/dev/null || return 0
+    # START/controller wrappers may have emitted a flat /tmp journal before the
+    # SD card became writable. Promote those breadcrumbs now, without requiring
+    # any volatile directory tree.
+    operation_dest="$VOLUME/MMI-Cockpit-Carplay/logs/operations"
+    if ensure_dirs "$operation_dest" 2>/dev/null; then
+        for operation in "$ROOT/tmp"/altscreen_start_*.log "$ROOT/tmp"/altscreen_operation_*.log; do
+            [ -f "$operation" ] || continue
+            operation_name=${operation##*/}
+            if cp "$operation" "$operation_dest/$operation_name.new" 2>/dev/null &&
+               mv "$operation_dest/$operation_name.new" "$operation_dest/$operation_name" 2>/dev/null; then
+                rm -f "$operation" 2>/dev/null || true
+            else
+                rm -f "$operation_dest/$operation_name.new" 2>/dev/null || true
+            fi
+        done
+    fi
     flat_log_event "BOOT_BEGIN storage=FLAT_TMP_PLAINTEXT_SD volume=$VOLUME"
     flat_log_event "SD_READY volume=$VOLUME"
     flat_system="${FLAT_PREFIX}_system.raw"; flat_slog_pid=""
