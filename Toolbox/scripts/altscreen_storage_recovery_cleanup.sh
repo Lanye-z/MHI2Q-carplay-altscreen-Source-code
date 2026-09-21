@@ -222,7 +222,9 @@ add_system_candidate() {
 }
 
 live_refers_to_mirror_hook() {
-    needle="/mnt/app/root/hooks/libcp_mirror.so"
+    # Be conservative: any live config mention of the legacy hook basename
+    # protects it, even if an older build used a different absolute path.
+    needle="libcp_mirror.so"
     for logical in \
         /mnt/system/etc/boot/startup.sh \
         /mnt/system/etc/eso/production/smartphone_integrator.json \
@@ -383,6 +385,15 @@ done < "$APP_LIST"
     echo "APP_CANDIDATE_BYTES=$APP_BYTES"
     echo "MMI_MIRROR_RUNTIME_PRESENT=$([ -e "$MMI_RUNTIME" ] && echo YES || echo NO)"
 } >> "$REPORT"
+
+# Also snapshot the live startup file itself. Cleanup never rewrites it, but
+# this gives recovery evidence beyond the before/after checksum.
+if ! backup_file "$STARTUP" "$BACKUP_DIR/protected/startup.sh"; then
+    echo "BACKUP=FAIL path=/mnt/system/etc/boot/startup.sh reason=PROTECTED_SNAPSHOT_FAILED" >> "$REPORT"
+    echo "CLEANUP=REFUSED reason=LIVE_STARTUP_BACKUP_FAILED"
+    exit 1
+fi
+echo "BACKUP=PASS path=/mnt/system/etc/boot/startup.sh role=PROTECTED_LIVE_SNAPSHOT" >> "$RESULTS"
 
 # Back up every candidate to SD before any persistent vehicle deletion.
 while IFS= read -r path; do
