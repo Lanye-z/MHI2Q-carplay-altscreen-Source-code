@@ -119,6 +119,9 @@ grep -Fq 'DELETE=PASS path=/mnt/app/root/carplay-altscreen/tmp/mirror.previous' 
 
 backup=$(grep '^BACKUP_DIR=' "$out" | tail -n 1 | cut -d= -f2-)
 [ -f "$backup/BACKUP_COMPLETE" ] || fail "backup completion marker missing"
+[ -f "$backup/protected/startup.sh" ] || fail "protected live startup backup missing"
+[ "$(cksum < "$backup/protected/startup.sh")" = "$startup_before" ] ||
+    fail "protected live startup backup checksum mismatch"
 [ -f "$backup/files/system_boot/startup.sh.basevideo3.clean.102" ] ||
     fail "system candidate backup missing"
 [ -f "$backup/files/app_hooks/libcp_mirror.so" ] || fail "mirror hook backup missing"
@@ -137,7 +140,7 @@ mkdir -p \
     "$vol2/MMI-Cockpit-Carplay/state"
 printf '%s\n' '#!/bin/sh' > "$live2/mnt/system/etc/boot/startup.sh"
 printf '%s\n' 'tmp' > "$live2/mnt/system/etc/boot/startup.sh.mirror.clean.301"
-printf '%s\n' 'LD_PRELOAD=/mnt/app/root/hooks/libcp_mirror.so' \
+printf '%s\n' 'LD_PRELOAD=/legacy/path/libcp_mirror.so' \
     > "$live2/mnt/system/etc/eso/production/smartphone_integrator.json"
 printf '%s\n' 'dio' > "$live2/mnt/system/etc/eso/production/dio_manager.json"
 printf '%s\n' 'pf' > "$live2/mnt/system/etc/pf.conf"
