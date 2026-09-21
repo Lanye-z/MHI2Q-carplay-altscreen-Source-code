@@ -9,6 +9,7 @@ on:
       - 'Toolbox/carplay_alt_screen/src/**'
       - 'Toolbox/carplay_alt_screen/mirror_display/release/start_vehicle.sh'
       - 'Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh'
+      - 'Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS'
       - 'Toolbox/scripts/altscreen_chain_test.sh'
       - 'Toolbox/scripts/altscreen_chain_test_universal.sh'
       - 'Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh'
