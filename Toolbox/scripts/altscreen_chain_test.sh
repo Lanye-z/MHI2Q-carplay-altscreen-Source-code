@@ -77,8 +77,10 @@ LIVE_LIBAIRPLAY="/eso/lib/libairplay.so"
 
 RUNTIME_ROOT="$(p /mnt/app/root/carplay-altscreen)"
 RUNTIME_BIN="$RUNTIME_ROOT/bin"
-RUNTIME_STAGE="$(p /mnt/app/root/.carplay-altscreen.new.$$)"
+RUNTIME_STAGE="$(p /mnt/app/root/.carplay-altscreen.new)"
+RUNTIME_STAGE_PARENT="$(p /mnt/app/root)"
 RUNTIME_PREV="$(p /mnt/app/root/.carplay-altscreen.previous)"
+ROUTER_TXN_ROOT="$(p /tmp/MMI-Cockpit-Carplay/txn)"
 RUNTIME_OWNER=.mmi-cockpit-carplay-runtime-owner
 RUNTIME_PUBLISHED=0
 RUNTIME_HAD_CURRENT=0
@@ -179,11 +181,14 @@ validate_runtime_sources(){
 
 precheck_app_runtime(){
     parent="$(p /mnt/app/root)"
-    probe="$parent/.altscreen-write-test.$$"
-    token="altscreen-write-test-$$"
+    probe="$parent/.altscreen-write-test"
+    token="altscreen-write-test-$"
     mount_app_rw || { echo "FAIL: cannot mount /mnt/app writable" >&2; return 1; }
     ok=1
     ensure_dirs "$parent" || ok=0
+    # The probe uses one fixed project-owned path so an interrupted precheck can
+    # never accumulate PID-suffixed files on persistent /mnt/app.
+    rm -f "$probe" 2>/dev/null || true
     if [ "$ok" = 1 ]; then printf '%s\n' "$token" > "$probe" 2>/dev/null || ok=0; fi
     if [ "$ok" = 1 ]; then [ "$(cat "$probe" 2>/dev/null)" = "$token" ] || ok=0; fi
     rm -f "$probe" 2>/dev/null || true
@@ -208,8 +213,15 @@ install_runtime_scripts(){
         return 1
     }
     mount_app_rw || return 1
+    # New packages use one fixed project-owned staging directory. Also reap
+    # legacy PID-suffixed staging left by an interrupted older installer.
     rm -rf "$RUNTIME_STAGE" 2>/dev/null || true
-    ensure_dirs "$RUNTIME_STAGE/bin" "$RUNTIME_STAGE/lib" "$RUNTIME_STAGE/state" "$RUNTIME_STAGE/tmp" || { mount_app_ro >/dev/null 2>&1 || true; return 1; }
+    for stale in "$RUNTIME_STAGE_PARENT"/.carplay-altscreen.new.*; do
+        [ -e "$stale" ] || continue
+        rm -rf "$stale" 2>/dev/null || { mount_app_ro >/dev/null 2>&1 || true; return 1; }
+    done
+    ensure_dirs "$RUNTIME_STAGE/bin" "$RUNTIME_STAGE/lib" "$RUNTIME_STAGE/state" || { mount_app_ro >/dev/null 2>&1 || true; return 1; }
+    echo "RUNTIME_STAGING_POLICY=BOUNDED path=/mnt/app/root/.carplay-altscreen.new legacy_pid_staging=reaped"
     for name in $RUNTIME_SCRIPTS; do
         src="$SD_SCRIPTS/$name"; dst="$RUNTIME_STAGE/bin/$name"
         cp "$src" "$dst" && cmp -s "$src" "$dst" || {
@@ -243,22 +255,9 @@ install_runtime_scripts(){
         mount_app_ro >/dev/null 2>&1 || true
         return 1
     }
-    # Preserve the current owned Mirror as the new transaction's rollback copy.
-    # The full previous runtime still remains in RUNTIME_PREV until START, so a
-    # child INSTALL failure can restore the exact pre-INSTALL tree.
-    if [ -d "$RUNTIME_ROOT/bin/mirror" ]; then
-        [ -f "$RUNTIME_ROOT/bin/mirror/.mmi-cockpit-carplay-mirror-owner" ] || {
-            rm -rf "$RUNTIME_STAGE" 2>/dev/null || true
-            mount_app_ro >/dev/null 2>&1 || true
-            echo "FAIL: current unified Mirror runtime is unowned" >&2
-            return 1
-        }
-        cp -R "$RUNTIME_ROOT/bin/mirror" "$RUNTIME_STAGE/tmp/mirror.previous" || {
-            rm -rf "$RUNTIME_STAGE" 2>/dev/null || true
-            mount_app_ro >/dev/null 2>&1 || true
-            return 1
-        }
-    fi
+    # The full owned runtime is moved to one fixed same-filesystem rollback
+    # slot below. Do not duplicate Mirror or any other previous-version payload
+    # inside the new runtime; original/OEM backups live on the SD card.
     if [ -d "$RUNTIME_PREV" ]; then rm -rf "$RUNTIME_PREV" || {
         rm -rf "$RUNTIME_STAGE" 2>/dev/null || true
         mount_app_ro >/dev/null 2>&1 || true
@@ -281,6 +280,25 @@ install_runtime_scripts(){
     sync >/dev/null 2>&1 || true
     if ! mount_app_ro; then return 1; fi
     echo "RUNTIME_SCRIPTS_INSTALLED=PASS path=/mnt/app/root/carplay-altscreen/bin no_eso_write=YES"
+    return 0
+}
+
+commit_runtime_scripts(){
+    # RUNTIME_PREV is a same-INSTALL rollback slot, not a persistent backup.
+    # Once router INSTALL has fully succeeded it must not remain on /mnt/app.
+    if [ "$RUNTIME_HAD_CURRENT" = 1 ] && [ -d "$RUNTIME_PREV" ]; then
+        [ -f "$RUNTIME_PREV/$RUNTIME_OWNER" ] || {
+            echo "WARN: refusing to clean unowned runtime rollback slot" >&2
+            return 1
+        }
+        mount_app_rw >/dev/null 2>&1 || return 1
+        rm -rf "$RUNTIME_PREV" || { mount_app_ro >/dev/null 2>&1 || true; return 1; }
+        sync >/dev/null 2>&1 || true
+        mount_app_ro >/dev/null 2>&1 || return 1
+        echo "RUNTIME_ROLLBACK_SLOT_CLEANED=PASS path=/mnt/app/root/.carplay-altscreen.previous"
+    fi
+    RUNTIME_PUBLISHED=0
+    RUNTIME_HAD_CURRENT=0
     return 0
 }
 
@@ -377,8 +395,10 @@ delegate(){
 
 delegate_install(){
     route=$1
-    ensure_dirs "$STATE_DIR" "$LOG_ROOT" "$BACKUP_ROOT" "$STAGING_ROOT" || return 1
-    tmp="$STATE_DIR/.child-install.$$"
+    ensure_dirs "$STATE_DIR" "$LOG_ROOT" "$BACKUP_ROOT" "$STAGING_ROOT" "$ROUTER_TXN_ROOT" || return 1
+    # Child controller output is transaction scratch, not persistent state.
+    # Keep it volatile so interruption/reboot cannot grow SD state metadata.
+    tmp="$ROUTER_TXN_ROOT/router-child-install.$"
     delegate "$route" install > "$tmp" 2>&1
     rc=$?
     sed 's/^INSTALL=PASS /CHILD_INSTALL=PASS /' "$tmp"
@@ -426,6 +446,7 @@ case "$CMD" in
     fi
     ensure_dirs "$STATE_DIR" || exit 1
     echo "$route" > "$ROUTE_FILE" || exit 1
+    commit_runtime_scripts || echo "WARN: installed runtime is valid but previous-runtime rollback slot cleanup failed" >&2
     echo "ROUTER_INSTALL=PASS profile=$route runtime=/mnt/app/root/carplay-altscreen/bin no_eso_write=YES"
     ;;
   restore)
