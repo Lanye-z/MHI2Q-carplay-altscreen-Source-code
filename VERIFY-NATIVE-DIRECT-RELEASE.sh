@@ -145,6 +145,47 @@ elif grep -Fq 'release_binary_status=V2_BINARY_STALE_OWNERSHIP_REBUILD_REQUIRED'
         fail "uncapped hook rebuild must remain pending"
     grep -Fq 'displayable3_ownership_observer=DISPLAYABLE3_OWNERSHIP_V1' "$INFO" ||
         fail "ownership observer metadata missing"
+elif grep -Fq 'release_binary_status=V3_BINARY_STALE_V31_SOURCE_REBUILD_REQUIRED' "$INFO"; then
+    SOURCE_ONLY=1
+    HOOK_PENDING=1
+    NATIVE_REBUILDS=1
+    grep -Fq 'vehicle_zip_status=NOT_READY_NATIVE_REBUILDS_REQUIRED' "$INFO" ||
+        fail "V3.1 geometry source must remain blocked until hook and sidecar rebuild"
+    grep -Fq 'hook_runtime_rebuild_required=yes' "$INFO" ||
+        fail "V3.1 must declare universal hook rebuild pending"
+    grep -Fq 'sidecar_source_driven_rebuild_required=yes' "$INFO" ||
+        fail "V3.1 must declare QNX sidecar rebuild pending"
+    grep -Fq 'hook_layout_safearea_rebuild_required=yes' "$INFO" ||
+        fail "V3.1 must declare safeArea hook rebuild pending"
+    for marker in 'carplay-private111-direct-display-v2-source-driven-layout-live-v4' 'PHASE=DECODED_SHM_WAIT_SIZE' 'PHASE=SOURCE_SESSION' 'PHASE=GATE_RECOVER_CURRENT_SESSION' 'matching_identity_plus_frame_progress' 'PHASE=DISPLAYABLE3_FIRST_PRESENT' 'PHASE=DISPLAYABLE3_OWNERSHIP' 'DISPLAYABLE3_OWNERSHIP_V1' 'PHASE=DIRECT111_ACTIVE'
+    do
+        binary_strings "$BIN" | grep -Fq "$marker" ||
+            fail "previous V3 sidecar marker missing while awaiting V3.1 rebuild: $marker"
+    done
+    if binary_strings "$BIN" | grep -Fq 'carplay-private111-direct-display-v3.1-oem-map-1to1-clip'; then
+        fail "BUILD_INFO says V3.1 rebuild required but sidecar already contains V3.1 build id"
+    fi
+    if binary_strings "$HOOK" | grep -Fq 'safe_yh_mapping=map_local_unscaled'; then
+        fail "BUILD_INFO says V3.1 hook rebuild required but hook already contains V3.1 safeArea mapping"
+    fi
+elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V31' "$INFO"; then
+    grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$INFO" ||
+        fail "rebuilt V3.1 package has unknown vehicle-ready state"
+    grep -Fq 'hook_runtime_rebuild_required=no' "$INFO" ||
+        fail "vehicle-ready V3.1 package must declare rebuilt hook runtime"
+    grep -Fq 'sidecar_source_driven_rebuild_required=no' "$INFO" ||
+        fail "vehicle-ready V3.1 package must declare rebuilt sidecar"
+    grep -Fq 'hook_layout_safearea_rebuild_required=no' "$INFO" ||
+        fail "vehicle-ready V3.1 package must declare rebuilt safeArea hook"
+    for marker in 'carplay-private111-direct-display-v3.1-oem-map-1to1-clip' 'PHASE=OEM_GEOMETRY_V31' 'geometry_policy=OEM_MAP_PLANE_1TO1_CLIP_V31' 'PHASE=DECODED_SHM_WAIT_SIZE' 'PHASE=SOURCE_SESSION' 'PHASE=GATE_RECOVER_CURRENT_SESSION' 'matching_identity_plus_frame_progress' 'packed_tight_required=1' 'stream111_request_or_phone_marker' 'STREAM_111_REQUESTED=YES' 'PHASE=PIPELINE_SOURCE_PRIMED' 'startup_frame_progress_required=2' 'PHASE=DISPLAYABLE3_FIRST_PRESENT' 'PHASE=DISPLAYABLE3_OWNERSHIP' 'DISPLAYABLE3_OWNERSHIP_V1' '/tmp/mmi-mirror-displayable3.state' 'PHASE=DIRECT111_ACTIVE' 'present_policy=source-driven'
+    do
+        binary_strings "$BIN" | grep -Fq "$marker" ||
+            fail "V3.1 sidecar marker missing: $marker"
+    done
+    binary_strings "$HOOK" | grep -Fq 'safe_yh_mapping=map_local_unscaled' ||
+        fail "V3.1 universal hook is missing map-local safeArea mapping"
+    binary_strings "$HOOK" | grep -Fq 'geometry_revision=V31_ONE_TO_ONE_CLIP' ||
+        fail "V3.1 universal hook is missing geometry revision marker"
 elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$INFO"; then
     if grep -Fq 'vehicle_zip_status=NOT_READY_HOOK_REBUILD_REQUIRED' "$INFO"; then
         HOOK_PENDING=1
@@ -306,8 +347,8 @@ grep -Fq 'PHASE=PIPELINE_SOURCE_PRIMED' "$MAIN_CPP" ||
     fail "startup does not require decoded frame progress before displayable creation"
 grep -Fq 'startup_frame_progress_required=2' "$MAIN_CPP" ||
     fail "startup fresh-frame threshold marker missing"
-grep -Fq 'carplay-private111-direct-display-v2-source-driven-layout-live-v4' "$MAIN_CPP" ||
-    fail "source-driven/layout V2 sidecar build id missing"
+grep -Fq 'carplay-private111-direct-display-v3.1-oem-map-1to1-clip' "$MAIN_CPP" ||
+    fail "V3.1 OEM geometry sidecar build id missing"
 
 # ---- CarPlay protocol-level live layout/safe-area + OEM map placement contract ----
 grep -Fq 'ALTAREA_LAYOUT_SAFE_V3' "$AIRPLAY_SRC" ||
@@ -322,27 +363,27 @@ grep -Fq 'LayoutMIB2HighB9' "$AIRPLAY_SRC" ||
 if grep -Fq 'static int alt_kv_u32' "$AIRPLAY_SRC"; then
     fail "unused alt_kv_u32 helper would fail the -Werror universal build"
 fi
-grep -Fq 'alt_safe_y_455_to_canvas' "$AIRPLAY_SRC" ||
-    fail "455-reference to runtime-canvas safeArea Y/H mapper missing"
-grep -Fq 'alt_div_u32(numerator, 455u)' "$AIRPLAY_SRC" ||
-    fail "safeArea canvas mapper must avoid ARM EABI division helpers"
-if grep -Fq '/ canvas_h' "$AIRPLAY_SRC"; then
-    fail "safeArea canvas mapper reintroduced runtime variable division that can import __aeabi_uidiv"
+if grep -Fq 'alt_safe_y_455_to_canvas' "$AIRPLAY_SRC"; then
+    fail "V3.1 must not scale OEM map-local safeArea Y/H from 455 to 542"
 fi
+grep -Fq 'safe_yh_mapping=map_local_unscaled' "$AIRPLAY_SRC" ||
+    fail "V3.1 map-local safeArea coordinate-space diagnostic missing"
+grep -Fq 'geometry_revision=V31_ONE_TO_ONE_CLIP' "$AIRPLAY_SRC" ||
+    fail "V3.1 safeArea geometry revision marker missing"
 grep -Fq 'r.x = 370u;' "$AIRPLAY_SRC" ||
     fail "FULL safeArea X missing"
-grep -Fq 'r.y = alt_safe_y_455_to_canvas(49u, display_h);' "$AIRPLAY_SRC" ||
-    fail "FULL safeArea Y is not mapped from the 455 reference plane"
+grep -Fq 'r.y = 49u;' "$AIRPLAY_SRC" ||
+    fail "FULL/SMALL safeArea Y must remain OEM map-local 49"
 grep -Fq 'r.w = 700u;' "$AIRPLAY_SRC" ||
     fail "FULL safeArea width missing"
-grep -Fq 'r.h = alt_safe_y_455_to_canvas(300u, display_h);' "$AIRPLAY_SRC" ||
-    fail "FULL safeArea height is not mapped from the 455 reference plane"
+grep -Fq 'r.h = 300u;' "$AIRPLAY_SRC" ||
+    fail "FULL/SMALL safeArea height must remain OEM map-local 300"
 grep -Fq 'r.x = 490u;' "$AIRPLAY_SRC" ||
     fail "SMALL safeArea X missing"
 grep -Fq 'r.w = 460u;' "$AIRPLAY_SRC" ||
     fail "SMALL safeArea width missing"
-grep -Fq 'safe_yh_mapping=reference455_to_canvas' "$AIRPLAY_SRC" ||
-    fail "runtime safeArea coordinate-space diagnostic missing"
+grep -Fq 'map_plane_terminal_y_policy=metadata_only_not_renderer_offset' "$AIRPLAY_SRC" ||
+    fail "OEM terminal Y=26 must remain metadata-only in V3.1"
 grep -Fq 'physical_y = 49 + (int64_t)r.renderer_dy;' "$AIRPLAY_SRC" ||
     fail "physical safe-region Y must stay in the measured 455 sink plane"
 if grep -Fq 'r.physical_x - (int64_t)r.renderer_dx' "$AIRPLAY_SRC" ||
@@ -412,16 +453,22 @@ grep -Fq 'small_stage_dx' "$MAIN_CPP" ||
     fail "sidecar does not consume OEM small-stage X offset"
 grep -Fq 'small_dx = -476;' "$MAIN_CPP" ||
     fail "sidecar verified B9Sport SMALL -476 fallback missing"
-grep -Fq 'display.set_destination_rect(p.dx, p.dy, 1440, 455)' "$MAIN_CPP" ||
-    fail "sidecar full-size translated destination is missing"
+grep -Fq 'display.set_destination_rect(p.dx, p.dy, 1440, 542)' "$MAIN_CPP" ||
+    fail "V3.1 sidecar must keep the 1440x542 source canvas at 1:1 scale"
+grep -Fq 'PHASE=OEM_GEOMETRY_V31' "$MAIN_CPP" ||
+    fail "V3.1 OEM geometry runtime marker missing"
+grep -Fq 'geometry_policy=OEM_MAP_PLANE_1TO1_CLIP_V31' "$MAIN_CPP" ||
+    fail "V3.1 1:1 viewport clipping policy marker missing"
+grep -Fq 'clip_bottom=87' "$MAIN_CPP" ||
+    fail "V3.1 542-to-455 viewport clip extent marker missing"
 grep -Fq 'live_switch=1' "$MAIN_CPP" ||
     fail "sidecar map placement is not marked live"
 grep -Fq 'renderer_scale=0' "$MAIN_CPP" ||
     fail "sidecar map placement must keep scaling disabled"
 grep -Fq 'natural_clip=1' "$MAIN_CPP" ||
     fail "translated renderer natural clipping marker missing"
-grep -Fq 'OEM map stages may translate the full-size plane partially outside' "$GL_RENDERER_CPP" ||
-    fail "GLES negative-destination clipping contract missing"
+grep -Fq 'V3.1 may also' "$GL_RENDERER_CPP" ||
+    fail "GLES V3.1 1:1 viewport clipping contract missing"
 if grep -Fq 'visible_active_x' "$MAIN_CPP"; then
     fail "physical safe rectangle must not be reused as a renderer scale box"
 fi
