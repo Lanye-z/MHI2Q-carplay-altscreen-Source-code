@@ -669,7 +669,7 @@ jobs:
             PACKAGE_SOURCE_MAP.json \
             SHA256SUMS.txt
           if ! git diff --cached --quiet; then
-            git commit -m "build(v3.1): promote OEM-paced wheel control [skip ci]"
+            git commit -m "build(v3.1): promote adaptive short-tail wheel control [skip ci]"
             git fetch origin "$GITHUB_REF_NAME"
             git rebase "origin/$GITHUB_REF_NAME"
             git push origin "HEAD:$GITHUB_REF_NAME"
