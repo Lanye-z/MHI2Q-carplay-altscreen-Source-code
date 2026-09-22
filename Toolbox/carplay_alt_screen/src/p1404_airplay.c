@@ -663,28 +663,17 @@ static cf_obj make_view_areas(uint32_t w, uint32_t h) {
 /*
  * Type111 may declare multiple candidate viewAreas.  Apple cluster templates
  * do this as well; unlike type110, ALT entries do not carry
- * viewAreaTransitionControl/viewAreaStatusBarEdge flags.
+ * viewAreaTransitionControl/viewAreaStatusBarEdge flags. The outer viewArea
+ * keeps the runtime coded canvas (observed 1440x542 on the private111 path);
+ * only the nested safeArea changes. The displayable3 sink remains 1440x455.
  *
- * V3.1 keeps the private111 coded/display canvas at 1440x542 and keeps the
- * renderer 1:1.  The physical displayable3 viewport is only 1440x455, so on
- * that measured path the logical CarPlay viewArea must describe the actually
- * visible 1440x455 region rather than the full coded height.  This changes only
- * the outer viewArea height; the nested FULL/SMALL safeAreas remain unchanged
- * in OEM map-local coordinates.
- *
- * index 0 = FULL  viewArea 1440x455, safeArea (370,49,700x300)
- * index 1 = SMALL viewArea 1440x455, safeArea (490,49,460x300)
+ * index 0 = FULL  (370,49,700x300)
+ * index 1 = SMALL (490,49,460x300)
  */
-static uint32_t alt_cluster_view_area_height(uint32_t w, uint32_t h) {
-    if (w == 1440u && h == 542u) return 455u;
-    return h;
-}
-
 static cf_obj make_cluster_layout_view_areas(uint32_t w, uint32_t h,
                                              int enable_two_areas) {
     struct alt_safe_rect full, small;
     cf_obj areas = NULL, v = NULL, safe = NULL;
-    uint32_t view_h = alt_cluster_view_area_height(w, h);
 
     if (!cf_array_create_mutable || !cf_array_append || !cf_dict_set)
         return NULL;
@@ -697,9 +686,9 @@ static cf_obj make_cluster_layout_view_areas(uint32_t w, uint32_t h,
     full.y = 49u;
     full.w = 700u;
     full.h = 300u;
-    if (!full.y || !full.h || !alt_safe_rect_valid(&full, w, view_h)) goto fail;
+    if (!full.y || !full.h || !alt_safe_rect_valid(&full, w, h)) goto fail;
 
-    v = rect_dict(w, view_h, 0u, 0u);
+    v = rect_dict(w, h, 0u, 0u);
     safe = rect_dict(full.w, full.h, full.x, full.y);
     if (!v || !safe || !cf_dict_set_cstr_obj(v, "safeArea", safe)) goto fail;
     cf_release_safe(safe); safe = NULL;
@@ -713,9 +702,9 @@ static cf_obj make_cluster_layout_view_areas(uint32_t w, uint32_t h,
     small.y = 49u;
     small.w = 460u;
     small.h = 300u;
-    if (!small.y || !small.h || !alt_safe_rect_valid(&small, w, view_h)) goto fail;
+    if (!small.y || !small.h || !alt_safe_rect_valid(&small, w, h)) goto fail;
 
-    v = rect_dict(w, view_h, 0u, 0u);
+    v = rect_dict(w, h, 0u, 0u);
     safe = rect_dict(small.w, small.h, small.x, small.y);
     if (!v || !safe || !cf_dict_set_cstr_obj(v, "safeArea", safe)) goto fail;
     cf_release_safe(safe); safe = NULL;
@@ -859,8 +848,7 @@ void *alt_build_cluster_display(void) {
         initial_view_area,
         two_area_capable ? (initial_view_area ? 0 : 1) : -1,
         two_area_capable ? 1 : 0,
-        d->width_pixels,
-        alt_cluster_view_area_height(d->width_pixels, d->height_pixels),
+        d->width_pixels, d->height_pixels,
         cluster_safe.x, cluster_safe.y,
         cluster_safe.w, cluster_safe.h,
         cluster_safe.physical_x, cluster_safe.physical_y,
