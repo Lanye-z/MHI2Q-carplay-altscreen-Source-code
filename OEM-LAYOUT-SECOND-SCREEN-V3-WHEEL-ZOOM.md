@@ -1,8 +1,8 @@
-# OEM Layout Second Screen V3 — True Cluster Wheel Zoom
+# OEM Layout Second Screen V3.1 — OEM-Paced True Cluster Wheel Zoom
 
-Branch: `experiment/oem-layout-second-screen_v3`
+Branch: `experiment/oem-layout-second-screen_v3.1`
 
-Base branch: `experiment/oem-layout-second-screen_v2`
+Base branch: `experiment/oem-layout-second-screen_v3`
 
 Base commit: `9d672245aac32a2bd7333a7b78d1ba3f09b93d4c`
 
@@ -22,14 +22,16 @@ iPhone
   -> Virtual Cockpit
 ```
 
-V3 adds a separate control plane:
+V3.1 keeps the wheel control plane separate from the video/display path:
 
 ```text
 Audi steering-wheel roller
   -> ClusterService.onMagnificationChanged(int)
   -> WheelZoomBridge
-  -> discrete ZOOM_IN / ZOOM_OUT events
-  -> native CarPlay control backend
+  -> one signed OEM-style step intent per callback
+  -> native signed-step accumulator
+  -> opposite-direction cancellation + bounded pending target
+  -> paced one-step CarPlay changeMapZoomLevel drain
   -> AirPlayReceiverSessionSendCommand
   -> iPhone map engine
   -> newly rendered type111 map frames
@@ -112,27 +114,48 @@ stopUI
 
 V3 should extend this control layer only after the exact zoom wire contract is proven.
 
-## Event semantics — do not collapse wheel steps
+## Event semantics — OEM delayed-step model adapted to CarPlay
 
-True CarPlay zoom is an event API, unlike the old absolute local zoom level.
+The original Audi navigation path carries a signed step count into a delayed zoom handler rather than treating every wheel detent as an immediate renderer call. V3.1 follows that model as closely as the CarPlay API allows.
 
-If one callback reports:
+One HMI magnification callback publishes **one** committed intent record:
 
 ```text
 delta = -3
+-> one OEM_STEPS_V1 record with signed_steps=-3
 ```
 
-V3 must preserve three logical zoom-in steps:
+It is no longer expanded into three adjacent queue records.
+
+Native keeps a signed pending target:
 
 ```text
-ZOOM_IN
-ZOOM_IN
-ZOOM_IN
+pending += signed_steps
+pending is clamped to [-4, +4]
+
+positive -> ZOOM_OUT
+negative -> ZOOM_IN
 ```
 
-Do not publish only a final absolute level and do not let a low-rate "latest state" poll collapse intermediate wheel events.
+Opposite directions cancel before transmission:
 
-Every logical event needs a monotonic sequence number and at-most-once consumption. The Java->native transport may use an IPC path or a bounded queue/ring, but it must preserve event ordering and multiplicity.
+```text
+pending = +3
+new input = -2
+-> pending = +1
+```
+
+CarPlay exposes only a one-step directional `changeMapZoomLevel` command, so the pending target is drained one command at a time:
+
+```text
+first eligible intent after idle -> send immediately
+remaining pending intent          -> at most one command per 200 ms
+```
+
+The 200 ms interval is an initial vehicle-test pacing value, not a claim about the exact Audi OEM timeout. It is deliberately kept in one constant (`WHEEL_ZOOM_PACE_US`) so the next vehicle log can tune it without touching any video/display path.
+
+The CarPlay completion callback remains observational. A `status=0` response means the command was accepted; it does **not** prove that Apple Maps/Amap has finished its zoom animation, so the callback never unlocks an immediate next send.
+
 
 ## Safety / lifecycle gates
 
@@ -208,18 +231,47 @@ Do not modify for this feature unless evidence proves it is necessary:
 
 ## Implementation / vehicle-test gate
 
-The protocol gate is now satisfied at STATIC_BINARY level. V3 implements the sender using the same active receiver, private111 stream generation and cluster display UUID already proven by `showUI` / `updateViewArea`.
-
-The Java transport is an append-only discrete event queue. A callback with `delta=-3` emits three ordered Zoom In records. Each Java process publishes an event epoch so an HMI-only restart cannot make a restarted `seq=1` look stale to a still-running native monitor. Native scans complete committed records, consumes them at most once per epoch, discards stale pre-attach records, and sends only while the private111 control-fence generation is still current, the same generation is route-ready, **and** the independent Java80 ownership state reports an active CarPlay session with verified Context80 readback. The wheel gate does not depend on the retired native Context76/displayable58 `visible` state or on the OEM layout observer.
-
-Vehicle-test acceptance now requires:
+The protocol gate remains the verified CarPlay command:
 
 ```text
-wheel callback captured
-  -> every signed-delta step preserved
-  -> CLUSTER_ZOOM_SUBMIT issued on current generation
-  -> completion callback logged
-  -> incoming type111 content itself changes map scale
+changeMapZoomLevel(uuid, zoomDirection)
+0 = ZOOM_IN
+1 = ZOOM_OUT
 ```
 
-Test Apple Maps and Amap separately. Completion callback semantics remain observational until the vehicle run provides evidence.
+V3.1 changes only the wheel scheduling layer:
+
+```text
+Java callback
+  -> one OEM_STEPS_V1 signed-step record
+  -> native accumulator
+  -> +/- cancellation
+  -> clamp pending to four steps
+  -> first eligible command immediately
+  -> remaining commands at >=200 ms spacing
+```
+
+The queue still carries an epoch and monotonic source sequence, and stale pre-attach records are discarded. Native still gates zoom on the current private111 generation, route readiness and verified Java80 ownership. If any gate closes, unsent pending zoom intent is cleared instead of leaking into a later session.
+
+Vehicle-test logging must include:
+
+```text
+WHEEL_ZOOM_INPUT
+WHEEL_ZOOM_QUEUE
+WHEEL_ZOOM_ACCUMULATE
+WHEEL_ZOOM_PACED_SEND
+CLUSTER_ZOOM_SUBMIT
+CLUSTER_ZOOM_RESPONSE
+```
+
+The key acceptance checks are now:
+
+1. slow single detents still feel immediate;
+2. a multi-step magnification jump produces one signed intent, not an immediate command burst;
+3. opposite direction input cancels unsent pending intent;
+4. no two CarPlay zoom submits are intentionally emitted inside the 200 ms pacing window;
+5. Apple Maps remains responsive;
+6. Amap no longer shows the previous severe burst-induced stall/catch-up behavior;
+7. the incoming type111 content itself changes scale; no local pixel zoom is introduced.
+
+The display chain, V3.1 1440x542-to-1440x455 1:1 viewport clipping, Context80, OMX/SHM path, CPU CSC and lifecycle remain outside this wheel change.
