@@ -51,6 +51,19 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             clang lld g++ binutils-arm-linux-gnueabihf python3-pyelftools
 
+      - name: Syntax-check V3.1 sidecar geometry sources
+        if: github.ref == 'refs/heads/experiment/oem-layout-second-screen_v3.1'
+        run: |
+          set -euo pipefail
+          g++ -std=c++98 -Wall -Wextra -Werror -fsyntax-only \
+            -IToolbox/carplay_alt_screen/mirror_display/src \
+            -IToolbox/carplay_alt_screen/src \
+            Toolbox/carplay_alt_screen/mirror_display/src/main.cpp
+          g++ -std=c++98 -Wall -Wextra -Werror -fsyntax-only \
+            -IToolbox/carplay_alt_screen/mirror_display/src \
+            Toolbox/carplay_alt_screen/mirror_display/src/gl_renderer.cpp
+          echo "V31_SIDECAR_SOURCE_SYNTAX=PASS"
+
       - name: Build Java wheel observer into current V3 HMI JAR
         run: |
           set -euo pipefail
@@ -542,6 +555,52 @@ jobs:
               )
               path.write_text(source)
 
+          if is_v31:
+              ready = root / "BRANCH-ZIP-READY.txt"
+              ready_text = ready.read_text()
+              ready_updates = {
+                  "BRANCH_ZIP_READY": "NO",
+                  "branch": os.environ["GITHUB_REF_NAME"],
+                  "validated_source_commit": os.environ["GITHUB_SHA"],
+                  "mode": "PRIVATE111_DIRECT_DISPLAY_V3_WHEEL_ZOOM",
+                  "jar_size": os.environ["SIZE"],
+                  "jar_cksum": os.environ["CKSUM"],
+                  "jar_sha256": os.environ["JAR_SHA"],
+                  "universal_runtime_sha256": os.environ["HOOK_SHA"],
+                  "display_chain": "V3_1_OEM_MAP_1TO1_CLIP",
+                  "wheel_zoom_model": "OEM_STEPS_V1",
+                  "wheel_zoom_pacing": "FRAME_HEALTH_ADAPTIVE",
+                  "wheel_zoom_min_pace_ms": "120",
+                  "wheel_zoom_fallback_pace_ms": "200",
+                  "wheel_zoom_fresh_frames": "3",
+                  "wheel_zoom_fresh_frame_age_ms": "100",
+                  "wheel_zoom_stall_age_ms": "150",
+                  "wheel_zoom_input_quiet_ms": "350",
+                  "wheel_zoom_pending_hard_expire_ms": "600",
+                  "wheel_zoom_pending_limit": "4",
+                  "install_policy": "EXTRACT_BRANCH_ZIP_CONTENTS_TO_SD_ROOT",
+                  "verifier": "VERIFY-BRANCH-ZIP-READY.sh",
+              }
+              for key, value in ready_updates.items():
+                  pattern = r"^" + re.escape(key) + r"=.*$"
+                  line = key + "=" + value
+                  if re.search(pattern, ready_text, flags=re.M):
+                      ready_text = re.sub(
+                          pattern, line, ready_text, flags=re.M
+                      )
+                  else:
+                      if ready_text and not ready_text.endswith("\n"):
+                          ready_text += "\n"
+                      ready_text += line + "\n"
+              # Remove retired long-tail metadata if present.
+              ready_text = re.sub(
+                  r"^wheel_zoom_pending_expire_ms=.*\n?",
+                  "",
+                  ready_text,
+                  flags=re.M,
+              )
+              ready.write_text(ready_text)
+
           required = [
               ".github/workflows/wheel-zoom-v3.yml",
               "OEM-LAYOUT-SECOND-SCREEN-V3-WHEEL-ZOOM.md",
@@ -660,6 +719,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add \
+            BRANCH-ZIP-READY.txt \
             Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar \
             Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt \
             Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so \
