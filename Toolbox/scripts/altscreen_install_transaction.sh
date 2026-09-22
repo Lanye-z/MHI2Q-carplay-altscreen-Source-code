@@ -36,6 +36,7 @@ TXN="$TXN_ROOT/active"
 LOG="$SD/logs/install-transaction.log"
 RESTORE_TXN="$SD/restore-transaction/active"
 INSTALLER="$VOLUME/Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh"
+CONTROLLER="$VOLUME/Toolbox/scripts/altscreen_chain_test.sh"
 PRELOAD_AWK="$VOLUME/Toolbox/scripts/altscreen_preload.awk"
 JAR_SOURCE="$VOLUME/Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar"
 UNIVERSAL_SOURCE="$VOLUME/Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so"
@@ -51,6 +52,7 @@ DIO="$(p /mnt/system/etc/eso/production/dio_manager.json)"
 PF="$(p /mnt/system/etc/pf.conf)"
 UNIVERSAL_REL="/mnt/app/root/carplay-altscreen/lib/libcarplay_altscreen.so"
 UNIVERSAL_DST="$(p "$UNIVERSAL_REL")"
+CHAIN_LOCK="$STATE/.chain_test.lock"
 
 ensure_dirs "$SD/logs" "$TXN_ROOT" || { echo "INSTALL=REFUSED reason=SD_NOT_WRITABLE production_changed=NO"; exit 1; }
 : >> "$LOG" 2>/dev/null || { echo "INSTALL=REFUSED reason=SD_LOG_NOT_WRITABLE production_changed=NO"; exit 1; }
@@ -90,32 +92,58 @@ finish_mounts(){
   return "$r"
 }
 
+snapshot_marker_kind(){
+  base=$1
+  p=0; a=0
+  [ ! -f "$base.present" ] || p=1
+  [ ! -f "$base.absent" ] || a=1
+  [ $((p + a)) -eq 1 ] || return 1
+  [ "$p" = 1 ] && echo present || echo absent
+}
+
 snap_file(){
   src=$1; name=$2; dst="$TXN/files/$name"
   if [ -f "$src" ]; then
-    cp "$src" "$dst" && same "$src" "$dst" && touch "$dst.present"
+    cp "$src" "$dst" && same "$src" "$dst" || return 1
+    cksum < "$dst" > "$TXN/meta/$name.cksum" || return 1
+    touch "$dst.present"
   else
     touch "$dst.absent"
   fi
 }
+validate_file_snapshot(){
+  name=$1; src="$TXN/files/$name"
+  kind=$(snapshot_marker_kind "$src") || return 1
+  if [ "$kind" = present ]; then
+    [ -f "$src" ] || return 1
+    if [ -f "$TXN/meta/$name.cksum" ]; then
+      [ "$(cksum < "$src")" = "$(cat "$TXN/meta/$name.cksum")" ] || return 1
+    else
+      log "SNAPSHOT_INTEGRITY=LEGACY_WEAK kind=file name=$name reason=missing_cksum_metadata"
+    fi
+  else
+    [ ! -e "$src" ] || return 1
+  fi
+  return 0
+}
 restore_file(){
   dst=$1; name=$2; mode=$3; src="$TXN/files/$name"
-  if [ -f "$src.present" ]; then
+  kind=$(snapshot_marker_kind "$src") || return 1
+  if [ "$kind" = present ]; then
+    validate_file_snapshot "$name" || return 1
     ensure_dirs "$(dirname -- "$dst")" || return 1
     tmp="${dst}.install-rollback.new"
     rm -f "$tmp" 2>/dev/null || true
     cp "$src" "$tmp" && chmod "$mode" "$tmp" && same "$src" "$tmp" && mv "$tmp" "$dst"
-  elif [ -f "$src.absent" ]; then
-    rm -f "$dst"
   else
-    return 1
+    rm -f "$dst"
   fi
 }
 verify_file_snapshot(){
   dst=$1; name=$2; src="$TXN/files/$name"
-  if [ -f "$src.present" ]; then same "$src" "$dst"
-  elif [ -f "$src.absent" ]; then [ ! -e "$dst" ]
-  else return 1
+  kind=$(snapshot_marker_kind "$src") || return 1
+  if [ "$kind" = present ]; then same "$src" "$dst"
+  else [ ! -e "$dst" ]
   fi
 }
 
@@ -125,40 +153,111 @@ snap_dir(){
     ensure_dirs "$dst" || return 1
     cp -R "$src/." "$dst/" || return 1
     same_dir_exact "$src" "$dst" || return 1
+    dir_manifest "$dst" "$TXN/meta/$name.manifest" || return 1
     touch "$TXN/dirs/$name.present"
   else
     touch "$TXN/dirs/$name.absent"
   fi
 }
+validate_dir_snapshot(){
+  name=$1; src="$TXN/dirs/$name"
+  kind=$(snapshot_marker_kind "$TXN/dirs/$name") || return 1
+  if [ "$kind" = present ]; then
+    [ -d "$src" ] || return 1
+    if [ -f "$TXN/meta/$name.manifest" ]; then
+      now="$TXN/meta/$name.verify.$"
+      dir_manifest "$src" "$now" || { rm -f "$now" 2>/dev/null || true; return 1; }
+      cmp -s "$TXN/meta/$name.manifest" "$now" || { rm -f "$now" 2>/dev/null || true; return 1; }
+      rm -f "$now" 2>/dev/null || true
+    else
+      log "SNAPSHOT_INTEGRITY=LEGACY_WEAK kind=dir name=$name reason=missing_manifest_metadata"
+    fi
+  else
+    [ ! -e "$src" ] || return 1
+  fi
+  return 0
+}
 restore_dir(){
   dst=$1; name=$2; src="$TXN/dirs/$name"
-  rm -rf "$dst" 2>/dev/null || return 1
-  if [ -f "$TXN/dirs/$name.present" ]; then
-    tmp="${dst}.install-rollback.$$"
+  kind=$(snapshot_marker_kind "$TXN/dirs/$name") || return 1
+  if [ "$kind" = present ]; then
+    validate_dir_snapshot "$name" || return 1
+    tmp="${dst}.install-rollback.$"
     rm -rf "$tmp" 2>/dev/null || true
     ensure_dirs "$tmp" || return 1
     cp -R "$src/." "$tmp/" || return 1
-    same_dir_exact "$src" "$tmp" || return 1
+    same_dir_exact "$src" "$tmp" || { rm -rf "$tmp" 2>/dev/null || true; return 1; }
+    rm -rf "$dst" 2>/dev/null || { rm -rf "$tmp" 2>/dev/null || true; return 1; }
     mv "$tmp" "$dst"
-  elif [ -f "$TXN/dirs/$name.absent" ]; then
-    :
   else
-    return 1
+    rm -rf "$dst" 2>/dev/null || return 1
   fi
 }
 verify_dir_snapshot(){
   dst=$1; name=$2; src="$TXN/dirs/$name"
-  if [ -f "$TXN/dirs/$name.present" ]; then [ -d "$dst" ] && same_dir_exact "$src" "$dst"
-  elif [ -f "$TXN/dirs/$name.absent" ]; then [ ! -e "$dst" ]
-  else return 1
+  kind=$(snapshot_marker_kind "$TXN/dirs/$name") || return 1
+  if [ "$kind" = present ]; then [ -d "$dst" ] && same_dir_exact "$src" "$dst"
+  else [ ! -e "$dst" ]
   fi
+}
+
+validate_snapshot(){
+  s=$(cat "$TXN/startup.path" 2>/dev/null || true)
+  case "$s" in
+    "$(p /mnt/system/etc/boot/startup.sh)"|"$(p /etc/boot/startup.sh)") ;;
+    *) log "SNAPSHOT_INTEGRITY=FAIL reason=invalid_startup_path"; return 1 ;;
+  esac
+  for n in startup.sh smartphone_integrator.json dio_manager.json pf.conf carplay_hook.jar legacy_hook; do
+    validate_file_snapshot "$n" || { log "SNAPSHOT_INTEGRITY=FAIL kind=file name=$n"; return 1; }
+  done
+  for n in runtime runtime_stage runtime_previous libtarget sd_state sd_backup sd_staging; do
+    validate_dir_snapshot "$n" || { log "SNAPSHOT_INTEGRITY=FAIL kind=dir name=$n"; return 1; }
+  done
+  log "SNAPSHOT_INTEGRITY=PASS"
+  return 0
+}
+
+chain_lock_precheck(){
+  [ -d "$CHAIN_LOCK" ] || return 0
+  if [ ! -f "$CHAIN_LOCK/pid" ]; then
+    sleep 1
+    if [ ! -f "$CHAIN_LOCK/pid" ]; then
+      rm -f "$CHAIN_LOCK/owner" "$CHAIN_LOCK/boot" "$CHAIN_LOCK/action" 2>/dev/null || true
+      rmdir "$CHAIN_LOCK" 2>/dev/null || {
+        log "INSTALL=REFUSED reason=CHAIN_LOCK_INVALID production_changed=NO"
+        return 1
+      }
+      log "CHAIN_LOCK_STALE_RECOVERED reason=empty_or_partial"
+      return 0
+    fi
+  fi
+  owner=$(cat "$CHAIN_LOCK/owner" 2>/dev/null || true)
+  case "$owner" in ""|MMI-Cockpit-Carplay-Universal) ;; *)
+    log "INSTALL=REFUSED reason=CHAIN_LOCK_UNKNOWN_OWNER owner=$owner production_changed=NO"
+    return 1 ;;
+  esac
+  pid=$(cat "$CHAIN_LOCK/pid" 2>/dev/null || true)
+  case "$pid" in
+    ''|*[!0-9]*) reason=invalid_pid ;;
+    *)
+      if kill -0 "$pid" 2>/dev/null; then
+        log "INSTALL=REFUSED reason=CHAIN_OPERATION_ACTIVE pid=$pid production_changed=NO"
+        return 1
+      fi
+      reason=dead_pid
+      ;;
+  esac
+  rm -f "$CHAIN_LOCK/owner" "$CHAIN_LOCK/pid" "$CHAIN_LOCK/boot" "$CHAIN_LOCK/action" 2>/dev/null || return 1
+  rmdir "$CHAIN_LOCK" 2>/dev/null || return 1
+  log "CHAIN_LOCK_STALE_RECOVERED reason=$reason old_pid=${pid:-unknown}"
+  return 0
 }
 
 snapshot(){
   [ ! -e "$RESTORE_TXN" ] || { log "INSTALL=REFUSED reason=RESTORE_TRANSACTION_ACTIVE production_changed=NO"; return 1; }
-  [ ! -e "$STATE/.chain_test.lock" ] || { log "INSTALL=REFUSED reason=CHAIN_LOCK_PRESENT production_changed=NO"; return 1; }
+  chain_lock_precheck || return 1
   rm -rf "$TXN" 2>/dev/null || return 1
-  ensure_dirs "$TXN/files" "$TXN/dirs" || return 1
+  ensure_dirs "$TXN/files" "$TXN/dirs" "$TXN/meta" || return 1
 
   STARTUP=$(find_startup) || { log "INSTALL=REFUSED reason=STARTUP_NOT_FOUND production_changed=NO"; return 1; }
   printf '%s\n' "$STARTUP" > "$TXN/startup.path" || return 1
@@ -178,11 +277,18 @@ snapshot(){
   snap_dir "$BACKUP" sd_backup || return 1
   snap_dir "$STAGING" sd_staging || return 1
 
-  printf '%s\n' "$$" > "$TXN/pid" || return 1
+  printf '%s\n' "$" > "$TXN/pid" || return 1
+  validate_snapshot || return 1
   touch "$TXN/PREPARED" || return 1
-  sync >/dev/null 2>&1 || true
+  # PREPARED must be durable before the first production mutation. Otherwise a
+  # power loss could leave changed production state with no recoverable marker.
+  sync >/dev/null 2>&1 || {
+    rm -f "$TXN/PREPARED" 2>/dev/null || true
+    log "INSTALL=REFUSED reason=PREPARED_SYNC_FAILED production_changed=NO"
+    return 1
+  }
   TXN_READY=1
-  log "INSTALL_TRANSACTION=PREPARED persistent_state=PRE_INSTALL"
+  log "INSTALL_TRANSACTION=PREPARED persistent_state=PRE_INSTALL durable=YES"
 }
 
 verify_preinstall(){
@@ -206,6 +312,11 @@ verify_preinstall(){
 
 rollback(){
   [ -f "$TXN/PREPARED" ] || return 1
+  if ! validate_snapshot; then
+    touch "$TXN/ROLLBACK_INCOMPLETE" 2>/dev/null || true
+    log "INSTALL_ROLLBACK=REFUSED reason=SNAPSHOT_INTEGRITY_FAILED production_changed=NO_BY_ROLLBACK recovery_required=YES"
+    return 1
+  fi
   ROLLING_BACK=1
   trap - 1 2 15
   log "INSTALL_ROLLBACK=STARTED target=PRE_INSTALL"
@@ -273,6 +384,29 @@ recover_stale(){
   return 0
 }
 
+verify_hmi_backup(){
+  h="$BACKUP/basevideo3-hmi-original"
+  [ -f "$h/COMPLETE" ] && [ -f "$h/target" ] || return 1
+  [ "$(cat "$h/target" 2>/dev/null || true)" = /mnt/app/eso/hmi/lsd/jars/carplay_hook.jar ] || return 1
+  if [ -f "$h/present" ] && [ ! -f "$h/absent" ]; then
+    [ -s "$h/carplay_hook.jar" ] || return 1
+    [ ! -f "$h/cksum" ] || [ "$(cksum < "$h/carplay_hook.jar")" = "$(cat "$h/cksum")" ] || return 1
+  elif [ -f "$h/absent" ] && [ ! -f "$h/present" ]; then
+    [ ! -e "$h/carplay_hook.jar" ] || return 1
+  else
+    return 1
+  fi
+}
+verify_boot_backup(){
+  b="$BACKUP/boot-diagnostics"
+  [ -f "$b/COMPLETE" ] && [ -s "$b/startup.sh" ] && [ -f "$b/startup.cksum" ] && [ -f "$b/path" ] || return 1
+  [ "$(cksum < "$b/startup.sh")" = "$(cat "$b/startup.cksum")" ] || return 1
+  case "$(cat "$b/path" 2>/dev/null || true)" in
+    /mnt/system/etc/boot/startup.sh|/etc/boot/startup.sh) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 verify_installed(){
   [ -s "$JAR_SOURCE" ] && [ -s "$UNIVERSAL_SOURCE" ] || { log "INSTALL_VERIFY=FAIL reason=PACKAGE_ARTIFACT_MISSING"; return 1; }
   same "$JAR_SOURCE" "$JAR" || { log "INSTALL_VERIFY=FAIL reason=HMI_JAR_MISMATCH"; return 1; }
@@ -300,16 +434,162 @@ verify_installed(){
     { log "INSTALL_VERIFY=FAIL reason=SMARTPHONE_INTEGRATOR_NOT_ARMED"; return 1; }
 
   STARTUP=$(find_startup) || { log "INSTALL_VERIFY=FAIL reason=STARTUP_NOT_FOUND"; return 1; }
-  b=$(grep -c '^# BEGIN ALTSCREEN DIAGNOSTICS$' "$STARTUP" 2>/dev/null || echo 0)
-  e=$(grep -c '^# END ALTSCREEN DIAGNOSTICS$' "$STARTUP" 2>/dev/null || echo 0)
+  b=$(grep -c '^# BEGIN ALTSCREEN DIAGNOSTICS
   [ "$b" = 1 ] && [ "$e" = 1 ] ||
     { log "INSTALL_VERIFY=FAIL reason=DIAGNOSTICS_BLOCK_COUNT begin=$b end=$e"; return 1; }
 
-  for marker in     "$BACKUP/basevideo3-hmi-original/COMPLETE"     "$BACKUP/original/COMPLETE"     "$BACKUP/firewall-original/COMPLETE"     "$BACKUP/universal-hook-original/COMPLETE"     "$BACKUP/boot-diagnostics/COMPLETE"; do
-    [ -f "$marker" ] || { log "INSTALL_VERIFY=FAIL reason=BACKUP_MARKER_MISSING path=$marker"; return 1; }
-  done
+  # The uninstall path depends on these backups. Re-run the native restore
+  # precheck and independently verify HMI/boot backups before COMMIT.
+  [ -f "$CONTROLLER" ] || { log "INSTALL_VERIFY=FAIL reason=CONTROLLER_MISSING"; return 1; }
+  ALTS_INSTALL_TXN_ACTIVE=1 /bin/sh "$CONTROLLER" restore-precheck ||
+    { log "INSTALL_VERIFY=FAIL reason=NATIVE_RECOVERY_SET_INVALID"; return 1; }
+  verify_hmi_backup || { log "INSTALL_VERIFY=FAIL reason=HMI_BACKUP_INVALID"; return 1; }
+  verify_boot_backup || { log "INSTALL_VERIFY=FAIL reason=BOOT_DIAGNOSTICS_BACKUP_INVALID"; return 1; }
 
-  log "INSTALL_VERIFY=PASS runtime=owned jar=verified native_preload=verified diagnostics=verified sd_state=verified"
+  log "INSTALL_VERIFY=PASS runtime=owned jar=verified native_preload=verified diagnostics=verified sd_state=verified recovery_set=verified"
+  return 0
+}
+
+fail(){
+  msg=$1
+  log "ERROR: $msg"
+  finish_mounts >/dev/null 2>&1 || true
+  if [ "$ROLLING_BACK" = 0 ] && [ "$TXN_READY" = 1 ]; then
+    if rollback; then
+      log "INSTALL=ABORTED rollback=PASS persistent_state=PRE_INSTALL"
+    else
+      log "INSTALL=FAILED rollback=INCOMPLETE recovery_required=YES"
+    fi
+  else
+    log "INSTALL=REFUSED production_changed=NO"
+  fi
+  exit 1
+}
+
+ACTION=${1:-install}
+case "$ACTION" in
+  install|recover) ;;
+  *) echo "usage: $0 {install|recover} [installer-args...]" >&2; exit 2 ;;
+esac
+if [ "$ACTION" = recover ]; then
+  log "===== V3.1 transactional INSTALL recovery started ====="
+  recover_stale || { log "INSTALL_RECOVERY=FAIL"; exit 1; }
+  log "INSTALL_RECOVERY=PASS"
+  log "===== V3.1 transactional INSTALL recovery finished ====="
+  exit 0
+fi
+
+trap 'fail "install interrupted by signal"' 1 2 15
+log "===== V3.1 transactional INSTALL started ====="
+recover_stale || fail "previous install transaction could not be recovered"
+[ ! -e "$RESTORE_TXN" ] || fail "restore transaction is active"
+[ -f "$INSTALLER" ] || fail "installer missing"
+sh -n "$INSTALLER" || fail "installer shell syntax invalid"
+
+snapshot || { rm -rf "$TXN" 2>/dev/null || true; TXN_READY=0; fail "pre-install transaction snapshot failed"; }
+touch "$TXN/APPLYING" || fail "cannot mark install transaction APPLYING"
+
+if [ "$#" -gt 0 ]; then shift; fi
+if [ "$#" -gt 0 ]; then
+  ALTS_INSTALL_TXN_ACTIVE=1 ALTS_OPLOG_CAPTURED=1 /bin/sh "$INSTALLER" "$@" || fail "install APPLY step failed"
+else
+  ALTS_INSTALL_TXN_ACTIVE=1 ALTS_OPLOG_CAPTURED=1 /bin/sh "$INSTALLER" || fail "install APPLY step failed"
+fi
+
+verify_installed || fail "final installed-state verification failed"
+sync >/dev/null 2>&1 || fail "sync failed before install commit"
+touch "$TXN/COMMITTED" || fail "cannot commit install transaction"
+TXN_READY=0
+sync >/dev/null 2>&1 || log "WARN: final post-commit sync reported failure; installed state was already verified and committed"
+log "INSTALL=PASS transaction=COMMITTED persistent_state=INSTALLED reboot_required=YES"
+rm -rf "$TXN" 2>/dev/null || log "WARN: committed install transaction retained; next INSTALL/RESTORE will clean it"
+trap - 1 2 15
+log "===== V3.1 transactional INSTALL finished ====="
+exit 0
+ "$STARTUP" 2>/dev/null || true)
+  e=$(grep -c '^# END ALTSCREEN DIAGNOSTICS
+  [ "$b" = 1 ] && [ "$e" = 1 ] ||
+    { log "INSTALL_VERIFY=FAIL reason=DIAGNOSTICS_BLOCK_COUNT begin=$b end=$e"; return 1; }
+
+  # The uninstall path depends on these backups. Re-run the native restore
+  # precheck and independently verify HMI/boot backups before COMMIT.
+  [ -f "$CONTROLLER" ] || { log "INSTALL_VERIFY=FAIL reason=CONTROLLER_MISSING"; return 1; }
+  ALTS_INSTALL_TXN_ACTIVE=1 /bin/sh "$CONTROLLER" restore-precheck ||
+    { log "INSTALL_VERIFY=FAIL reason=NATIVE_RECOVERY_SET_INVALID"; return 1; }
+  verify_hmi_backup || { log "INSTALL_VERIFY=FAIL reason=HMI_BACKUP_INVALID"; return 1; }
+  verify_boot_backup || { log "INSTALL_VERIFY=FAIL reason=BOOT_DIAGNOSTICS_BACKUP_INVALID"; return 1; }
+
+  log "INSTALL_VERIFY=PASS runtime=owned jar=verified native_preload=verified diagnostics=verified sd_state=verified recovery_set=verified"
+  return 0
+}
+
+fail(){
+  msg=$1
+  log "ERROR: $msg"
+  finish_mounts >/dev/null 2>&1 || true
+  if [ "$ROLLING_BACK" = 0 ] && [ "$TXN_READY" = 1 ]; then
+    if rollback; then
+      log "INSTALL=ABORTED rollback=PASS persistent_state=PRE_INSTALL"
+    else
+      log "INSTALL=FAILED rollback=INCOMPLETE recovery_required=YES"
+    fi
+  else
+    log "INSTALL=REFUSED production_changed=NO"
+  fi
+  exit 1
+}
+
+ACTION=${1:-install}
+if [ "$ACTION" = recover ]; then
+  log "===== V3.1 transactional INSTALL recovery started ====="
+  recover_stale || { log "INSTALL_RECOVERY=FAIL"; exit 1; }
+  log "INSTALL_RECOVERY=PASS"
+  log "===== V3.1 transactional INSTALL recovery finished ====="
+  exit 0
+fi
+
+trap 'fail "install interrupted by signal"' 1 2 15
+log "===== V3.1 transactional INSTALL started ====="
+recover_stale || fail "previous install transaction could not be recovered"
+[ ! -e "$RESTORE_TXN" ] || fail "restore transaction is active"
+[ -f "$INSTALLER" ] || fail "installer missing"
+sh -n "$INSTALLER" || fail "installer shell syntax invalid"
+
+snapshot || { rm -rf "$TXN" 2>/dev/null || true; TXN_READY=0; fail "pre-install transaction snapshot failed"; }
+touch "$TXN/APPLYING" || fail "cannot mark install transaction APPLYING"
+
+shift || true
+if [ "$#" -gt 0 ]; then
+  ALTS_INSTALL_TXN_ACTIVE=1 ALTS_OPLOG_CAPTURED=1 /bin/sh "$INSTALLER" "$@" || fail "install APPLY step failed"
+else
+  ALTS_INSTALL_TXN_ACTIVE=1 ALTS_OPLOG_CAPTURED=1 /bin/sh "$INSTALLER" || fail "install APPLY step failed"
+fi
+
+verify_installed || fail "final installed-state verification failed"
+sync >/dev/null 2>&1 || fail "sync failed before install commit"
+touch "$TXN/COMMITTED" || fail "cannot commit install transaction"
+TXN_READY=0
+sync >/dev/null 2>&1 || log "WARN: final post-commit sync reported failure; installed state was already verified and committed"
+log "INSTALL=PASS transaction=COMMITTED persistent_state=INSTALLED reboot_required=YES"
+rm -rf "$TXN" 2>/dev/null || log "WARN: committed install transaction retained; next INSTALL/RESTORE will clean it"
+trap - 1 2 15
+log "===== V3.1 transactional INSTALL finished ====="
+exit 0
+ "$STARTUP" 2>/dev/null || true)
+  [ -n "$b" ] || b=0
+  [ -n "$e" ] || e=0
+  [ "$b" = 1 ] && [ "$e" = 1 ] ||
+    { log "INSTALL_VERIFY=FAIL reason=DIAGNOSTICS_BLOCK_COUNT begin=$b end=$e"; return 1; }
+
+  # The uninstall path depends on these backups. Re-run the native restore
+  # precheck and independently verify HMI/boot backups before COMMIT.
+  [ -f "$CONTROLLER" ] || { log "INSTALL_VERIFY=FAIL reason=CONTROLLER_MISSING"; return 1; }
+  ALTS_INSTALL_TXN_ACTIVE=1 /bin/sh "$CONTROLLER" restore-precheck ||
+    { log "INSTALL_VERIFY=FAIL reason=NATIVE_RECOVERY_SET_INVALID"; return 1; }
+  verify_hmi_backup || { log "INSTALL_VERIFY=FAIL reason=HMI_BACKUP_INVALID"; return 1; }
+  verify_boot_backup || { log "INSTALL_VERIFY=FAIL reason=BOOT_DIAGNOSTICS_BACKUP_INVALID"; return 1; }
+
+  log "INSTALL_VERIFY=PASS runtime=owned jar=verified native_preload=verified diagnostics=verified sd_state=verified recovery_set=verified"
   return 0
 }
 
