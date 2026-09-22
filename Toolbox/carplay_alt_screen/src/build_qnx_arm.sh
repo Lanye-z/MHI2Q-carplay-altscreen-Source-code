@@ -202,7 +202,11 @@ for marker in \
   'PHASE=ALT111_VIEWAREA_TARGET' \
   'PHASE=ALT111_VIEWAREA_RESULT' \
   'same_session=1' \
-  'renderer_scale=0'
+  'renderer_scale=0' \
+  'OEM_STEPS_V1' \
+  'PHASE=WHEEL_ZOOM_ACCUMULATE' \
+  'PHASE=WHEEL_ZOOM_PACED_SEND' \
+  'response_gates_next=0'
 do
   grep -a -Fq "$marker" "$SO" || {
     echo "QNX_BUILD_FAIL missing runtime marker: $marker" >&2
