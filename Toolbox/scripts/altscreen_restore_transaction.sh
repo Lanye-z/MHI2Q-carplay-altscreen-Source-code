@@ -61,7 +61,13 @@ same_dir_exact(){
   rm -f "$ma" "$mb" 2>/dev/null || true
   return "$rc"
 }
-finish_mounts(){ r=0; sync >/dev/null 2>&1 || r=1; [ "$APP_RW" = 0 ] || { mount_app_ro >/dev/null 2>&1 || r=1; APP_RW=0; }; [ "$SYS_RW" = 0 ] || { mount_system_ro >/dev/null 2>&1 || r=1; SYS_RW=0; }; return "$r"; }
+finish_mounts(){
+  r=0
+  sync >/dev/null 2>&1 || r=1
+  [ "$APP_RW" = 0 ] || { mount_app_ro >/dev/null 2>&1 || r=1; APP_RW=0; }
+  [ "$SYS_RW" = 0 ] || { mount_system_ro >/dev/null 2>&1 || r=1; SYS_RW=0; }
+  return "$r"
+}
 
 snapshot_marker_kind(){
   base=$1; p=0; a=0
@@ -96,11 +102,7 @@ validate_file_snapshot(){
   snap_file "$JAR" carplay_hook.jar || return 1
   snap_file "$LEGACY_HOOK" legacy_hook || return 1
 
-  if [ -d "$LIBTARGET" ]; then
-    touch "$TXN/libtarget.dir_present" || return 1
-  else
-    touch "$TXN/libtarget.dir_absent" || return 1
-  fi
+  if [ -d "$LIBTARGET" ]; then touch "$TXN/libtarget.dir_present" || return 1; else touch "$TXN/libtarget.dir_absent" || return 1; fi
   for n in libairplay.so libairplax.so libNmeBaseClasses.so; do
     snap_file "$LIBTARGET/$n" "libtarget_$n" || return 1
   done
@@ -270,41 +272,3 @@ rm -rf "$TXN" 2>/dev/null || log "WARN: committed transaction retained; next run
 trap - 1 2 15
 log "===== V3 transactional RESTORE ORIGINAL finished ====="
 exit 0
-validate_restore_snapshot(){
-  s=$(cat "$TXN/startup.path" 2>/dev/null || true)
-  case "$s" in
-    "$(p /mnt/system/etc/boot/startup.sh)"|"$(p /etc/boot/startup.sh)") ;;
-    *) log "RESTORE_SNAPSHOT_INTEGRITY=FAIL reason=invalid_startup_path"; return 1 ;;
-  esac
-  for n in startup.sh smartphone_integrator.json dio_manager.json pf.conf carplay_hook.jar legacy_hook libtarget_libairplay.so libtarget_libairplax.so libtarget_libNmeBaseClasses.so; do
-    validate_file_snapshot "$n" || { log "RESTORE_SNAPSHOT_INTEGRITY=FAIL kind=file name=$n"; return 1; }
-  done
-  lp=0; la=0
-  [ ! -f "$TXN/libtarget.dir_present" ] || lp=1
-  [ ! -f "$TXN/libtarget.dir_absent" ] || la=1
-  [ $((lp + la)) -eq 1 ] || { log "RESTORE_SNAPSHOT_INTEGRITY=FAIL kind=libtarget_presence"; return 1; }
-  for n in runtime state; do
-    validate_dir_snapshot "$n" || { log "RESTORE_SNAPSHOT_INTEGRITY=FAIL kind=dir name=$n"; return 1; }
-  done
-  log "RESTORE_SNAPSHOT_INTEGRITY=PASS"
-  return 0
-}
-
-verify_restore_rollback(){
-  s=$(cat "$TXN/startup.path" 2>/dev/null || true)
-  [ -n "$s" ] || return 1
-  verify_file_snapshot "$s" startup.sh || return 1
-  verify_file_snapshot "$SI" smartphone_integrator.json || return 1
-  verify_file_snapshot "$DIO" dio_manager.json || return 1
-  verify_file_snapshot "$PF" pf.conf || return 1
-  verify_file_snapshot "$JAR" carplay_hook.jar || return 1
-  verify_file_snapshot "$LEGACY_HOOK" legacy_hook || return 1
-  for n in libairplay.so libairplax.so libNmeBaseClasses.so; do
-    verify_file_snapshot "$LIBTARGET/$n" "libtarget_$n" || return 1
-  done
-  if [ -f "$TXN/libtarget.dir_absent" ]; then [ ! -d "$LIBTARGET" ] || return 1; fi
-  verify_dir_snapshot "$RUNTIME" runtime || return 1
-  verify_dir_snapshot "$STATE" state || return 1
-  return 0
-}
-
