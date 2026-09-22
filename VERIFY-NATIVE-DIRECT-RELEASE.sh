@@ -381,8 +381,8 @@ grep -Fq '#define WHEEL_ZOOM_EVENT_MODEL "OEM_STEPS_V1"' "$NATIVE" ||
     fail "native wheel parser model mismatch"
 grep -Fq '#define WHEEL_ZOOM_PENDING_LIMIT 4' "$NATIVE" ||
     fail "wheel pending target must remain bounded to four steps"
-grep -Fq '#define WHEEL_ZOOM_MIN_PACE_US 100000u' "$NATIVE" ||
-    fail "adaptive wheel minimum pacing must remain 100 ms"
+grep -Fq '#define WHEEL_ZOOM_MIN_PACE_US 120000u' "$NATIVE" ||
+    fail "adaptive wheel minimum pacing must remain 120 ms"
 grep -Fq '#define WHEEL_ZOOM_FALLBACK_PACE_US 200000u' "$NATIVE" ||
     fail "adaptive wheel telemetry fallback must remain 200 ms"
 grep -Fq '#define WHEEL_ZOOM_FRESH_FRAME_AGE_US 100000u' "$NATIVE" ||
