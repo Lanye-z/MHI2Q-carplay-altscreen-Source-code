@@ -764,12 +764,19 @@ jobs:
               "Toolbox/carplay_alt_screen/src/p1404_abi.h",
               "Toolbox/carplay_alt_screen/src/p1404_airplay.c",
               "Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c",
+              "Toolbox/carplay_alt_screen/tests/test_install_transaction.sh",
               "Toolbox/carplay_alt_screen/tests/test_restore_transaction.sh",
+              "Toolbox/carplay_alt_screen/tests/test_storage_policy.sh",
               "Toolbox/carplay_alt_screen/tests/test_wheel_zoom_pacing.py",
               "Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so",
+              "Toolbox/scripts/altscreen_chain_test.sh",
+              "Toolbox/scripts/altscreen_chain_test_universal.sh",
+              "Toolbox/scripts/altscreen_install_transaction.sh",
+              "Toolbox/scripts/altscreen_restore_transaction.sh",
               "Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh",
               "Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh",
               "Toolbox/scripts/status_mmi_cockpit_carplay_test.sh",
+              "VERIFY-NATIVE-DIRECT-RELEASE.sh",
           ]
 
           package = root / "PACKAGE_SOURCE_MAP.json"
