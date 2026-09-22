@@ -1057,9 +1057,9 @@ static void *native_monitor_worker(void *arg) {
                   (uint64_t)WHEEL_ZOOM_PENDING_EXPIRE_US) {
             altscreen_log(
                 "PHASE=WHEEL_ZOOM_PENDING_EXPIRE receiver=%p stream=%p "
-                "generation=%u pending_before=%d age_ms=%llu action=CLEAR",
+                "generation=%u pending_before=%d age_us=%llu action=CLEAR",
                 receiver, stream, generation, zoom_pending_steps,
-                (unsigned long long)((now - zoom_last_input_at) / 1000ULL));
+                (unsigned long long)(now - zoom_last_input_at));
             zoom_pending_steps = 0;
             zoom_frame_baseline_valid = 0;
             zoom_wait_saw_stall = 0;
@@ -1225,7 +1225,7 @@ static void *native_monitor_worker(void *arg) {
                     "action=%s direction=%d pending_before=%d "
                     "pending_after=%d pacing=FRAME_HEALTH_ADAPTIVE "
                     "first_send=%d telemetry=%s fallback_timer=%d "
-                    "elapsed_ms=%llu fresh_frames=%u frame_age_ms=%u "
+                    "elapsed_us=%llu fresh_frames=%u frame_age_ms=%u "
                     "min_pace_ms=%u required_fresh_frames=%u "
                     "response_gates_next=0 rc=%d",
                     receiver, stream, generation, zoom_command_seq,
@@ -1235,7 +1235,7 @@ static void *native_monitor_worker(void *arg) {
                     first_send,
                     progress_ok ? "decoded_progress" : "unavailable",
                     fallback_timer,
-                    (unsigned long long)(elapsed_us / 1000ULL),
+                    (unsigned long long)elapsed_us,
                     fresh_frames, frame_age_us / 1000u,
                     WHEEL_ZOOM_MIN_PACE_US / 1000u,
                     WHEEL_ZOOM_FRESH_FRAMES,
