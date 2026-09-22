@@ -731,7 +731,7 @@ static int native_wheel_zoom_target_accumulate(int target, int delta,
     return (int)next;
 }
 
-struct wheel_zoom_event {struct wheel_zoom_event {
+struct wheel_zoom_event {
     uint32_t epoch;
     uint32_t seq;
     int direction;
