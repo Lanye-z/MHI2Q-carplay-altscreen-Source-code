@@ -135,7 +135,7 @@ submitted_level changes only after a CarPlay zoom command is submitted successfu
 error = desired_target - submitted_level
 ```
 
-The desired target is safety-clamped to `[-12, +12]` relative steps. This is deliberately much wider than the retired four-step pending queue; it is a safety bound, not a normal interaction limit.
+The **outstanding error** `desired_target - submitted_level` is safety-clamped to `[-12, +12]` steps. The completed session movement itself is not capped: whenever desired and submitted levels meet, both relative counters are rebased to zero while the send/input timestamps are preserved. This keeps the safety bound on unsent backlog without creating a cumulative 12-step ceiling during long sessions.
 
 Opposite input retargets the desired level immediately. Example:
 
@@ -143,10 +143,11 @@ Opposite input retargets the desired level immediately. Example:
 desired=+4, submitted=+1
 driver turns back by -3
 -> desired=+1, submitted=+1
+-> target is settled and both relative counters rebase to 0
 -> no old ZOOM_OUT commands remain to replay
 ```
 
-CarPlay still exposes only a one-step directional `changeMapZoomLevel` command, so native follows the latest target one command at a time. V3.1 now uses a dedicated modular 32-bit **microsecond** clock that matches the decoded-frame tap clock. The legacy `obs_now_us()` function is intentionally left unchanged because it is actually second-based and is used by existing lifecycle timeouts.
+CarPlay still exposes only a one-step directional `changeMapZoomLevel` command, so native follows the latest target one command at a time. Explicit input/send validity flags and the existing stall latch are used instead of treating timestamp value zero as an initialization sentinel, so the modular 32-bit **microsecond** clock remains correct across its ~71.6-minute wrap. The legacy `obs_now_us()` function is intentionally left unchanged because it is actually second-based and is used by existing lifecycle timeouts.
 
 Healthy scheduling is deliberately regular:
 
@@ -296,6 +297,8 @@ The key acceptance checks are now:
 5. no decoded progress plus >=150 ms stale age latches STALL and blocks additional commands;
 6. STALL recovery requires at least three fresh decoded frames before target-follow resumes;
 7. a persistent stall is abandoned after >=1.2 s once input has been quiet >=350 ms, preventing late replay;
-8. the incoming type111 content itself changes scale; no local pixel zoom is introduced.
+8. continuous same-direction use can exceed 12 completed steps; the 12-step guard limits only outstanding backlog;
+9. timestamp value zero after the 32-bit microsecond wrap is treated as a valid time, not an uninitialized sentinel;
+10. the incoming type111 content itself changes scale; no local pixel zoom is introduced.
 
 The display chain, V3.1 1440x542-to-1440x455 1:1 viewport clipping, Context80, OMX/SHM path, CPU CSC and lifecycle remain outside this wheel change.

@@ -385,6 +385,29 @@ jobs:
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
           grep -Fq '#define WHEEL_ZOOM_TARGET_LIMIT 12' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq '#define WHEEL_ZOOM_MAX_EVENT_STEPS 16' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'zoom_have_send_time' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'zoom_have_input_time' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'PHASE=WHEEL_ZOOM_TARGET_REBASE' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          if grep -Fq 'zoom_last_send_at == 0' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c; then
+            echo 'ERROR: timestamp-zero send sentinel remains' >&2
+            exit 1
+          fi
+          if grep -Fq 'new_burst = !zoom_last_input_at' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c; then
+            echo 'ERROR: timestamp-zero input sentinel remains' >&2
+            exit 1
+          fi
+          if grep -Fq 'zoom_stall_latched && zoom_stall_started_at &&' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c; then
+            echo 'ERROR: timestamp-zero stall sentinel remains' >&2
+            exit 1
+          fi
           grep -Fq '#define WHEEL_ZOOM_MONITOR_TICK_US 50000u' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
           grep -Fq '#define ALT111_VIEW_AREA_POLL_US 100000u' \
@@ -465,7 +488,7 @@ jobs:
           sh -n Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh
           sh -n Toolbox/scripts/status_mmi_cockpit_carplay_test.sh
 
-          echo "WHEEL_PROTOCOL_STATIC=PASS wire=changeMapZoomLevel params=uuid+zoomDirection direction=0_in_1_out event_model=OEM_STEPS_V1 scheduler=OEM_TARGET_FOLLOW_V1 tick_ms=50 min_pace_ms=100 fallback_ms=150 recovery_frames=3 stall_age_ms=150 burst_gap_ms=300 stall_abort_quiet_ms=350 stall_abort_ms=1200 target_limit=12 opposite=retarget local_pixel_zoom=NO gate=java80_verified_ownership"
+          echo "WHEEL_PROTOCOL_STATIC=PASS wire=changeMapZoomLevel params=uuid+zoomDirection direction=0_in_1_out event_model=OEM_STEPS_V1 scheduler=OEM_TARGET_FOLLOW_V1 tick_ms=50 min_pace_ms=100 fallback_ms=150 recovery_frames=3 stall_age_ms=150 burst_gap_ms=300 stall_abort_quiet_ms=350 stall_abort_ms=1200 outstanding_limit=12 settled_rebase=YES u32_zero_sentinel=NO opposite=retarget local_pixel_zoom=NO gate=java80_verified_ownership"
 
       - name: Refresh package identities in test artifact
         run: |
@@ -552,7 +575,10 @@ jobs:
               "wheel_zoom_burst_gap_ms": "300",
               "wheel_zoom_stall_abort_quiet_ms": "350",
               "wheel_zoom_stall_abort_ms": "1200",
-              "wheel_zoom_target_limit": "12",
+              "wheel_zoom_outstanding_limit": "12",
+              "wheel_zoom_settled_rebase": "TARGET_AND_SENT_TO_ZERO",
+              "wheel_zoom_time_sentinels": "EXPLICIT_FLAGS_AND_STALL_LATCH",
+              "wheel_zoom_max_event_steps": "16",
               "wheel_zoom_opposite_direction": "RETARGETS_DESIRED_LEVEL",
               "wheel_zoom_response_gate":
                   "NO_ACCEPTANCE_CALLBACK_IS_OBSERVE_ONLY",
@@ -595,6 +621,7 @@ jobs:
               "wheel_zoom_input_quiet_ms",
               "wheel_zoom_pending_hard_expire_ms",
               "wheel_zoom_pending_limit",
+              "wheel_zoom_target_limit",
           ]:
               text = re.sub(
                   r"^" + re.escape(retired_key) + r"=.*\n?",
@@ -651,7 +678,10 @@ jobs:
                   "wheel_zoom_burst_gap_ms": "300",
                   "wheel_zoom_stall_abort_quiet_ms": "350",
                   "wheel_zoom_stall_abort_ms": "1200",
-                  "wheel_zoom_target_limit": "12",
+                  "wheel_zoom_outstanding_limit": "12",
+                  "wheel_zoom_settled_rebase": "TARGET_AND_SENT_TO_ZERO",
+                  "wheel_zoom_time_sentinels": "EXPLICIT_FLAGS_AND_STALL_LATCH",
+                  "wheel_zoom_max_event_steps": "16",
                   "install_policy": "EXTRACT_BRANCH_ZIP_CONTENTS_TO_SD_ROOT",
                   "verifier": "VERIFY-BRANCH-ZIP-READY.sh",
               }
@@ -673,6 +703,7 @@ jobs:
                   "wheel_zoom_pending_expire_ms",
                   "wheel_zoom_pending_hard_expire_ms",
                   "wheel_zoom_pending_limit",
+                  "wheel_zoom_target_limit",
               ]:
                   ready_text = re.sub(
                       r"^" + re.escape(retired_key) + r"=.*\n?",
@@ -754,6 +785,7 @@ jobs:
           strings "$HOOK" | grep -Fq 'OEM_STEPS_V1'
           strings "$HOOK" | grep -Fq 'OEM_TARGET_FOLLOW_V1'
           strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_TARGET'
+          strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_TARGET_REBASE'
           strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_FRAME_STALL'
           strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_FRAME_RECOVERED'
           strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_STALL_ABORT'

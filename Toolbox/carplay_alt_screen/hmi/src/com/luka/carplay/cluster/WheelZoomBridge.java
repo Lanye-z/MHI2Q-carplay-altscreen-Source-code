@@ -5,8 +5,10 @@
  * stack carries signed "steps" into a delayed zoom handler instead of replaying
  * every wheel detent as an immediate renderer command.  Mirror that model here:
  * publish one signed-step intent per magnification callback and let the native
- * private111 control plane accumulate, cancel and pace those intents before
- * emitting CarPlay changeMapZoomLevel commands.
+ * private111 control plane retarget and pace those intents before emitting
+ * CarPlay changeMapZoomLevel commands. Native bounds only the outstanding
+ * target error; completed movement is rebased so long sessions never hit a
+ * cumulative artificial zoom ceiling.
  *
  * No local UV/destination scaling is performed here.
  *
@@ -71,8 +73,8 @@ public final class WheelZoomBridge {
         /*
          * OEM-style step intent: one callback becomes one queue record even
          * when the stock magnification jumps by multiple steps.  V3 expanded
-         * delta=+N into N adjacent records, which the 100 ms native poll could
-         * flush within 1-2 ms and overload slower CarPlay map renderers.
+         * delta=+N into N adjacent records, which the old native drain could
+         * flush too aggressively and overload slower CarPlay map renderers.
          *
          * Keep the append-only queue bounded for long CarPlay sessions.  A
          * size rotation advances the epoch and starts a new file so the native

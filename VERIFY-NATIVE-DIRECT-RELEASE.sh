@@ -386,7 +386,22 @@ grep -Fq '#define WHEEL_ZOOM_EVENT_MODEL "OEM_STEPS_V1"' "$NATIVE" ||
 grep -Fq '#define WHEEL_ZOOM_SCHEDULER_MODEL "OEM_TARGET_FOLLOW_V1"' "$NATIVE" ||
     fail "native OEM target-follow scheduler marker missing"
 grep -Fq '#define WHEEL_ZOOM_TARGET_LIMIT 12' "$NATIVE" ||
-    fail "wheel target safety clamp mismatch"
+    fail "wheel outstanding-target safety clamp mismatch"
+grep -Fq '#define WHEEL_ZOOM_MAX_EVENT_STEPS 16' "$NATIVE" ||
+    fail "wheel event-step corruption guard mismatch"
+grep -Fq 'zoom_have_send_time' "$NATIVE" ||
+    fail "wheel send timing validity flag missing"
+grep -Fq 'zoom_have_input_time' "$NATIVE" ||
+    fail "wheel input timing validity flag missing"
+if grep -Fq 'zoom_last_send_at == 0' "$NATIVE"; then
+    fail "wheel send timing still relies on timestamp-zero sentinel"
+fi
+if grep -Fq 'new_burst = !zoom_last_input_at' "$NATIVE"; then
+    fail "wheel input timing still relies on timestamp-zero sentinel"
+fi
+if grep -Fq 'zoom_stall_latched && zoom_stall_started_at &&' "$NATIVE"; then
+    fail "wheel stall timing still relies on timestamp-zero sentinel"
+fi
 grep -Fq '#define WHEEL_ZOOM_MONITOR_TICK_US 50000u' "$NATIVE" ||
     fail "wheel scheduler quantum must remain 50 ms"
 grep -Fq '#define WHEEL_ZOOM_MIN_PACE_US 100000u' "$NATIVE" ||
@@ -417,6 +432,8 @@ grep -Fq 'g_last_frame_publish_us32' "$TAP" ||
     fail "process-local decoded-frame freshness timestamp missing"
 grep -Fq 'PHASE=WHEEL_ZOOM_TARGET' "$NATIVE" ||
     fail "wheel target diagnostics missing"
+grep -Fq 'PHASE=WHEEL_ZOOM_TARGET_REBASE' "$NATIVE" ||
+    fail "wheel settled-target rebase diagnostic missing"
 grep -Fq 'PHASE=WHEEL_ZOOM_FRAME_STALL' "$NATIVE" ||
     fail "wheel stall diagnostic missing"
 grep -Fq 'PHASE=WHEEL_ZOOM_FRAME_RECOVERED' "$NATIVE" ||

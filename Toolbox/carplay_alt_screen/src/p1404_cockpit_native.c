@@ -699,6 +699,7 @@ static int native_read_cluster_owned_for_zoom(void) {
 #define WHEEL_ZOOM_EVENT_MODEL "OEM_STEPS_V1"
 #define WHEEL_ZOOM_SCHEDULER_MODEL "OEM_TARGET_FOLLOW_V1"
 #define WHEEL_ZOOM_TARGET_LIMIT 12
+#define WHEEL_ZOOM_MAX_EVENT_STEPS 16
 #define WHEEL_ZOOM_MONITOR_TICK_US 50000u
 #define ALT111_VIEW_AREA_POLL_US 100000u
 #define WHEEL_ZOOM_MIN_PACE_US 100000u
@@ -718,18 +719,19 @@ static uint32_t wheel_now_us32(void) {
     return (uint32_t)tv.tv_sec * 1000000u + (uint32_t)tv.tv_usec;
 }
 
-static int native_wheel_zoom_target_accumulate(int target, int delta,
-                                                int *saturated) {
-    long next = (long)target + (long)delta;
+static int native_wheel_zoom_target_accumulate(int target, int sent,
+                                                int delta, int *saturated) {
+    long error = (long)target - (long)sent;
+    long next_error = error + (long)delta;
     if (saturated) *saturated = 0;
-    if (next > WHEEL_ZOOM_TARGET_LIMIT) {
-        next = WHEEL_ZOOM_TARGET_LIMIT;
+    if (next_error > WHEEL_ZOOM_TARGET_LIMIT) {
+        next_error = WHEEL_ZOOM_TARGET_LIMIT;
         if (saturated) *saturated = 1;
-    } else if (next < -WHEEL_ZOOM_TARGET_LIMIT) {
-        next = -WHEEL_ZOOM_TARGET_LIMIT;
+    } else if (next_error < -WHEEL_ZOOM_TARGET_LIMIT) {
+        next_error = -WHEEL_ZOOM_TARGET_LIMIT;
         if (saturated) *saturated = 1;
     }
-    return (int)next;
+    return sent + (int)next_error;
 }
 
 struct wheel_zoom_event {
@@ -773,6 +775,9 @@ static unsigned native_read_wheel_zoom_events(
             strcmp(model, WHEEL_ZOOM_EVENT_MODEL) != 0 ||
             (e.direction != 0 && e.direction != 1) ||
             e.delta == 0 || e.step != 0 || e.steps < 1 ||
+            e.steps > WHEEL_ZOOM_MAX_EVENT_STEPS ||
+            e.delta < -WHEEL_ZOOM_MAX_EVENT_STEPS ||
+            e.delta > WHEEL_ZOOM_MAX_EVENT_STEPS ||
             e.steps != (e.delta < 0 ? -e.delta : e.delta) ||
             (e.delta < 0 ? e.direction != 0 : e.direction != 1))
             continue;
@@ -810,6 +815,9 @@ static void native_wheel_zoom_tail(uint32_t *out_epoch, uint32_t *out_seq) {
             strcmp(model, WHEEL_ZOOM_EVENT_MODEL) == 0 &&
             (direction == 0 || direction == 1) &&
             delta != 0 && step == 0 && steps >= 1 &&
+            steps <= WHEEL_ZOOM_MAX_EVENT_STEPS &&
+            delta >= -WHEEL_ZOOM_MAX_EVENT_STEPS &&
+            delta <= WHEEL_ZOOM_MAX_EVENT_STEPS &&
             steps == (delta < 0 ? -delta : delta) &&
             (delta < 0 ? direction == 0 : direction == 1)) {
             tail_epoch = (uint32_t)epoch;
@@ -842,6 +850,8 @@ static void *native_monitor_worker(void *arg) {
     int zoom_stall_latched = 0;
     int zoom_first_step_pending = 0;
     int zoom_send_frame_baseline_valid = 0;
+    int zoom_have_send_time = 0;
+    int zoom_have_input_time = 0;
     struct wheel_zoom_event zoom_events[WHEEL_ZOOM_BATCH_MAX];
     struct p111_frame_progress_snapshot zoom_progress;
     unsigned zoom_count, zoom_i;
@@ -888,8 +898,6 @@ static void *native_monitor_worker(void *arg) {
         usleep(WHEEL_ZOOM_MONITOR_TICK_US);
         now = obs_now_us();
         wheel_now = wheel_now_us32();
-        if (!wheel_now && now)
-            wheel_now = (uint32_t)now * 1000000u;
 
         /*
          * Keep the proven live ViewArea/HMI-state polling cadence at 100 ms.
@@ -1026,6 +1034,8 @@ static void *native_monitor_worker(void *arg) {
             zoom_sent_steps = 0;
             zoom_last_input_at = 0;
             zoom_last_send_at = 0;
+            zoom_have_input_time = 0;
+            zoom_have_send_time = 0;
             zoom_stall_started_at = 0;
             zoom_stall_latched = 0;
             zoom_first_step_pending = 0;
@@ -1054,6 +1064,8 @@ static void *native_monitor_worker(void *arg) {
                 zoom_sent_steps = 0;
                 zoom_last_send_at = 0;
                 zoom_last_input_at = 0;
+                zoom_have_send_time = 0;
+                zoom_have_input_time = 0;
                 zoom_stall_started_at = 0;
                 zoom_stall_latched = 0;
                 zoom_first_step_pending = 0;
@@ -1086,7 +1098,7 @@ static void *native_monitor_worker(void *arg) {
                             "route_not_ready_or_java80_cluster_not_owned_or_generation_stale");
             if (!zoom_gate) continue;
 
-            new_burst = !zoom_last_input_at ||
+            new_burst = !zoom_have_input_time ||
                 (uint32_t)(wheel_now - zoom_last_input_at) >=
                     WHEEL_ZOOM_BURST_GAP_US;
             target_before = zoom_target_steps;
@@ -1096,9 +1108,11 @@ static void *native_monitor_worker(void *arg) {
                 (error_before < 0 && ze->delta > 0);
             saturated = 0;
             zoom_target_steps = native_wheel_zoom_target_accumulate(
-                zoom_target_steps, ze->delta, &saturated);
+                zoom_target_steps, zoom_sent_steps,
+                ze->delta, &saturated);
             error_after = zoom_target_steps - zoom_sent_steps;
             zoom_last_input_at = wheel_now;
+            zoom_have_input_time = 1;
             if (new_burst) zoom_first_step_pending = 1;
 
             altscreen_log(
@@ -1126,6 +1140,17 @@ static void *native_monitor_worker(void *arg) {
                 zoom_recovery_generation = 0;
                 zoom_recovery_frame_count = 0;
             }
+            if (zoom_target_steps != 0) {
+                altscreen_log(
+                    "PHASE=WHEEL_ZOOM_TARGET_REBASE receiver=%p stream=%p "
+                    "generation=%u settled_relative_level=%d "
+                    "action=REBASE_TARGET_AND_SENT_TO_ZERO "
+                    "outstanding_limit=%d",
+                    receiver, stream, generation, zoom_target_steps,
+                    WHEEL_ZOOM_TARGET_LIMIT);
+                zoom_target_steps = 0;
+                zoom_sent_steps = 0;
+            }
         }
 
         /*
@@ -1144,11 +1169,11 @@ static void *native_monitor_worker(void *arg) {
             int send_ready = 0;
             int progress_ok = 0;
             int fallback_timer = 0;
-            int first_send = zoom_last_send_at == 0;
+            int first_send = !zoom_have_send_time;
             int error_steps = zoom_target_steps - zoom_sent_steps;
             uint32_t elapsed_us = first_send ? 0u :
                 (uint32_t)(wheel_now - zoom_last_send_at);
-            uint32_t input_quiet_us = zoom_last_input_at ?
+            uint32_t input_quiet_us = zoom_have_input_time ?
                 (uint32_t)(wheel_now - zoom_last_input_at) : 0u;
             uint32_t frame_age_us = 0;
             uint32_t fresh_since_send = 0;
@@ -1214,7 +1239,7 @@ static void *native_monitor_worker(void *arg) {
                     }
                 }
 
-                if (zoom_stall_latched && zoom_stall_started_at &&
+                if (zoom_stall_latched &&
                     (uint32_t)(wheel_now - zoom_stall_started_at) >=
                         WHEEL_ZOOM_STALL_ABORT_US &&
                     input_quiet_us >= WHEEL_ZOOM_STALL_ABORT_QUIET_US) {
@@ -1272,6 +1297,7 @@ static void *native_monitor_worker(void *arg) {
                     receiver, stream, generation,
                     zoom_command_seq, direction);
                 zoom_last_send_at = wheel_now;
+                zoom_have_send_time = 1;
 
                 if (send_rc == 0) {
                     zoom_sent_steps = attempted_sent;
