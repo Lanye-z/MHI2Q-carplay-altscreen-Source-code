@@ -62,13 +62,15 @@ grep -Fq 'NATIVE_REINSTALL_PRECHECK=FAIL reason=SMARTPHONE_INTEGRATOR_PRELOAD_PR
 
 # Every mutating GEM operation must journal the whole wrapper transaction to SD.
 grep -Fq 'OP_BEGIN action=INSTALL' "$INSTALL" || fail "INSTALL SD operation journal missing"
-grep -Fq 'install_${journal_stamp}_$.log' "$INSTALL" || fail "INSTALL journal naming missing"
+grep -Fq 'journal_base="$journal_dir/install_${journal_stamp}"' "$INSTALL" || fail "INSTALL journal naming missing"
 grep -Fq 'OP_BEGIN action=RESTORE_ORIGINAL' "$STOP" || fail "RESTORE ORIGINAL SD operation journal missing"
-grep -Fq 'restore_${journal_stamp}_$.log' "$STOP" || fail "RESTORE journal naming missing"
+grep -Fq 'journal_base="$journal_dir/restore_${journal_stamp}"' "$STOP" || fail "RESTORE journal naming missing"
+grep -Fq 'RESTORE_JOURNAL_FALLBACK=TMP reason=sd_write_failed' "$STOP" ||
+    fail "RESTORE operation journal lacks non-blocking /tmp fallback"
 grep -Fq 'OP_BEGIN action=STORE_LOGS_RESTORE' "$FINISH" || fail "STORE LOGS + RESTORE SD operation journal missing"
-grep -Fq 'store_restore_${journal_stamp}_$.log' "$FINISH" || fail "STORE+RESTORE journal naming missing"
-grep -Fq 'SD_OPERATION_LOG_UNWRITABLE' "$STOP" || fail "RESTORE must fail closed when SD log cannot be opened"
-grep -Fq 'SD_OPERATION_LOG_UNWRITABLE' "$FINISH" || fail "STORE+RESTORE must fail closed when SD log cannot be opened"
+grep -Fq 'journal_base="$journal_dir/store_restore_${journal_stamp}"' "$FINISH" || fail "STORE+RESTORE journal naming missing"
+grep -Fq 'STORE_RESTORE_JOURNAL_FALLBACK=TMP reason=sd_write_failed' "$FINISH" ||
+    fail "STORE+RESTORE operation journal lacks non-blocking /tmp fallback"
 
 grep -Fq 'journal_storage=SD' "$START" || fail "START operation log does not prefer SD"
 grep -Fq 'journal_storage=TMP' "$START" || fail "START operation log lacks flat /tmp fallback"
@@ -77,4 +79,4 @@ grep -Fq 'DEST_MODE=TMP' "$ADAPT" || fail "adaptive log flat /tmp fallback missi
 grep -Fq 'basevideo3.enabled' "$START" || fail "persistent boot demand marker missing"
 grep -Fq 'diagnostics.enabled' "$DIAG" || fail "persistent diagnostics marker missing"
 
-echo "STORAGE_POLICY_TEST=PASS tmp=flat_files_only install_router=flat start_txn=flat install_restore_ops=sd_fail_closed mirror_runtime=flat hook_log=flat restore_txn=sd_reboot_recoverable persistent_logs=sd managed_residue_reasons=explicit"
+echo "STORAGE_POLICY_TEST=PASS tmp=flat_files_only install_router=flat start_txn=flat install_ops=sd_fail_closed restore_ops=sd_preferred_tmp_fallback mirror_runtime=flat hook_log=flat restore_txn=sd_reboot_recoverable persistent_logs=sd managed_residue_reasons=explicit"
