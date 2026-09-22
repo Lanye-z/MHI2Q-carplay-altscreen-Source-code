@@ -174,7 +174,7 @@ rm -rf "$SD/install-transaction/active"
 # block future INSTALL attempts.
 mkdir -p "$SD/state/.chain_test.lock"
 printf '%s\n' 'MMI-Cockpit-Carplay-Universal' > "$SD/state/.chain_test.lock/owner"
-printf '%s\n' '999999' > "$SD/state/.chain_test.lock/pid"
+printf '%s\n' '99999999' > "$SD/state/.chain_test.lock/pid"
 printf '%s\n' 'test' > "$SD/state/.chain_test.lock/action"
 
 # Second APPLY creates the exact committed V3.1 contract.
@@ -220,7 +220,7 @@ ALTSCREEN_CHAIN_ROOT="$DEV" \
 ALTSCREEN_CHAIN_VOLUME="$VOL" \
 /bin/sh "$WRAPPER" install > "$TMP/success.out" 2>&1
 
-grep -Fq 'CHAIN_LOCK_STALE_RECOVERED reason=dead_pid old_pid=999999' "$TMP/success.out" ||
+grep -Fq 'CHAIN_LOCK_STALE_RECOVERED reason=dead_pid old_pid=99999999' "$TMP/success.out" ||
   fail "dead child-controller lock was not reaped before INSTALL"
 grep -Fq 'INSTALL_VERIFY=PASS' "$TMP/success.out" || fail "committed INSTALL final verifier did not pass"
 grep -Fq 'INSTALL=PASS transaction=COMMITTED persistent_state=INSTALLED' "$TMP/success.out" ||
