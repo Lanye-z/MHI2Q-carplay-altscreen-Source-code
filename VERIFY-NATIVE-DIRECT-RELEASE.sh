@@ -17,7 +17,9 @@ CLUSTER_CPP="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/cluster_video_d
 GL_RENDERER_CPP="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/gl_renderer.cpp"
 MAIN_CPP="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/main.cpp"
 HMI_SRC="$ROOT/Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java"
+WHEEL_SRC="$ROOT/Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java"
 HMI_BUILD_INFO="$ROOT/Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt"
+WHEEL_PACING_TEST="$ROOT/Toolbox/carplay_alt_screen/tests/test_wheel_zoom_pacing.py"
 START="$ROOT/Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh"
 CTRL="$ROOT/Toolbox/scripts/altscreen_chain_test_universal.sh"
 LAUNCH="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/start_vehicle.sh"
@@ -43,7 +45,7 @@ sha256_file(){
 }
 binary_strings(){ strings "$1" 2>/dev/null || grep -a -o '[[:print:]][[:print:]]*' "$1"; }
 
-for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$AIRPLAY_SRC" "$RESOLVE" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$GL_RENDERER_CPP" "$MAIN_CPP" "$HMI_BUILD_INFO" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$STOP" "$INSTALL" "$STATUS" "$CHAIN" "$RESTORE_TXN" "$RESTORE_APPLY" "$PERSIST_DIAG" "$BOOT_DIAG" "$START_TX_TEST" "$STORAGE_POLICY_TEST" "$RESTORE_TX_TEST"; do
+for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$AIRPLAY_SRC" "$RESOLVE" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$GL_RENDERER_CPP" "$MAIN_CPP" "$HMI_SRC" "$WHEEL_SRC" "$HMI_BUILD_INFO" "$WHEEL_PACING_TEST" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$STOP" "$INSTALL" "$STATUS" "$CHAIN" "$RESTORE_TXN" "$RESTORE_APPLY" "$PERSIST_DIAG" "$BOOT_DIAG" "$START_TX_TEST" "$STORAGE_POLICY_TEST" "$RESTORE_TX_TEST"; do
     [ -s "$f" ] || fail "missing/empty: $f"
 done
 
@@ -232,6 +234,12 @@ if [ "$HOOK_PENDING" = 0 ]; then
         fail "universal hook binary is stale: rebuild/promote uncapped source-callback readback"
     binary_strings "$HOOK" | grep -Fq 'ALTAREA_LAYOUT_SAFE_V3' ||
         fail "universal hook binary is stale: rebuilt live CarPlay view-area marker missing"
+    binary_strings "$HOOK" | grep -Fq 'OEM_STEPS_V1' ||
+        fail "universal hook binary is stale: OEM wheel step model missing"
+    binary_strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_ACCUMULATE' ||
+        fail "universal hook binary is stale: wheel accumulator marker missing"
+    binary_strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_PACED_SEND' ||
+        fail "universal hook binary is stale: wheel pacing marker missing"
 fi
 
 grep -Fq 'window58_readback=disabled' "$INFO" ||
@@ -359,6 +367,31 @@ grep -Fq 'startup_frame_progress_required=2' "$MAIN_CPP" ||
     fail "startup fresh-frame threshold marker missing"
 grep -Fq 'carplay-private111-direct-display-v3.1-oem-map-1to1-clip' "$MAIN_CPP" ||
     fail "V3.1 OEM geometry sidecar build id missing"
+
+# ---- OEM-style wheel intent accumulator / CarPlay paced drain contract ----
+grep -Fq 'model=OEM_STEPS_V1' "$WHEEL_SRC" ||
+    fail "Java wheel observer does not publish OEM signed-step intent model"
+grep -Fq 'step=0' "$WHEEL_SRC" ||
+    fail "Java wheel intent schema is not single-record-per-callback"
+if grep -Fq 'for (i = 1; i <= steps; ++i)' "$WHEEL_SRC"; then
+    fail "retired per-step Java event expansion remains"
+fi
+grep -Fq '#define WHEEL_ZOOM_EVENT_MODEL "OEM_STEPS_V1"' "$NATIVE" ||
+    fail "native wheel parser model mismatch"
+grep -Fq '#define WHEEL_ZOOM_PACE_US 200000u' "$NATIVE" ||
+    fail "wheel pacing interval must remain 200 ms for V3.1 vehicle test"
+grep -Fq '#define WHEEL_ZOOM_PENDING_LIMIT 4' "$NATIVE" ||
+    fail "wheel pending target must remain bounded to four steps"
+grep -Fq 'native_wheel_zoom_accumulate' "$NATIVE" ||
+    fail "signed wheel intent accumulator missing"
+grep -Fq 'PHASE=WHEEL_ZOOM_ACCUMULATE' "$NATIVE" ||
+    fail "wheel accumulator diagnostics missing"
+grep -Fq 'PHASE=WHEEL_ZOOM_PACED_SEND' "$NATIVE" ||
+    fail "paced CarPlay zoom dispatch missing"
+grep -Fq 'response_gates_next=0' "$NATIVE" ||
+    fail "CarPlay acceptance callback must not gate the next paced command"
+python3 "$WHEEL_PACING_TEST" ||
+    fail "wheel pacing behavioral contract failed"
 
 # ---- CarPlay protocol-level live layout/safe-area + OEM map placement contract ----
 grep -Fq 'ALTAREA_LAYOUT_SAFE_V3' "$AIRPLAY_SRC" ||
