@@ -45,6 +45,7 @@ static uint32_t g_generation;
 static uint32_t g_stale_callback_count;
 static uint32_t g_attach_logged_generation;
 static uint32_t g_frame_reserve_seq;
+static uint32_t g_last_frame_publish_us32;
 /* Process-local slot ownership. A slot being copied must never be reused, and
  * the currently published slot must never be overwritten before a newer frame
  * is fully ready. This keeps the existing SHM v1 ABI while closing the
@@ -541,6 +542,7 @@ static void reset_frame_for_generation_locked(int force) {
     g_frame->drop_count = 0;
     g_frame->last_copy_bytes = 0;
     g_frame_reserve_seq = 0;
+    g_last_frame_publish_us32 = 0u;
     /*
      * Do not clear g_frame_slot_owner here. A callback from the previous
      * process-local generation may still be outside the lock copying its slot.
@@ -1694,6 +1696,7 @@ int p111_frame_tap_write(void *stream, const unsigned char *buffer,
     if (g_frame_slot_owner[slot] == seq)
         g_frame_slot_owner[slot] = 0u;
     ++g_frame->frame_count;
+    g_last_frame_publish_us32 = tap_now_us32();
 
     if (!g_seen_frame) {
         g_seen_frame = 1;
@@ -1723,6 +1726,29 @@ int p111_frame_tap_write(void *stream, const unsigned char *buffer,
 
 }
 
+int p111_frame_tap_get_progress(
+        void *stream, struct p111_frame_progress_snapshot *out) {
+    int ok = 0;
+
+    if (!out) return 0;
+    memset(out, 0, sizeof(*out));
+
+    tap_lock();
+    if (stream && g_stream == stream && g_generation &&
+        g_frame && g_frame->active && g_frame->writer_pid &&
+        g_frame->frame_count && g_frame->sequence &&
+        g_last_frame_publish_us32) {
+        out->generation = g_generation;
+        out->frame_count = g_frame->frame_count;
+        out->sequence = g_frame->sequence;
+        out->last_publish_us32 = g_last_frame_publish_us32;
+        out->active = 1;
+        ok = 1;
+    }
+    tap_unlock();
+    return ok;
+}
+
 void p111_direct_tap_stream_end(void *stream) {
     unsigned i;
     int ended_current = 0;
@@ -1742,6 +1768,7 @@ void p111_direct_tap_stream_end(void *stream) {
                       stream, g_generation,
                       g_h264 ? g_h264->packet_count : 0u,
                       g_frame ? g_frame->frame_count : 0u);
+        g_last_frame_publish_us32 = 0u;
         g_stream = NULL;
     } else {
         altscreen_log("PHASE=DIRECT111_TAP_STOP_STALE stream=%p current_stream=%p generation=%u action=IGNORE_LINEARIZER_TEARDOWN",
