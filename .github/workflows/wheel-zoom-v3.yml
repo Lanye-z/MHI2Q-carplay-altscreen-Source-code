@@ -49,7 +49,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            clang lld g++ binutils-arm-linux-gnueabihf python3-pyelftools
+            clang lld g++ libgles2-mesa-dev \
+            binutils-arm-linux-gnueabihf python3-pyelftools
 
       - name: Syntax-check V3.1 sidecar geometry sources
         if: github.ref == 'refs/heads/experiment/oem-layout-second-screen_v3.1'
