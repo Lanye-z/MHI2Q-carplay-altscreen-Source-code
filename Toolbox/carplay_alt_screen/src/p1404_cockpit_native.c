@@ -822,7 +822,6 @@ static void *native_monitor_worker(void *arg) {
     int desired_view_area, view_area_send_index, zoom_gate, cluster_owned;
     int wheel_generation_current;
     int zoom_pending_steps = 0;
-    int zoom_pending_at_poll = 0;
     int zoom_direction = -1;
     int zoom_frame_baseline_valid = 0;
     int zoom_wait_saw_stall = 0;
@@ -982,8 +981,6 @@ static void *native_monitor_worker(void *arg) {
             zoom_frame_baseline_valid = 0;
             zoom_wait_saw_stall = 0;
         }
-
-        zoom_pending_at_poll = zoom_pending_steps;
 
         for (zoom_i = 0; zoom_i < zoom_count; ++zoom_i) {
             struct wheel_zoom_event *ze = &zoom_events[zoom_i];
