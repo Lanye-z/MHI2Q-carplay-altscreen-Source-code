@@ -1169,12 +1169,12 @@ static void *native_monitor_worker(void *arg) {
                         altscreen_log(
                             "PHASE=WHEEL_ZOOM_QUIET_STALL_CLEAR receiver=%p "
                             "stream=%p generation=%u command_seq=%u "
-                            "pending_before=%d input_quiet_ms=%u "
+                            "pending_before=%d input_quiet_us=%llu "
                             "frame_age_ms=%u stall_latched=%d "
                             "action=CLEAR_NO_RECOVERY_REPLAY",
                             receiver, stream, generation,
                             zoom_command_seq, zoom_pending_steps,
-                            (unsigned)(input_quiet_us / 1000u),
+                            (unsigned long long)input_quiet_us,
                             frame_age_us / 1000u,
                             zoom_wait_saw_stall);
                         zoom_pending_steps = 0;
