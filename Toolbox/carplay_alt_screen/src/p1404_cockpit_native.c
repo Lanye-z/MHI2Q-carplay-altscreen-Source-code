@@ -700,6 +700,7 @@ static int native_read_cluster_owned_for_zoom(void) {
 #define WHEEL_ZOOM_SCHEDULER_MODEL "OEM_TARGET_FOLLOW_V1"
 #define WHEEL_ZOOM_TARGET_LIMIT 12
 #define WHEEL_ZOOM_MONITOR_TICK_US 50000u
+#define ALT111_VIEW_AREA_POLL_US 100000u
 #define WHEEL_ZOOM_MIN_PACE_US 100000u
 #define WHEEL_ZOOM_FALLBACK_PACE_US 150000u
 #define WHEEL_ZOOM_FRESH_FRAME_AGE_US 100000u
@@ -834,7 +835,7 @@ static void *native_monitor_worker(void *arg) {
     uint32_t state_generation = job ? job->state_generation : 0;
     uint64_t now;
     int visible, pending, live, route_ready, event_kind, send_rc;
-    int desired_view_area, view_area_send_index, zoom_gate, cluster_owned;
+    int desired_view_area = -1, view_area_send_index, zoom_gate, cluster_owned;
     int wheel_generation_current;
     int zoom_target_steps = 0;
     int zoom_sent_steps = 0;
@@ -855,6 +856,7 @@ static void *native_monitor_worker(void *arg) {
     uint32_t zoom_send_frame_generation = 0;
     uint32_t zoom_send_frame_count = 0;
     uint32_t wheel_now = 0;
+    uint32_t view_area_last_poll_at = 0;
 
     native_wheel_zoom_tail(&zoom_last_epoch, &zoom_last_seq);
     altscreen_log(
@@ -888,7 +890,19 @@ static void *native_monitor_worker(void *arg) {
         wheel_now = wheel_now_us32();
         if (!wheel_now && now)
             wheel_now = (uint32_t)now * 1000000u;
-        desired_view_area = native_read_view_area_target();
+
+        /*
+         * Keep the proven live ViewArea/HMI-state polling cadence at 100 ms.
+         * The 50 ms master tick exists only so wheel input and target-follow
+         * scheduling are not quantized to the old 100/200 ms cadence.
+         */
+        if (!view_area_last_poll_at ||
+            (uint32_t)(wheel_now - view_area_last_poll_at) >=
+                ALT111_VIEW_AREA_POLL_US) {
+            desired_view_area = native_read_view_area_target();
+            view_area_last_poll_at = wheel_now;
+        }
+
         cluster_owned = native_read_cluster_owned_for_zoom();
         zoom_count = native_read_wheel_zoom_events(
             zoom_last_epoch, zoom_last_seq,

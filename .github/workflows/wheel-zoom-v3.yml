@@ -387,6 +387,10 @@ jobs:
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
           grep -Fq '#define WHEEL_ZOOM_MONITOR_TICK_US 50000u' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq '#define ALT111_VIEW_AREA_POLL_US 100000u' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'wheel_now - view_area_last_poll_at' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
           grep -Fq '#define WHEEL_ZOOM_MIN_PACE_US 100000u' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
           grep -Fq '#define WHEEL_ZOOM_FALLBACK_PACE_US 150000u' \

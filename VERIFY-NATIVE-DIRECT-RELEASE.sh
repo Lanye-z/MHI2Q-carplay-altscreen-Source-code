@@ -513,8 +513,12 @@ grep -Fq 'gate=LayoutMIB2HighB9' "$NATIVE" ||
     fail "B9-only view-area gate diagnostic missing"
 grep -Fq 'canvas_gate=%d' "$NATIVE" ||
     fail "view-area canvas gate diagnostic missing"
-grep -Fq 'usleep(100000u);' "$NATIVE" ||
-    fail "live CarPlay layout watcher must poll HMI state at 100ms"
+grep -Fq '#define WHEEL_ZOOM_MONITOR_TICK_US 50000u' "$NATIVE" ||
+    fail "wheel target-follow scheduler must keep its 50ms master tick"
+grep -Fq '#define ALT111_VIEW_AREA_POLL_US 100000u' "$NATIVE" ||
+    fail "live CarPlay layout watcher must retain a 100ms poll interval"
+grep -Fq 'wheel_now - view_area_last_poll_at' "$NATIVE" ||
+    fail "ViewArea polling is not decoupled from the 50ms wheel scheduler"
 grep -Fq 'renderer_scale=0' "$AIRPLAY_SRC" ||
     fail "protocol safeArea path must explicitly keep renderer scaling disabled"
 
