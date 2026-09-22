@@ -302,3 +302,38 @@ The key acceptance checks are now:
 10. the incoming type111 content itself changes scale; no local pixel zoom is introduced.
 
 The display chain, V3.1 1440x542-to-1440x455 1:1 viewport clipping, Context80, OMX/SHM path, CPU CSC and lifecycle remain outside this wheel change.
+
+
+## Install / restore operation journaling
+
+V3.1 persists complete GEM operation stdout/stderr under the active SD card:
+
+```text
+MMI-Cockpit-Carplay/logs/operations/
+  install_YYYYMMDD_HHMMSS[ _N ].log
+  restore_YYYYMMDD_HHMMSS[ _N ].log
+  store_restore_YYYYMMDD_HHMMSS[ _N ].log
+```
+
+INSTALL is fail-closed if its persistent SD journal cannot be created before any
+production mutation. RESTORE ORIGINAL and STORE LOGS + RESTORE prefer the SD
+journal, but recovery itself is never blocked by a logging failure: they fall
+back to a flat `/tmp` journal and attempt to flush that journal back to SD after
+the restore.
+
+When a new SD card has no trusted HMI backup and INSTALL detects an already
+managed live system, the log reports all four independent residual checks before
+refusing to snapshot anything as OEM:
+
+```text
+RUNTIME_OWNER_PRESENT=YES|NO
+SMARTPHONE_INTEGRATOR_HOOK=YES|NO
+CURRENT_PACKAGE_JAR_PRESENT=YES|NO
+KNOWN_MANAGED_JAR_PRESENT=YES|NO
+LIVE_MANAGED_SUMMARY=MANAGED|CLEAN reasons=...
+```
+
+Previous V3 wheel-enabled JARs are recognized by the project-only
+`com/luka/carplay/cluster/WheelZoomBridge.class` archive member, so detection
+does not depend on whole-JAR checksums that change across CI rebuilds. Older
+pre-wheel project JAR identities remain as a compatibility fallback.
