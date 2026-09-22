@@ -662,6 +662,10 @@ jobs:
                   "COMPILED_READY_FOR_VEHICLE_TEST",
           }
 
+          if is_v32:
+              updates["safearea_policy"] = "V32_OEM_X_VISIBLE_Y"
+              updates["geometry_safearea_space"] = "OEM_X_VISIBLE_Y_0_455"
+
           if is_oem_1to1:
               updates["branch_zip_status"] = (
                   "READY_FOR_VEHICLE_TEST"
@@ -763,6 +767,19 @@ jobs:
                   "install_policy": "EXTRACT_BRANCH_ZIP_CONTENTS_TO_SD_ROOT",
                   "verifier": "VERIFY-BRANCH-ZIP-READY.sh",
               }
+              if is_v32:
+                  ready_updates.update({
+                      "safearea_policy": "V3_2_OEM_X_VISIBLE_Y",
+                      "safearea_full": "370,0,700,455",
+                      "safearea_small": "490,0,460,455",
+                      "rebuild_required":
+                          "none" if mirror_ready else "libcarplay_altscreen.so",
+                      "vehicle_zip_status":
+                          "READY_FOR_VEHICLE_TEST"
+                          if mirror_ready else
+                          "NOT_READY_NATIVE_OVERLAY_REBUILD_REQUIRED",
+                  })
+
               for key, value in ready_updates.items():
                   pattern = r"^" + re.escape(key) + r"=.*$"
                   line = key + "=" + value
