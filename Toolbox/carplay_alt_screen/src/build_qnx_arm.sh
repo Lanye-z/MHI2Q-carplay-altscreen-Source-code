@@ -203,6 +203,7 @@ for marker in \
   'PHASE=ALT111_VIEWAREA_RESULT' \
   'same_session=1' \
   'renderer_scale=0' \
+  'maps:/car/instrumentcluster/map?showSpeedLimit=user&showCompass=user&showETA=yes&maneuverLayout=' \
   'OEM_STEPS_V1' \
   'OEM_TARGET_FOLLOW_V1' \
   'PHASE=WHEEL_ZOOM_TARGET' \
