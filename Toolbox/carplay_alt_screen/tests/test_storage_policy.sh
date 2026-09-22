@@ -4,6 +4,7 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 START="$ROOT/Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh"
 STOP="$ROOT/Toolbox/scripts/stop_mmi_cockpit_carplay_test.sh"
 FINISH="$ROOT/Toolbox/scripts/finish_mmi_cockpit_carplay_test.sh"
+INSTALL_TXN="$ROOT/Toolbox/scripts/altscreen_install_transaction.sh"
 RESTORE_TXN="$ROOT/Toolbox/scripts/altscreen_restore_transaction.sh"
 RESTORE_APPLY="$ROOT/Toolbox/scripts/altscreen_restore_apply.sh"
 CHAIN="$ROOT/Toolbox/scripts/altscreen_chain_test.sh"
@@ -17,7 +18,7 @@ STOP_LAUNCH="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicl
 PATHS="$ROOT/Toolbox/carplay_alt_screen/src/altscreen_paths.c"
 fail(){ echo "STORAGE_POLICY_TEST=FAIL: $*" >&2; exit 1; }
 
-for f in "$START" "$STOP" "$FINISH" "$RESTORE_TXN" "$RESTORE_APPLY" "$CHAIN" "$CTRL" "$DIAG" "$ADAPT" "$BOOT" "$INSTALL" "$LAUNCH" "$STOP_LAUNCH"; do
+for f in "$START" "$STOP" "$FINISH" "$INSTALL_TXN" "$RESTORE_TXN" "$RESTORE_APPLY" "$CHAIN" "$CTRL" "$DIAG" "$ADAPT" "$BOOT" "$INSTALL" "$LAUNCH" "$STOP_LAUNCH"; do
     sh -n "$f" || fail "shell syntax: $f"
 done
 
@@ -30,6 +31,15 @@ grep -Fq 'AUTOLOG=/tmp/altscreen_autostart.log' "$START" || fail "autostart log 
 grep -Fq '#define ALTSCREEN_VOLATILE_ROOT "/tmp"' "$PATHS" || fail "native hook log root is not flat /tmp"
 
 # Reboot-recoverable transactions and persistent logs belong on SD.
+grep -Fq 'install-transaction/active' "$INSTALL_TXN" || fail "INSTALL transaction is not reboot-recoverable on SD"
+grep -Fq 'INSTALL_TRANSACTION=PREPARED' "$INSTALL_TXN" || fail "INSTALL PREPARED marker missing"
+grep -Fq 'INSTALL_ROLLBACK=PASS persistent_state=PRE_INSTALL' "$INSTALL_TXN" || fail "INSTALL rollback contract missing"
+grep -Fq 'INSTALL_VERIFY=PASS' "$INSTALL_TXN" || fail "INSTALL final verifier missing"
+grep -Fq 'INSTALL=PASS transaction=COMMITTED' "$INSTALL_TXN" || fail "INSTALL commit marker missing"
+grep -Fq 'ALTS_INSTALL_TXN_ACTIVE=1' "$INSTALL_TXN" || fail "INSTALL transaction APPLY re-entry marker missing"
+grep -Fq 'transactional INSTALL wrapper missing' "$INSTALL" || fail "top-level INSTALL does not require transaction wrapper"
+grep -Fq 'install transaction is active; START is blocked' "$CHAIN" || fail "START is not blocked during INSTALL transaction"
+grep -Fq 'ACTIVE_INSTALL_TRANSACTION=DETECTED' "$RESTORE_TXN" || fail "RESTORE does not recover interrupted INSTALL first"
 grep -Fq 'restore-transaction/active' "$RESTORE_TXN" || fail "RESTORE transaction is not reboot-recoverable on SD"
 grep -Fq 'staging/restore-apply' "$RESTORE_APPLY" || fail "RESTORE APPLY scratch is not SD staging"
 grep -Fq 'STAGING_ROOT/controller-txn' "$CTRL" || fail "controller scratch is not SD staging"
@@ -85,4 +95,4 @@ grep -Fq 'DEST_MODE=TMP' "$ADAPT" || fail "adaptive log flat /tmp fallback missi
 grep -Fq 'basevideo3.enabled' "$START" || fail "persistent boot demand marker missing"
 grep -Fq 'diagnostics.enabled' "$DIAG" || fail "persistent diagnostics marker missing"
 
-echo "STORAGE_POLICY_TEST=PASS tmp=flat_files_only install_router=flat start_txn=flat install_ops=sd_fail_closed restore_ops=sd_preferred_tmp_fallback mirror_runtime=flat hook_log=flat restore_txn=sd_reboot_recoverable persistent_logs=sd managed_residue_reasons=explicit"
+echo "STORAGE_POLICY_TEST=PASS tmp=flat_files_only install_router=flat start_txn=flat install_txn=sd_reboot_recoverable_exact_rollback install_ops=sd_fail_closed restore_ops=sd_preferred_tmp_fallback mirror_runtime=flat hook_log=flat restore_txn=sd_reboot_recoverable persistent_logs=sd managed_residue_reasons=explicit"
