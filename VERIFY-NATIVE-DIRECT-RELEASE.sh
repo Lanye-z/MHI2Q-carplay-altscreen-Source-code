@@ -235,6 +235,8 @@ if [ "$HOOK_PENDING" = 0 ]; then
         fail "universal hook binary is stale: rebuild/promote uncapped source-callback readback"
     binary_strings "$HOOK" | grep -Fq 'ALTAREA_LAYOUT_SAFE_V3' ||
         fail "universal hook binary is stale: rebuilt live CarPlay view-area marker missing"
+    binary_strings "$HOOK" | grep -Fq 'maps:/car/instrumentcluster/map?showSpeedLimit=user&showCompass=user&showETA=yes&maneuverLayout=' ||
+        fail "universal hook binary is stale: cluster speed-limit/compass/ETA appearance URL missing"
     binary_strings "$HOOK" | grep -Fq 'OEM_STEPS_V1' ||
         fail "universal hook binary is stale: OEM wheel event model missing"
     binary_strings "$HOOK" | grep -Fq 'OEM_TARGET_FOLLOW_V1' ||
@@ -372,6 +374,14 @@ grep -Fq 'startup_frame_progress_required=2' "$MAIN_CPP" ||
     fail "startup fresh-frame threshold marker missing"
 grep -Fq 'carplay-private111-direct-display-v3.1-oem-map-1to1-clip' "$MAIN_CPP" ||
     fail "V3.1 OEM geometry sidecar build id missing"
+
+# ---- CarPlay instrument-cluster appearance contract ----
+grep -Fq '#define CP_ALT_CLUSTER_MAP_URL \' "$ROOT/Toolbox/carplay_alt_screen/src/altscreen_core.h" ||
+    fail "cluster map URL definition missing"
+grep -Fq 'maps:/car/instrumentcluster/map?showSpeedLimit=user&showCompass=user&showETA=yes&maneuverLayout='     "$ROOT/Toolbox/carplay_alt_screen/src/altscreen_core.h" ||
+    fail "cluster speed-limit/compass/ETA URL contract mismatch"
+grep -Fq 'cf_str_new(CP_ALT_CLUSTER_MAP_URL, -1)' "$AIRPLAY_SRC" ||
+    fail "showUI no longer consumes the cluster appearance URL"
 
 # ---- OEM target-follow wheel intent / CarPlay paced drain contract ----
 grep -Fq 'model=OEM_STEPS_V1' "$WHEEL_SRC" ||
