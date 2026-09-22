@@ -263,6 +263,7 @@ jobs:
                   b"ZOOM_OUT",
                   b"OEM_STEPS_V1",
                   b"step=0",
+                  b"queue_size_rotate",
               ]:
                   if marker not in wheel:
                       raise SystemExit(
@@ -365,6 +366,10 @@ jobs:
           grep -Fq 'model=OEM_STEPS_V1' \
             Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
           grep -Fq 'step=0' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          grep -Fq 'reason=queue_size_rotate' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          grep -Fq 'rotateEventQueueIfNeeded' \
             Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
           if grep -Fq 'for (i = 1; i <= steps; ++i)' \
             Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java; then
@@ -493,6 +498,8 @@ jobs:
               "wheel_zoom_direction": "0_in_1_out",
               "wheel_zoom_queue":
                   "/tmp/mmi-mirror-wheel-zoom.events",
+              "wheel_zoom_queue_rotation":
+                  "EPOCH_RESET_AT_256K",
               "wheel_zoom_java_log":
                   "/tmp/mmi-mirror-wheel-zoom.log",
               "wheel_zoom_model": "OEM_STEPS_V1",
@@ -692,6 +699,7 @@ jobs:
                   b"mmi-mirror-wheel-zoom.events",
                   b"OEM_STEPS_V1",
                   b"step=0",
+                  b"queue_size_rotate",
               ]:
                   if marker not in wheel:
                       raise SystemExit(
