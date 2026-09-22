@@ -2,7 +2,7 @@
 """Reference contract for V3.1 OEM-style frame-health wheel pacing."""
 
 PENDING_LIMIT = 4
-MIN_PACE_MS = 100
+MIN_PACE_MS = 120
 FALLBACK_PACE_MS = 200
 FRESH_FRAME_AGE_MS = 100
 STALL_AGE_MS = 150
@@ -122,21 +122,18 @@ def test_first_step_immediate():
     assert m.sent == [(0, "OUT")]
 
 
-def test_stable_frames_allow_fast_adaptive_drain():
+def test_stable_frames_allow_adaptive_drain_without_burst():
     m = Model()
     m.frame(0, 1)
     m.add(0, 4)
-    m.frame(100, 3)
-    m.tick(100)
-    m.frame(200, 3)
-    m.tick(200)
-    m.frame(300, 3)
-    m.tick(300)
+    for t in (100, 200, 300, 400, 500, 600):
+        m.frame(t, 3)
+        m.tick(t)
     assert m.sent == [
         (0, "OUT"),
-        (100, "OUT"),
         (200, "OUT"),
-        (300, "OUT"),
+        (400, "OUT"),
+        (600, "OUT"),
     ]
     assert m.pending == 0
 
@@ -197,7 +194,7 @@ def test_pending_limit_stays_bounded():
 
 if __name__ == "__main__":
     test_first_step_immediate()
-    test_stable_frames_allow_fast_adaptive_drain()
+    test_stable_frames_allow_adaptive_drain_without_burst()
     test_stall_blocks_until_three_recovery_frames()
     test_opposite_steps_cancel_unsent_pending()
     test_telemetry_unavailable_uses_200ms_fallback()
@@ -206,7 +203,7 @@ if __name__ == "__main__":
     print(
         "WHEEL_ZOOM_PACING_TEST=PASS "
         "model=OEM_STEPS_V1 pacing=FRAME_HEALTH_ADAPTIVE "
-        "min_pace_ms=100 fallback_ms=200 fresh_frames=3 "
+        "min_pace_ms=120 fallback_ms=200 fresh_frames=3 "
         "fresh_age_ms=100 stall_age_ms=150 pending_expire_ms=1500 "
         "pending_limit=4 opposite=cancel response_gate=no"
     )
