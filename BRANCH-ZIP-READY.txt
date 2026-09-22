@@ -1,4 +1,4 @@
-BRANCH_ZIP_READY=YES
+BRANCH_ZIP_READY=NO
 branch=experiment/oem-layout-second-screen_v3.1
 validated_source_commit=527db278628f1ab847a48ffd0f00e54e5a574e6e
 mode=PRIVATE111_DIRECT_DISPLAY_V3_WHEEL_ZOOM
@@ -7,6 +7,11 @@ jar_cksum=3158068224
 jar_sha256=bf0159f23498b4721884c7315d872d57429db1e32db25a22b2102c1b908eb1e5
 universal_runtime_sha256=17c61091390e57ffe3d086e49c81feead994c00f7fb66661b6134b1a23476b80
 display_chain=V3_1_OEM_MAP_1TO1_CLIP
+cluster_appearance_model=CARPLAY_SIMULATOR_QUERY_V1
+cluster_show_speed_limit=user
+cluster_show_compass=user
+cluster_show_eta=yes
+cluster_maneuver_layout=empty
 wheel_zoom_event_model=OEM_STEPS_V1
 wheel_zoom_model=OEM_TARGET_FOLLOW_V1
 wheel_zoom_pacing=TARGET_FOLLOW_STALL_GUARD
