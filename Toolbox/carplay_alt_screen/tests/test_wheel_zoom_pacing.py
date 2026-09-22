@@ -7,7 +7,8 @@ FALLBACK_PACE_MS = 200
 FRESH_FRAME_AGE_MS = 100
 STALL_AGE_MS = 150
 FRESH_FRAMES = 3
-PENDING_EXPIRE_MS = 1500
+INPUT_QUIET_MS = 350
+PENDING_HARD_EXPIRE_MS = 600
 
 
 def clamp_pending(value):
@@ -30,6 +31,7 @@ class Model:
         self.baseline = None
         self.recovery_base = None
         self.saw_stall = False
+        self.clears = []
 
     def frame(self, now_ms, count=1):
         self.frame_count += count
@@ -52,18 +54,29 @@ class Model:
             self.recovery_base = None
         self.saw_stall = False
 
+    def _clear_pending(self, now_ms, reason):
+        self.clears.append((now_ms, reason, self.pending))
+        self.pending = 0
+        self.last_input_ms = None
+        self.baseline = None
+        self.recovery_base = None
+        self.saw_stall = False
+
     def drain(self, now_ms):
         if self.pending == 0:
             return
 
+        input_quiet = (
+            None
+            if self.last_input_ms is None
+            else now_ms - self.last_input_ms
+        )
+
         if (
-            self.last_input_ms is not None
-            and now_ms - self.last_input_ms > PENDING_EXPIRE_MS
+            input_quiet is not None
+            and input_quiet >= PENDING_HARD_EXPIRE_MS
         ):
-            self.pending = 0
-            self.baseline = None
-            self.recovery_base = None
-            self.saw_stall = False
+            self._clear_pending(now_ms, "hard_expire")
             return
 
         if self.last_send_ms is None:
@@ -85,6 +98,14 @@ class Model:
                 ):
                     self.saw_stall = True
                     self.recovery_base = self.frame_count
+
+                if (
+                    input_quiet is not None
+                    and input_quiet >= INPUT_QUIET_MS
+                    and frame_age >= STALL_AGE_MS
+                ):
+                    self._clear_pending(now_ms, "quiet_stall")
+                    return
 
                 base = (
                     self.recovery_base
@@ -122,7 +143,7 @@ def test_first_step_immediate():
     assert m.sent == [(0, "OUT")]
 
 
-def test_stable_frames_allow_adaptive_drain_without_burst():
+def test_healthy_burst_finishes_only_inside_short_tail():
     m = Model()
     m.frame(0, 1)
     m.add(0, 4)
@@ -133,23 +154,34 @@ def test_stable_frames_allow_adaptive_drain_without_burst():
         (0, "OUT"),
         (200, "OUT"),
         (400, "OUT"),
-        (600, "OUT"),
     ]
     assert m.pending == 0
+    assert m.clears == [(600, "hard_expire", 1)]
 
 
-def test_stall_blocks_until_three_recovery_frames():
+def test_stall_plus_quiet_clears_without_recovery_replay():
     m = Model()
     m.frame(0, 1)
-    m.add(0, 2)
-    m.tick(100)       # not enough frame progress
-    m.tick(200)       # stale frame => stall latch, recovery base reset
-    m.frame(400, 1)
-    m.tick(400)       # only one recovery frame
-    m.frame(500, 2)
-    m.tick(500)       # total three recovery frames => allow next
-    assert m.sent == [(0, "OUT"), (500, "OUT")]
+    m.add(0, 4)
+    m.tick(200)       # stale decoded frame => stall latch
+    m.tick(400)       # >350 ms quiet while still stale => clear tail
+    m.frame(500, 3)
+    m.tick(500)       # recovery must not replay old zoom steps
+    assert m.sent == [(0, "OUT")]
     assert m.pending == 0
+    assert m.clears == [(400, "quiet_stall", 3)]
+
+
+def test_recovery_before_quiet_timeout_can_continue():
+    m = Model()
+    m.frame(0, 1)
+    m.add(0, 3)
+    m.add(100, 1)     # extend active burst; pending remains bounded
+    m.tick(200)       # no frame progress, stall latch
+    m.frame(300, 3)   # recovered before 350 ms quiet from last input
+    m.tick(300)
+    assert m.sent == [(0, "OUT"), (300, "OUT")]
+    assert m.pending == 2
 
 
 def test_opposite_steps_cancel_unsent_pending():
@@ -158,30 +190,42 @@ def test_opposite_steps_cancel_unsent_pending():
     m.add(0, 1)       # immediate
     m.add(20, 2)
     m.add(40, -2)     # unsent tail cancels before next adaptive slot
-    m.frame(100, 3)
-    m.tick(100)
+    m.frame(200, 3)
+    m.tick(200)
     assert m.sent == [(0, "OUT")]
     assert m.pending == 0
 
 
-def test_telemetry_unavailable_uses_200ms_fallback():
+def test_telemetry_unavailable_uses_200ms_fallback_but_no_long_tail():
     m = Model()
     m.telemetry = False
-    m.add(0, 2)
+    m.add(0, 4)
     m.tick(100)
     m.tick(200)
-    assert m.sent == [(0, "OUT"), (200, "OUT")]
+    m.tick(400)
+    m.tick(600)
+    assert m.sent == [
+        (0, "OUT"),
+        (200, "OUT"),
+        (400, "OUT"),
+    ]
     assert m.pending == 0
+    assert m.clears == [(600, "hard_expire", 1)]
 
 
-def test_pending_expires_instead_of_late_replay():
+def test_hard_expiry_is_never_later_than_600ms():
     m = Model()
     m.frame(0, 1)
     m.add(0, 4)
-    m.tick(200)       # source remains stalled
-    m.tick(1600)      # stale driver intent is discarded
-    assert m.sent == [(0, "OUT")]
+    m.frame(200, 3)
+    m.tick(200)
+    m.frame(400, 3)
+    m.tick(400)
+    m.frame(600, 3)
+    m.tick(600)
+    assert m.sent[-1] == (400, "OUT")
     assert m.pending == 0
+    assert m.clears[-1][0:2] == (600, "hard_expire")
 
 
 def test_pending_limit_stays_bounded():
@@ -194,16 +238,18 @@ def test_pending_limit_stays_bounded():
 
 if __name__ == "__main__":
     test_first_step_immediate()
-    test_stable_frames_allow_adaptive_drain_without_burst()
-    test_stall_blocks_until_three_recovery_frames()
+    test_healthy_burst_finishes_only_inside_short_tail()
+    test_stall_plus_quiet_clears_without_recovery_replay()
+    test_recovery_before_quiet_timeout_can_continue()
     test_opposite_steps_cancel_unsent_pending()
-    test_telemetry_unavailable_uses_200ms_fallback()
-    test_pending_expires_instead_of_late_replay()
+    test_telemetry_unavailable_uses_200ms_fallback_but_no_long_tail()
+    test_hard_expiry_is_never_later_than_600ms()
     test_pending_limit_stays_bounded()
     print(
         "WHEEL_ZOOM_PACING_TEST=PASS "
         "model=OEM_STEPS_V1 pacing=FRAME_HEALTH_ADAPTIVE "
         "min_pace_ms=120 fallback_ms=200 fresh_frames=3 "
-        "fresh_age_ms=100 stall_age_ms=150 pending_expire_ms=1500 "
-        "pending_limit=4 opposite=cancel response_gate=no"
+        "fresh_age_ms=100 stall_age_ms=150 input_quiet_ms=350 "
+        "pending_hard_expire_ms=600 pending_limit=4 "
+        "opposite=cancel response_gate=no late_replay=blocked"
     )
