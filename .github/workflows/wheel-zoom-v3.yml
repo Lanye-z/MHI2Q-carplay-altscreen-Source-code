@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - experiment/oem-layout-second-screen_v3
+      - experiment/oem-layout-second-screen_v3.1
     paths:
       - '.github/workflows/wheel-zoom-v3.yml'
       - 'Toolbox/carplay_alt_screen/src/**'
@@ -24,11 +25,11 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: carplay-cluster-wheel-zoom-v3
+  group: carplay-cluster-wheel-zoom-v3-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-vehicle-package:
@@ -244,6 +245,8 @@ jobs:
                   b"WHEEL_ZOOM_INPUT",
                   b"ZOOM_IN",
                   b"ZOOM_OUT",
+                  b"OEM_STEPS_V1",
+                  b"step=0",
               ]:
                   if marker not in wheel:
                       raise SystemExit(
@@ -253,7 +256,7 @@ jobs:
 
           print(
               "WHEEL_HMI_JAR=PASS major46=YES "
-              "discrete_event_queue=YES"
+              "signed_step_intent=YES per_step_expansion=NO"
           )
           PY
 
@@ -343,8 +346,30 @@ jobs:
 
           grep -Fq 'delta < 0 ? 0 : 1' \
             Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          grep -Fq 'model=OEM_STEPS_V1' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          grep -Fq 'step=0' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          if grep -Fq 'for (i = 1; i <= steps; ++i)' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java; then
+            echo 'ERROR: retired Java per-step wheel expansion remains' >&2
+            exit 1
+          fi
           grep -Fq 'new FileOutputStream(EVENT_FILE, true)' \
             Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          grep -Fq '#define WHEEL_ZOOM_EVENT_MODEL "OEM_STEPS_V1"' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq '#define WHEEL_ZOOM_PACE_US 200000u' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq '#define WHEEL_ZOOM_PENDING_LIMIT 4' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'PHASE=WHEEL_ZOOM_ACCUMULATE' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'PHASE=WHEEL_ZOOM_PACED_SEND' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'response_gates_next=0' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          python3 Toolbox/carplay_alt_screen/tests/test_wheel_zoom_pacing.py
           grep -Fq 'if (!active) WheelZoomBridge.reset();' \
             Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java
           grep -Fq \
@@ -377,7 +402,7 @@ jobs:
           sh -n Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh
           sh -n Toolbox/scripts/status_mmi_cockpit_carplay_test.sh
 
-          echo "WHEEL_PROTOCOL_STATIC=PASS wire=changeMapZoomLevel params=uuid+zoomDirection direction=0_in_1_out local_pixel_zoom=NO gate=java80_verified_ownership"
+          echo "WHEEL_PROTOCOL_STATIC=PASS wire=changeMapZoomLevel params=uuid+zoomDirection direction=0_in_1_out model=OEM_STEPS_V1 pace_ms=200 pending_limit=4 opposite=cancel local_pixel_zoom=NO gate=java80_verified_ownership"
 
       - name: Refresh package identities in test artifact
         run: |
@@ -405,6 +430,10 @@ jobs:
           info = root / "Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt"
           text = info.read_text()
 
+          is_v31 = os.environ.get("GITHUB_REF_NAME") == (
+              "experiment/oem-layout-second-screen_v3.1"
+          )
+
           updates = {
               "mode": "PRIVATE111_DIRECT_DISPLAY_V3_WHEEL_ZOOM",
               "jar_size": os.environ["SIZE"],
@@ -412,6 +441,8 @@ jobs:
               "jar_sha256": os.environ["JAR_SHA"],
               "universal_runtime_sha256": os.environ["HOOK_SHA"],
               "direct_display_revision":
+                  "experiment-oem-layout-second-screen-v3.1-oem-map-1to1-clip"
+                  if is_v31 else
                   "experiment-oem-layout-second-screen-v3-wheel-zoom",
               "wheel_zoom_control":
                   "CARPLAY_CHANGE_MAP_ZOOM_LEVEL_V1",
@@ -422,6 +453,16 @@ jobs:
                   "/tmp/mmi-mirror-wheel-zoom.events",
               "wheel_zoom_java_log":
                   "/tmp/mmi-mirror-wheel-zoom.log",
+              "wheel_zoom_model": "OEM_STEPS_V1",
+              "wheel_zoom_dispatch":
+                  "FIRST_IMMEDIATE_SIGNED_ACCUMULATOR_PACED_DRAIN",
+              "wheel_zoom_event_expansion":
+                  "DISABLED_ONE_RECORD_PER_CALLBACK",
+              "wheel_zoom_pace_ms": "200",
+              "wheel_zoom_pending_limit": "4",
+              "wheel_zoom_opposite_direction": "CANCELS_PENDING",
+              "wheel_zoom_response_gate":
+                  "NO_ACCEPTANCE_CALLBACK_IS_OBSERVE_ONLY",
               "wheel_zoom_build_status":
                   "COMPILED_READY_FOR_VEHICLE_TEST",
           }
@@ -472,6 +513,7 @@ jobs:
               "Toolbox/carplay_alt_screen/src/p1404_airplay.c",
               "Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c",
               "Toolbox/carplay_alt_screen/tests/test_restore_transaction.sh",
+              "Toolbox/carplay_alt_screen/tests/test_wheel_zoom_pacing.py",
               "Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so",
               "Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh",
               "Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh",
@@ -527,6 +569,10 @@ jobs:
           strings "$HOOK" | grep -Fq 'changeMapZoomLevel'
           strings "$HOOK" | grep -Fq 'PHASE=CLUSTER_ZOOM_SUBMIT'
           strings "$HOOK" | grep -Fq 'PHASE=CLUSTER_ZOOM_RESPONSE'
+          strings "$HOOK" | grep -Fq 'OEM_STEPS_V1'
+          strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_ACCUMULATE'
+          strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_PACED_SEND'
+          python3 Toolbox/carplay_alt_screen/tests/test_wheel_zoom_pacing.py
 
           python3 - "$JAR" <<'PY'
           import sys
@@ -536,9 +582,17 @@ jobs:
               wheel = zf.read(
                   "com/luka/carplay/cluster/WheelZoomBridge.class"
               )
-              if b"mmi-mirror-wheel-zoom.events" not in wheel:
-                  raise SystemExit("ERROR: V3 wheel class missing")
-          print("WHEEL_V3_FINAL_JAR=PASS")
+              for marker in [
+                  b"mmi-mirror-wheel-zoom.events",
+                  b"OEM_STEPS_V1",
+                  b"step=0",
+              ]:
+                  if marker not in wheel:
+                      raise SystemExit(
+                          "ERROR: V3.1 wheel class marker missing: "
+                          + repr(marker)
+                      )
+          print("WHEEL_V3_FINAL_JAR=PASS model=OEM_STEPS_V1")
           PY
 
           grep -Fq 'CARPLAY_WHEEL_ZOOM_PROTOCOL=changeMapZoomLevel' \
@@ -552,7 +606,30 @@ jobs:
 
           echo "V3_VEHICLE_TEST_CONTRACT=PASS gate=java80_verified_ownership installer_fail_closed=YES"
 
+      - name: Promote rebuilt V3.1 wheel JAR and package identities
+        if: github.ref == 'refs/heads/experiment/oem-layout-second-screen_v3.1'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar \
+            Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt \
+            Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so \
+            Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh \
+            Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh \
+            Toolbox/scripts/status_mmi_cockpit_carplay_test.sh \
+            PACKAGE_SOURCE_MAP.json \
+            SHA256SUMS.txt
+          if ! git diff --cached --quiet; then
+            git commit -m "build(v3.1): promote OEM-paced wheel control [skip ci]"
+            git fetch origin "$GITHUB_REF_NAME"
+            git rebase "origin/$GITHUB_REF_NAME"
+            git push origin "HEAD:$GITHUB_REF_NAME"
+          fi
+
       - name: Stage complete vehicle-test SD package
+        if: github.ref != 'refs/heads/experiment/oem-layout-second-screen_v3.1'
         run: |
           set -euo pipefail
 
@@ -629,6 +706,7 @@ jobs:
           )
 
       - name: Upload V3 vehicle-test package
+        if: github.ref != 'refs/heads/experiment/oem-layout-second-screen_v3.1'
         uses: actions/upload-artifact@v4
         with:
           name: carplay-wheel-zoom-v3-sd
