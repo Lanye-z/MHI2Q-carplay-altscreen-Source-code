@@ -313,6 +313,12 @@ Cluster visible area
   - Java/HMI 继续作为 Context80 的唯一控制方。
   - sidecar 不直接修改终端 Context。
 
+- **CarPlay 仪表导航外观增强**
+  - `showUI` 的 Cluster Map URL 按 CarPlay Simulator 已观测格式启用 `showSpeedLimit=user`、`showCompass=user`、`showETA=yes`。
+  - `maneuverLayout` 保持已观测到的空值形式。
+  - 这三个开关只请求 iPhone / 导航 App 将限速牌、指南针和 ETA 直接绘制进 type111 导航视频，不改变 Private111、OMX、SHM、542→455、displayable3、Context80 或滚轮控制链。
+  - 是否实际显示由当前导航 App 的 CarPlay Instrument Cluster 实现决定。
+
 - **诊断与恢复**
   - 提供 INSTALL / START / STATUS / 日志保存 / 原车恢复流程。
   - 日志可区分 private111、H.264、解码帧、Screen 读取、SHM、displayable3、Context80、viewArea 和布局状态。
