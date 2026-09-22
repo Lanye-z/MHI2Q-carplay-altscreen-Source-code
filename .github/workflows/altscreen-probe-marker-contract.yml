@@ -5,7 +5,6 @@ on:
     branches:
       - experiment/oem-layout-second-screen_v2
       - experiment/oem-layout-second-screen_v3
-      - experiment/oem-layout-second-screen_v3.1
     paths:
       - 'Toolbox/carplay_alt_screen/src/**'
       - 'Toolbox/carplay_alt_screen/mirror_display/src/**'
