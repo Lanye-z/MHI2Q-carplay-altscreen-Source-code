@@ -391,8 +391,10 @@ grep -Fq '#define WHEEL_ZOOM_STALL_AGE_US 150000u' "$NATIVE" ||
     fail "adaptive wheel stall threshold mismatch"
 grep -Fq '#define WHEEL_ZOOM_FRESH_FRAMES 3u' "$NATIVE" ||
     fail "adaptive wheel recovery frame count mismatch"
-grep -Fq '#define WHEEL_ZOOM_PENDING_EXPIRE_US 1500000u' "$NATIVE" ||
-    fail "adaptive wheel pending expiry mismatch"
+grep -Fq '#define WHEEL_ZOOM_INPUT_QUIET_US 350000u' "$NATIVE" ||
+    fail "adaptive wheel quiet-burst timeout mismatch"
+grep -Fq '#define WHEEL_ZOOM_PENDING_HARD_EXPIRE_US 600000u' "$NATIVE" ||
+    fail "adaptive wheel hard pending expiry mismatch"
 grep -Fq 'native_wheel_zoom_accumulate' "$NATIVE" ||
     fail "signed wheel intent accumulator missing"
 grep -Fq 'p111_frame_tap_get_progress' "$NATIVE" ||
@@ -407,8 +409,10 @@ grep -Fq 'PHASE=WHEEL_ZOOM_FRAME_STALL' "$NATIVE" ||
     fail "adaptive wheel stall diagnostic missing"
 grep -Fq 'PHASE=WHEEL_ZOOM_FRAME_RECOVERED' "$NATIVE" ||
     fail "adaptive wheel recovery diagnostic missing"
-grep -Fq 'PHASE=WHEEL_ZOOM_PENDING_EXPIRE' "$NATIVE" ||
-    fail "adaptive wheel stale-pending expiry diagnostic missing"
+grep -Fq 'PHASE=WHEEL_ZOOM_QUIET_STALL_CLEAR' "$NATIVE" ||
+    fail "adaptive wheel quiet/stall clear diagnostic missing"
+grep -Fq 'PHASE=WHEEL_ZOOM_PENDING_HARD_EXPIRE' "$NATIVE" ||
+    fail "adaptive wheel hard-expiry diagnostic missing"
 grep -Fq 'pacing=FRAME_HEALTH_ADAPTIVE' "$NATIVE" ||
     fail "adaptive wheel pacing marker missing"
 grep -Fq 'PHASE=WHEEL_ZOOM_PACED_SEND' "$NATIVE" ||
