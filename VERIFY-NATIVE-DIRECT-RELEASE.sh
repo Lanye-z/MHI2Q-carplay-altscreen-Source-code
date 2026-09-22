@@ -30,12 +30,14 @@ FINISH="$ROOT/Toolbox/scripts/finish_mmi_cockpit_carplay_test.sh"
 INSTALL="$ROOT/Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh"
 STATUS="$ROOT/Toolbox/scripts/status_mmi_cockpit_carplay_test.sh"
 CHAIN="$ROOT/Toolbox/scripts/altscreen_chain_test.sh"
+INSTALL_TXN="$ROOT/Toolbox/scripts/altscreen_install_transaction.sh"
 RESTORE_TXN="$ROOT/Toolbox/scripts/altscreen_restore_transaction.sh"
 RESTORE_APPLY="$ROOT/Toolbox/scripts/altscreen_restore_apply.sh"
 PERSIST_DIAG="$ROOT/Toolbox/scripts/altscreen_persistent_diag.sh"
 BOOT_DIAG="$ROOT/Toolbox/scripts/altscreen_boot_diag.sh"
 START_TX_TEST="$ROOT/Toolbox/carplay_alt_screen/tests/test_start_autostart_transaction.sh"
 STORAGE_POLICY_TEST="$ROOT/Toolbox/carplay_alt_screen/tests/test_storage_policy.sh"
+INSTALL_TX_TEST="$ROOT/Toolbox/carplay_alt_screen/tests/test_install_transaction.sh"
 RESTORE_TX_TEST="$ROOT/Toolbox/carplay_alt_screen/tests/test_restore_transaction.sh"
 TOP="$ROOT/SHA256SUMS.txt"
 MAP="$ROOT/PACKAGE_SOURCE_MAP.json"
@@ -47,13 +49,35 @@ sha256_file(){
 }
 binary_strings(){ strings "$1" 2>/dev/null || grep -a -o '[[:print:]][[:print:]]*' "$1"; }
 
-for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$TAP_H" "$AIRPLAY_SRC" "$RESOLVE" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$GL_RENDERER_CPP" "$MAIN_CPP" "$HMI_SRC" "$WHEEL_SRC" "$HMI_BUILD_INFO" "$WHEEL_PACING_TEST" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$STOP" "$FINISH" "$INSTALL" "$STATUS" "$CHAIN" "$RESTORE_TXN" "$RESTORE_APPLY" "$PERSIST_DIAG" "$BOOT_DIAG" "$START_TX_TEST" "$STORAGE_POLICY_TEST" "$RESTORE_TX_TEST"; do
+for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$TAP_H" "$AIRPLAY_SRC" "$RESOLVE" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$GL_RENDERER_CPP" "$MAIN_CPP" "$HMI_SRC" "$WHEEL_SRC" "$HMI_BUILD_INFO" "$WHEEL_PACING_TEST" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$STOP" "$FINISH" "$INSTALL" "$STATUS" "$CHAIN" "$INSTALL_TXN" "$RESTORE_TXN" "$RESTORE_APPLY" "$PERSIST_DIAG" "$BOOT_DIAG" "$START_TX_TEST" "$STORAGE_POLICY_TEST" "$INSTALL_TX_TEST" "$RESTORE_TX_TEST"; do
     [ -s "$f" ] || fail "missing/empty: $f"
 done
 
-for s in "$START" "$CTRL" "$CHAIN" "$RESTORE_TXN" "$RESTORE_APPLY" "$PERSIST_DIAG" "$LAUNCH" "$STOP" "$FINISH" "$INSTALL" "$BOOT_DIAG" "$START_TX_TEST" "$RESTORE_TX_TEST" "$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh"; do
+for s in "$START" "$CTRL" "$CHAIN" "$INSTALL_TXN" "$RESTORE_TXN" "$RESTORE_APPLY" "$PERSIST_DIAG" "$LAUNCH" "$STOP" "$FINISH" "$INSTALL" "$BOOT_DIAG" "$START_TX_TEST" "$INSTALL_TX_TEST" "$RESTORE_TX_TEST" "$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh"; do
     sh -n "$s" || fail "shell syntax: $s"
 done
+
+# ---- V3.1 transactional install safety contract ----
+grep -Fq 'INSTALL_TRANSACTION=PREPARED persistent_state=PRE_INSTALL' "$INSTALL_TXN" ||
+    fail "INSTALL PREPARED marker/log missing"
+grep -Fq 'INSTALL_ROLLBACK=PASS persistent_state=PRE_INSTALL' "$INSTALL_TXN" ||
+    fail "INSTALL rollback-to-preinstall contract missing"
+grep -Fq 'STALE_INSTALL_TRANSACTION=DETECTED action=ROLLBACK_PRE_INSTALL' "$INSTALL_TXN" ||
+    fail "stale INSTALL transaction recovery missing"
+grep -Fq 'INSTALL_VERIFY=PASS' "$INSTALL_TXN" ||
+    fail "INSTALL final exact-state verifier missing"
+grep -Fq 'INSTALL=PASS transaction=COMMITTED persistent_state=INSTALLED' "$INSTALL_TXN" ||
+    fail "INSTALL commit contract missing"
+grep -Fq 'ALTS_INSTALL_TXN_ACTIVE=1' "$INSTALL_TXN" ||
+    fail "INSTALL transaction does not own APPLY re-entry"
+grep -Fq 'transactional INSTALL wrapper missing' "$INSTALL" ||
+    fail "top-level INSTALL does not require transaction wrapper"
+grep -Fq 'install transaction is active; START is blocked' "$CHAIN" ||
+    fail "START is not blocked during incomplete INSTALL"
+grep -Fq 'ACTIVE_INSTALL_TRANSACTION=DETECTED action=ROLLBACK_PRE_INSTALL_BEFORE_RESTORE' "$RESTORE_TXN" ||
+    fail "RESTORE does not recover interrupted INSTALL first"
+grep -Fq 'commit_runtime_scripts || {' "$CHAIN" ||
+    fail "runtime rollback-slot cleanup is still warning-only"
 
 # ---- V3 transactional restore safety contract ----
 grep -Fq 'RESTORE_ENTRY=TRANSACTIONAL_V3' "$STOP" ||
@@ -759,6 +783,7 @@ grep -Fq 'altscreen_operation_*.log' "$BOOT_DIAG" ||
 # Release gate: the fault-injection fixture must prove full rollback before a V3 ZIP can be vehicle-ready.
 sh "$START_TX_TEST" || fail "START/autostart host transaction fixture failed"
 sh "$STORAGE_POLICY_TEST" || fail "storage policy fixture failed"
+sh "$INSTALL_TX_TEST" || fail "install transaction fixture failed"
 sh "$RESTORE_TX_TEST" || fail "RESTORE rollback fault-injection fixture failed"
 
 grep -Fq 'touch /tmp/mmi-mirror-active' "$START" ||
