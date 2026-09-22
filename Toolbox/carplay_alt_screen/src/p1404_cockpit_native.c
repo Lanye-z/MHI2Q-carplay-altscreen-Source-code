@@ -695,7 +695,7 @@ static int native_read_cluster_owned_for_zoom(void) {
  */
 #define WHEEL_ZOOM_EVENT_MODEL "OEM_STEPS_V1"
 #define WHEEL_ZOOM_PENDING_LIMIT 4
-#define WHEEL_ZOOM_MIN_PACE_US 100000u
+#define WHEEL_ZOOM_MIN_PACE_US 120000u
 #define WHEEL_ZOOM_FALLBACK_PACE_US 200000u
 #define WHEEL_ZOOM_FRESH_FRAME_AGE_US 100000u
 #define WHEEL_ZOOM_STALL_AGE_US 150000u
@@ -1071,7 +1071,7 @@ static void *native_monitor_worker(void *arg) {
          *
          * Dynamic gate:
          *   - first command in a session: immediately;
-         *   - normal path: >=100 ms + >=3 new decoded frames + latest frame
+         *   - normal path: >=120 ms + >=3 new decoded frames + latest frame
          *     age <=100 ms;
          *   - if a decoded stall is observed (age >=150 ms), reset the frame
          *     baseline and require three fresh recovery frames;
