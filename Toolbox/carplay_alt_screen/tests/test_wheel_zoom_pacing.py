@@ -83,6 +83,19 @@ class Model:
         self._settle()
         self.drain(now_ms)
 
+    def gate_close(self):
+        self.target = 0
+        self.sent_level = 0
+        self.last_input_ms = 0
+        self.last_send_ms = 0
+        self.have_input_time = False
+        self.have_send_time = False
+        self.stall = False
+        self.stall_start_ms = None
+        self.first_step_pending = False
+        self.send_frame_base = None
+        self.recovery_base = None
+
     def _progress(self, now_ms):
         if not self.telemetry or self.last_frame_ms is None:
             return None
@@ -328,6 +341,19 @@ def test_u32_wrap_zero_is_not_a_sentinel():
     assert len(m.sent) == 2
 
 
+def test_gate_close_clears_valid_zero_timestamp_state():
+    m = Model()
+    m.telemetry = False
+    m.add(0, 2)
+    assert m.last_send_ms == 0
+    assert m.have_send_time
+    assert m.have_input_time
+    m.gate_close()
+    assert not m.have_send_time
+    assert not m.have_input_time
+    assert m.target == m.sent_level == 0
+
+
 def main():
     test_first_detent_is_immediate()
     test_healthy_target_follow_runs_at_100ms()
@@ -341,6 +367,7 @@ def main():
     test_limit_applies_to_outstanding_error_not_session_total()
     test_fast_backlog_is_bounded_without_permanent_ceiling()
     test_u32_wrap_zero_is_not_a_sentinel()
+    test_gate_close_clears_valid_zero_timestamp_state()
     print(
         "WHEEL_ZOOM_PACING_TEST=PASS "
         "event_model=OEM_STEPS_V1 scheduler=OEM_TARGET_FOLLOW_V1 "

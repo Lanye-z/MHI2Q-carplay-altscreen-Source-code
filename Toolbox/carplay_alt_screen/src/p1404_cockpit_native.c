@@ -1021,7 +1021,8 @@ static void *native_monitor_worker(void *arg) {
 
         if (!zoom_gate &&
             (zoom_target_steps != 0 || zoom_sent_steps != 0 ||
-             zoom_last_send_at != 0 || zoom_stall_latched)) {
+             zoom_have_send_time || zoom_have_input_time ||
+             zoom_stall_latched)) {
             if (zoom_target_steps != zoom_sent_steps) {
                 altscreen_log(
                     "PHASE=WHEEL_ZOOM_TARGET_RESET receiver=%p stream=%p "

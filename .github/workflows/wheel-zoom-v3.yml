@@ -398,6 +398,11 @@ jobs:
             echo 'ERROR: timestamp-zero send sentinel remains' >&2
             exit 1
           fi
+          if grep -Fq 'zoom_last_send_at != 0' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c; then
+            echo 'ERROR: timestamp-nonzero gate sentinel remains' >&2
+            exit 1
+          fi
           if grep -Fq 'new_burst = !zoom_last_input_at' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c; then
             echo 'ERROR: timestamp-zero input sentinel remains' >&2

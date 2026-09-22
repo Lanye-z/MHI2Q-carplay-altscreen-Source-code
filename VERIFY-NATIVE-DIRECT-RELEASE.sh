@@ -396,6 +396,9 @@ grep -Fq 'zoom_have_input_time' "$NATIVE" ||
 if grep -Fq 'zoom_last_send_at == 0' "$NATIVE"; then
     fail "wheel send timing still relies on timestamp-zero sentinel"
 fi
+if grep -Fq 'zoom_last_send_at != 0' "$NATIVE"; then
+    fail "wheel gate reset still relies on timestamp-nonzero sentinel"
+fi
 if grep -Fq 'new_burst = !zoom_last_input_at' "$NATIVE"; then
     fail "wheel input timing still relies on timestamp-zero sentinel"
 fi
