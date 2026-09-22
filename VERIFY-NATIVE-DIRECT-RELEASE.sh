@@ -58,8 +58,12 @@ for s in "$START" "$CTRL" "$CHAIN" "$INSTALL_TXN" "$RESTORE_TXN" "$RESTORE_APPLY
 done
 
 # ---- V3.1 transactional install safety contract ----
+grep -Fq "printf '%s\\n' 2 > \"\$TXN/FORMAT\"" "$INSTALL_TXN" ||
+    fail "INSTALL transaction format version marker missing"
 grep -Fq 'INSTALL_TRANSACTION=PREPARED persistent_state=PRE_INSTALL durable=YES' "$INSTALL_TXN" ||
     fail "INSTALL PREPARED snapshot is not durably synced before mutation"
+grep -Fq 'cannot durably commit install transaction' "$INSTALL_TXN" ||
+    fail "INSTALL COMMITTED marker is not durably synced before success"
 grep -Fq 'reason=PREPARED_SYNC_FAILED production_changed=NO' "$INSTALL_TXN" ||
     fail "INSTALL does not fail closed when PREPARED sync fails"
 grep -Fq 'SNAPSHOT_INTEGRITY=PASS' "$INSTALL_TXN" ||
@@ -112,8 +116,20 @@ grep -Fq 'CURRENT_PACKAGE_JAR_PRESENT=' "$INSTALL" ||
     fail "INSTALL residual classifier missing current-package JAR reason"
 grep -Fq 'KNOWN_MANAGED_JAR_PRESENT=' "$INSTALL" ||
     fail "INSTALL residual classifier missing historical managed-JAR reason"
-grep -Fq 'RESTORE_TRANSACTION=PREPARED' "$RESTORE_TXN" ||
-    fail "restore transaction PREPARED marker/log missing"
+grep -Fq "printf '%s\\n' 2 > \"\$TXN/FORMAT\"" "$RESTORE_TXN" ||
+    fail "RESTORE transaction format version marker missing"
+grep -Fq 'RESTORE_TRANSACTION=PREPARED durable=YES' "$RESTORE_TXN" ||
+    fail "restore transaction PREPARED marker is not durably synced"
+grep -Fq 'RESTORE=REFUSED reason=PREPARED_SYNC_FAILED production_changed=NO' "$RESTORE_TXN" ||
+    fail "RESTORE does not fail closed when PREPARED sync fails"
+grep -Fq 'RESTORE_SNAPSHOT_INTEGRITY=PASS' "$RESTORE_TXN" ||
+    fail "RESTORE snapshot integrity verification missing"
+grep -Fq 'ROLLBACK=REFUSED reason=SNAPSHOT_INTEGRITY_FAILED' "$RESTORE_TXN" ||
+    fail "RESTORE rollback can proceed from a corrupt snapshot"
+grep -Fq 'ROLLBACK_VERIFY=PASS' "$RESTORE_TXN" ||
+    fail "RESTORE rollback exact-state verification missing"
+grep -Fq 'cannot durably commit restore transaction' "$RESTORE_TXN" ||
+    fail "RESTORE COMMITTED marker is not durably synced before success"
 grep -Fq 'ROLLBACK=PASS persistent_state=PRE_RESTORE' "$RESTORE_TXN" ||
     fail "restore rollback contract missing"
 grep -Fq 'STALE_RESTORE_TRANSACTION=DETECTED action=ROLLBACK_FIRST' "$RESTORE_TXN" ||
