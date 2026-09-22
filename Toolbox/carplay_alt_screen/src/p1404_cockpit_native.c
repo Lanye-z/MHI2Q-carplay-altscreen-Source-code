@@ -682,6 +682,31 @@ static int native_read_cluster_owned_for_zoom(void) {
 #define WHEEL_ZOOM_EVENT_FILE "/tmp/mmi-mirror-wheel-zoom.events"
 #define WHEEL_ZOOM_BATCH_MAX 32u
 
+/*
+ * OEM-style delayed step handling adapted to CarPlay's one-step directional
+ * changeMapZoomLevel command.  The first intent after an idle period is sent
+ * immediately; subsequent accumulated intent drains at most once per 200 ms.
+ * Opposite signed steps cancel before transmission and the pending target is
+ * bounded so a stopped wheel cannot leave seconds of stale zoom commands.
+ */
+#define WHEEL_ZOOM_EVENT_MODEL "OEM_STEPS_V1"
+#define WHEEL_ZOOM_PACE_US 200000u
+#define WHEEL_ZOOM_PENDING_LIMIT 4
+
+static int native_wheel_zoom_accumulate(int pending, int delta,
+                                        int *saturated) {
+    long next = (long)pending + (long)delta;
+    if (saturated) *saturated = 0;
+    if (next > WHEEL_ZOOM_PENDING_LIMIT) {
+        next = WHEEL_ZOOM_PENDING_LIMIT;
+        if (saturated) *saturated = 1;
+    } else if (next < -WHEEL_ZOOM_PENDING_LIMIT) {
+        next = -WHEEL_ZOOM_PENDING_LIMIT;
+        if (saturated) *saturated = 1;
+    }
+    return (int)next;
+}
+
 struct wheel_zoom_event {
     uint32_t epoch;
     uint32_t seq;
@@ -706,20 +731,25 @@ static unsigned native_read_wheel_zoom_events(
     while (fgets(line, sizeof(line), f)) {
         struct wheel_zoom_event e;
         unsigned epoch = 0, commit = 0;
+        char model[32];
         size_t n = strlen(line);
         int fields;
 
         if (!n || line[n - 1] != '\n') continue;
         memset(&e, 0, sizeof(e));
+        memset(model, 0, sizeof(model));
         fields = sscanf(
             line,
-            "epoch=%u seq=%u direction=%d magnification=%d delta=%d step=%d steps=%d commit=%u",
+            "epoch=%u seq=%u direction=%d magnification=%d delta=%d step=%d steps=%d model=%31s commit=%u",
             &epoch, &e.seq, &e.direction, &e.magnification, &e.delta,
-            &e.step, &e.steps, &commit);
+            &e.step, &e.steps, model, &commit);
         e.epoch = (uint32_t)epoch;
-        if (fields != 8 || !e.epoch || !e.seq || commit != e.seq ||
+        if (fields != 9 || !e.epoch || !e.seq || commit != e.seq ||
+            strcmp(model, WHEEL_ZOOM_EVENT_MODEL) != 0 ||
             (e.direction != 0 && e.direction != 1) ||
-            e.step < 1 || e.steps < 1 || e.step > e.steps)
+            e.delta == 0 || e.step != 0 || e.steps < 1 ||
+            e.steps != (e.delta < 0 ? -e.delta : e.delta) ||
+            (e.delta < 0 ? e.direction != 0 : e.direction != 1))
             continue;
         if (e.epoch == after_epoch && e.seq <= after_seq) continue;
         events[count++] = e;
@@ -742,16 +772,21 @@ static void native_wheel_zoom_tail(uint32_t *out_epoch, uint32_t *out_seq) {
     while (fgets(line, sizeof(line), f)) {
         unsigned epoch = 0, seq = 0, commit = 0;
         int direction = -1, magnification = 0, delta = 0, step = 0, steps = 0;
+        char model[32];
         size_t n = strlen(line);
         if (!n || line[n - 1] != '\n') continue;
+        memset(model, 0, sizeof(model));
         if (sscanf(
                 line,
-                "epoch=%u seq=%u direction=%d magnification=%d delta=%d step=%d steps=%d commit=%u",
+                "epoch=%u seq=%u direction=%d magnification=%d delta=%d step=%d steps=%d model=%31s commit=%u",
                 &epoch, &seq, &direction, &magnification, &delta,
-                &step, &steps, &commit) == 8 &&
+                &step, &steps, model, &commit) == 9 &&
             epoch && seq && seq == commit &&
+            strcmp(model, WHEEL_ZOOM_EVENT_MODEL) == 0 &&
             (direction == 0 || direction == 1) &&
-            step >= 1 && steps >= 1 && step <= steps) {
+            delta != 0 && step == 0 && steps >= 1 &&
+            steps == (delta < 0 ? -delta : delta) &&
+            (delta < 0 ? direction == 0 : direction == 1)) {
             tail_epoch = (uint32_t)epoch;
             tail_seq = (uint32_t)seq;
         }
@@ -777,16 +812,23 @@ static void *native_monitor_worker(void *arg) {
     int visible, pending, live, route_ready, event_kind, send_rc;
     int desired_view_area, view_area_send_index, zoom_gate, cluster_owned;
     int wheel_generation_current;
+    int zoom_pending_steps = 0;
+    int zoom_direction = -1;
     struct wheel_zoom_event zoom_events[WHEEL_ZOOM_BATCH_MAX];
     unsigned zoom_count, zoom_i;
     uint32_t zoom_last_epoch = 0;
     uint32_t zoom_last_seq = 0;
+    uint32_t zoom_command_seq = 0;
+    uint64_t zoom_last_send_at = 0;
 
     native_wheel_zoom_tail(&zoom_last_epoch, &zoom_last_seq);
     altscreen_log(
         "PHASE=WHEEL_ZOOM_QUEUE_RESET receiver=%p stream=%p generation=%u "
-        "baseline_epoch=%u baseline_seq=%u stale_events_before_attach=discarded",
-        receiver, stream, generation, zoom_last_epoch, zoom_last_seq);
+        "baseline_epoch=%u baseline_seq=%u stale_events_before_attach=discarded "
+        "model=%s pace_ms=%u pending_limit=%d",
+        receiver, stream, generation, zoom_last_epoch, zoom_last_seq,
+        WHEEL_ZOOM_EVENT_MODEL, WHEEL_ZOOM_PACE_US / 1000u,
+        WHEEL_ZOOM_PENDING_LIMIT);
 
     for (;;) {
         /*
@@ -904,15 +946,30 @@ static void *native_monitor_worker(void *arg) {
                                                    event_kind, send_rc, 0);
         }
 
+        if (!zoom_gate && zoom_pending_steps != 0) {
+            altscreen_log(
+                "PHASE=WHEEL_ZOOM_PENDING_CLEAR receiver=%p stream=%p "
+                "generation=%u pending_before=%d reason=gate_closed",
+                receiver, stream, generation, zoom_pending_steps);
+            zoom_pending_steps = 0;
+        }
+
         for (zoom_i = 0; zoom_i < zoom_count; ++zoom_i) {
             struct wheel_zoom_event *ze = &zoom_events[zoom_i];
+            int pending_before, saturated, cancellation;
+
             if (ze->epoch != zoom_last_epoch) {
                 altscreen_log(
                     "PHASE=WHEEL_ZOOM_EPOCH receiver=%p stream=%p generation=%u "
-                    "old_epoch=%u new_epoch=%u sequence_reset=1",
-                    receiver, stream, generation, zoom_last_epoch, ze->epoch);
+                    "old_epoch=%u new_epoch=%u sequence_reset=1 "
+                    "pending_cleared=%d pacing_reset=1",
+                    receiver, stream, generation, zoom_last_epoch, ze->epoch,
+                    zoom_pending_steps);
                 zoom_last_epoch = ze->epoch;
                 zoom_last_seq = 0;
+                zoom_pending_steps = 0;
+                zoom_last_send_at = 0;
+                zoom_command_seq = 0;
             }
             if (ze->seq <= zoom_last_seq) continue;
             if (zoom_last_seq && ze->seq != zoom_last_seq + 1u)
@@ -922,23 +979,82 @@ static void *native_monitor_worker(void *arg) {
                     receiver, stream, generation, ze->epoch,
                     zoom_last_seq + 1u, ze->seq);
             zoom_last_seq = ze->seq;
+
             altscreen_log(
                 "PHASE=WHEEL_ZOOM_QUEUE receiver=%p stream=%p generation=%u "
-                "epoch=%u seq=%u action=%s direction=%d magnification=%d delta=%d "
-                "step=%d steps=%d result=%s reason=%s",
+                "epoch=%u seq=%u action=%s direction=%d magnification=%d "
+                "delta=%d steps=%d model=%s result=%s reason=%s",
                 receiver, stream, generation, ze->epoch, ze->seq,
                 ze->direction == 0 ? "ZOOM_IN" : "ZOOM_OUT",
-                ze->direction, ze->magnification, ze->delta,
-                ze->step, ze->steps,
+                ze->direction, ze->magnification, ze->delta, ze->steps,
+                WHEEL_ZOOM_EVENT_MODEL,
                 zoom_gate ? "queued" : "dropped",
                 zoom_gate ? "java80_cluster_owned_route_ready_generation_current" :
                             "route_not_ready_or_java80_cluster_not_owned_or_generation_stale");
             if (!zoom_gate) continue;
+
+            pending_before = zoom_pending_steps;
+            cancellation =
+                (pending_before > 0 && ze->delta < 0) ||
+                (pending_before < 0 && ze->delta > 0);
+            saturated = 0;
+            zoom_pending_steps = native_wheel_zoom_accumulate(
+                zoom_pending_steps, ze->delta, &saturated);
+
+            altscreen_log(
+                "PHASE=WHEEL_ZOOM_ACCUMULATE receiver=%p stream=%p "
+                "generation=%u source_seq=%u signed_steps=%d "
+                "pending_before=%d pending_after=%d cancellation=%d "
+                "saturated=%d pending_limit=%d model=OEM_DELAYED_STEPS",
+                receiver, stream, generation, ze->seq, ze->delta,
+                pending_before, zoom_pending_steps, cancellation,
+                saturated, WHEEL_ZOOM_PENDING_LIMIT);
+        }
+
+        /*
+         * CarPlay only exposes a one-step directional command, so drain the
+         * OEM-style signed target accumulator one command at a time.  The
+         * response callback is observational only; it does not gate the next
+         * send because status=0 means command accepted, not map animation done.
+         */
+        if (zoom_gate && zoom_pending_steps != 0 &&
+            (!zoom_last_send_at ||
+             now >= zoom_last_send_at + (uint64_t)WHEEL_ZOOM_PACE_US)) {
+            int pending_before = zoom_pending_steps;
+            int pending_after;
+
+            zoom_direction = zoom_pending_steps < 0 ? 0 : 1;
+            pending_after = zoom_pending_steps +
+                (zoom_direction == 0 ? 1 : -1);
+
+            ++zoom_command_seq;
+            if (!zoom_command_seq) ++zoom_command_seq;
+
             send_rc = alt_send_cluster_zoom(
-                receiver, stream, generation, ze->seq, ze->direction);
+                receiver, stream, generation,
+                zoom_command_seq, zoom_direction);
+
+            zoom_pending_steps = pending_after;
+            zoom_last_send_at = now;
+
+            altscreen_log(
+                "PHASE=WHEEL_ZOOM_PACED_SEND receiver=%p stream=%p "
+                "generation=%u command_seq=%u source_tail_seq=%u "
+                "action=%s direction=%d pending_before=%d pending_after=%d "
+                "pace_ms=%u first_after_idle=%d response_gates_next=0 rc=%d",
+                receiver, stream, generation, zoom_command_seq,
+                zoom_last_seq,
+                zoom_direction == 0 ? "ZOOM_IN" : "ZOOM_OUT",
+                zoom_direction, pending_before, pending_after,
+                WHEEL_ZOOM_PACE_US / 1000u,
+                zoom_last_send_at == now && pending_before != 0 &&
+                    zoom_command_seq == 1 ? 1 : 0,
+                send_rc);
+
             if (send_rc != 0)
                 p1404_cockpit_native_zoom_result(
-                    receiver, stream, generation, ze->seq, ze->direction,
+                    receiver, stream, generation,
+                    zoom_command_seq, zoom_direction,
                     send_rc, 0);
         }
 
