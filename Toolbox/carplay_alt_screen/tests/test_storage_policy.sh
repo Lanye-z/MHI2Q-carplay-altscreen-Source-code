@@ -3,6 +3,7 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 START="$ROOT/Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh"
 STOP="$ROOT/Toolbox/scripts/stop_mmi_cockpit_carplay_test.sh"
+FINISH="$ROOT/Toolbox/scripts/finish_mmi_cockpit_carplay_test.sh"
 RESTORE_TXN="$ROOT/Toolbox/scripts/altscreen_restore_transaction.sh"
 RESTORE_APPLY="$ROOT/Toolbox/scripts/altscreen_restore_apply.sh"
 CHAIN="$ROOT/Toolbox/scripts/altscreen_chain_test.sh"
@@ -16,7 +17,7 @@ STOP_LAUNCH="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicl
 PATHS="$ROOT/Toolbox/carplay_alt_screen/src/altscreen_paths.c"
 fail(){ echo "STORAGE_POLICY_TEST=FAIL: $*" >&2; exit 1; }
 
-for f in "$START" "$STOP" "$RESTORE_TXN" "$RESTORE_APPLY" "$CHAIN" "$CTRL" "$DIAG" "$ADAPT" "$BOOT" "$INSTALL" "$LAUNCH" "$STOP_LAUNCH"; do
+for f in "$START" "$STOP" "$FINISH" "$RESTORE_TXN" "$RESTORE_APPLY" "$CHAIN" "$CTRL" "$DIAG" "$ADAPT" "$BOOT" "$INSTALL" "$LAUNCH" "$STOP_LAUNCH"; do
     sh -n "$f" || fail "shell syntax: $f"
 done
 
@@ -49,6 +50,26 @@ grep -Fq 'trusted original Java HMI backup is absent' "$INSTALL" || fail "HMI ba
 grep -Fq 'live_managed_install_detected' "$INSTALL" || fail "HMI managed-install detector missing"
 grep -Fq '[ "$size" = "$EXPECTED_SIZE" ] && [ "$sum" = "$EXPECTED_CKSUM" ] && return 0' "$INSTALL" ||
     fail "current package JAR identity is not recognized as managed"
+
+# INSTALL must explain exactly which managed residue triggered fail-closed.
+grep -Fq 'RUNTIME_OWNER_PRESENT=' "$INSTALL" || fail "INSTALL does not report runtime-owner residue"
+grep -Fq 'SMARTPHONE_INTEGRATOR_HOOK=' "$INSTALL" || fail "INSTALL does not report smartphone_integrator residue"
+grep -Fq 'CURRENT_PACKAGE_JAR_PRESENT=' "$INSTALL" || fail "INSTALL does not report current-package JAR residue"
+grep -Fq 'KNOWN_MANAGED_JAR_PRESENT=' "$INSTALL" || fail "INSTALL does not report historical managed-JAR residue"
+grep -Fq 'LIVE_MANAGED_SUMMARY=MANAGED reasons=' "$INSTALL" || fail "INSTALL managed-residue summary missing"
+grep -Fq 'NATIVE_REINSTALL_PRECHECK=FAIL reason=SMARTPHONE_INTEGRATOR_PRELOAD_PRESENT' "$CTRL" ||
+    fail "native reinstall guard does not name residual preload"
+
+# Every mutating GEM operation must journal the whole wrapper transaction to SD.
+grep -Fq 'OP_BEGIN action=INSTALL' "$INSTALL" || fail "INSTALL SD operation journal missing"
+grep -Fq 'install_${journal_stamp}_$.log' "$INSTALL" || fail "INSTALL journal naming missing"
+grep -Fq 'OP_BEGIN action=RESTORE_ORIGINAL' "$STOP" || fail "RESTORE ORIGINAL SD operation journal missing"
+grep -Fq 'restore_${journal_stamp}_$.log' "$STOP" || fail "RESTORE journal naming missing"
+grep -Fq 'OP_BEGIN action=STORE_LOGS_RESTORE' "$FINISH" || fail "STORE LOGS + RESTORE SD operation journal missing"
+grep -Fq 'store_restore_${journal_stamp}_$.log' "$FINISH" || fail "STORE+RESTORE journal naming missing"
+grep -Fq 'SD_OPERATION_LOG_UNWRITABLE' "$STOP" || fail "RESTORE must fail closed when SD log cannot be opened"
+grep -Fq 'SD_OPERATION_LOG_UNWRITABLE' "$FINISH" || fail "STORE+RESTORE must fail closed when SD log cannot be opened"
+
 grep -Fq 'journal_storage=SD' "$START" || fail "START operation log does not prefer SD"
 grep -Fq 'journal_storage=TMP' "$START" || fail "START operation log lacks flat /tmp fallback"
 grep -Fq 'DEST_MODE=SD' "$ADAPT" || fail "adaptive log SD preference missing"
@@ -56,4 +77,4 @@ grep -Fq 'DEST_MODE=TMP' "$ADAPT" || fail "adaptive log flat /tmp fallback missi
 grep -Fq 'basevideo3.enabled' "$START" || fail "persistent boot demand marker missing"
 grep -Fq 'diagnostics.enabled' "$DIAG" || fail "persistent diagnostics marker missing"
 
-echo "STORAGE_POLICY_TEST=PASS tmp=flat_files_only install_router=flat start_txn=flat mirror_runtime=flat hook_log=flat restore_txn=sd_reboot_recoverable persistent_logs=sd"
+echo "STORAGE_POLICY_TEST=PASS tmp=flat_files_only install_router=flat start_txn=flat install_restore_ops=sd_fail_closed mirror_runtime=flat hook_log=flat restore_txn=sd_reboot_recoverable persistent_logs=sd managed_residue_reasons=explicit"
