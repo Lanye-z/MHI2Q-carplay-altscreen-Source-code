@@ -46,7 +46,13 @@ if [ "${ALTS_OPLOG_CAPTURED:-0}" != 1 ]; then
         exit 1
     }
     journal_stamp=$(date +%Y%m%d_%H%M%S 2>/dev/null || echo unknown)
-    journal="$journal_dir/install_${journal_stamp}_$.log"
+    journal_base="$journal_dir/install_${journal_stamp}"
+    journal="$journal_base.log"
+    journal_n=0
+    while [ -e "$journal" ]; do
+        journal_n=$((journal_n + 1))
+        journal="${journal_base}_${journal_n}.log"
+    done
     if ! (printf 'OP_BEGIN action=INSTALL script=%s storage=SD\n' "$CAPTURE_ENTRY" > "$journal") 2>/dev/null; then
         echo "FAIL: cannot create persistent INSTALL log on SD: $journal"
         exit 1
