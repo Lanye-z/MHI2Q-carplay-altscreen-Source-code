@@ -33,13 +33,30 @@ grep -Fq '#define ALTSCREEN_VOLATILE_ROOT "/tmp"' "$PATHS" || fail "native hook 
 # Reboot-recoverable transactions and persistent logs belong on SD.
 grep -Fq 'TXN_ROOT="$SD/install-transaction"' "$INSTALL_TXN" || fail "INSTALL transaction root is not on SD"
 grep -Fq 'TXN="$TXN_ROOT/active"' "$INSTALL_TXN" || fail "INSTALL transaction active state is not reboot-recoverable"
-grep -Fq 'INSTALL_TRANSACTION=PREPARED' "$INSTALL_TXN" || fail "INSTALL PREPARED marker missing"
+grep -Fq 'INSTALL_TRANSACTION=PREPARED persistent_state=PRE_INSTALL durable=YES' "$INSTALL_TXN" ||
+    fail "INSTALL PREPARED marker is not durably synced"
+grep -Fq 'reason=PREPARED_SYNC_FAILED production_changed=NO' "$INSTALL_TXN" ||
+    fail "INSTALL does not fail closed when PREPARED sync fails"
+grep -Fq 'SNAPSHOT_INTEGRITY=PASS' "$INSTALL_TXN" ||
+    fail "INSTALL snapshot integrity gate missing"
+grep -Fq 'INSTALL_ROLLBACK=REFUSED reason=SNAPSHOT_INTEGRITY_FAILED' "$INSTALL_TXN" ||
+    fail "INSTALL may destructively roll back from a corrupt snapshot"
 grep -Fq 'INSTALL_ROLLBACK=PASS persistent_state=PRE_INSTALL' "$INSTALL_TXN" || fail "INSTALL rollback contract missing"
 grep -Fq 'INSTALL_VERIFY=PASS' "$INSTALL_TXN" || fail "INSTALL final verifier missing"
+grep -Fq 'restore-precheck' "$INSTALL_TXN" ||
+    fail "INSTALL final verifier does not verify the native recovery set"
+grep -Fq 'verify_hmi_backup' "$INSTALL_TXN" ||
+    fail "INSTALL final verifier does not validate HMI recovery backup"
+grep -Fq 'verify_boot_backup' "$INSTALL_TXN" ||
+    fail "INSTALL final verifier does not validate boot diagnostics backup"
 grep -Fq 'INSTALL=PASS transaction=COMMITTED' "$INSTALL_TXN" || fail "INSTALL commit marker missing"
 grep -Fq 'ALTS_INSTALL_TXN_ACTIVE=1' "$INSTALL_TXN" || fail "INSTALL transaction APPLY re-entry marker missing"
 grep -Fq 'transactional INSTALL wrapper missing' "$INSTALL" || fail "top-level INSTALL does not require transaction wrapper"
 grep -Fq 'install transaction is active; START is blocked' "$CHAIN" || fail "START is not blocked during INSTALL transaction"
+grep -Fq 'install_transaction_cleanup_terminal' "$CHAIN" ||
+    fail "terminal COMMITTED/ROLLED_BACK INSTALL transaction can still block START"
+grep -Fq 'INSTALL_TRANSACTION=TERMINAL_STALE' "$CHAIN" ||
+    fail "STATUS cannot distinguish terminal stale INSTALL transaction"
 grep -Fq 'ACTIVE_INSTALL_TRANSACTION=DETECTED' "$RESTORE_TXN" || fail "RESTORE does not recover interrupted INSTALL first"
 grep -Fq 'restore-transaction/active' "$RESTORE_TXN" || fail "RESTORE transaction is not reboot-recoverable on SD"
 grep -Fq 'staging/restore-apply' "$RESTORE_APPLY" || fail "RESTORE APPLY scratch is not SD staging"
@@ -96,4 +113,4 @@ grep -Fq 'DEST_MODE=TMP' "$ADAPT" || fail "adaptive log flat /tmp fallback missi
 grep -Fq 'basevideo3.enabled' "$START" || fail "persistent boot demand marker missing"
 grep -Fq 'diagnostics.enabled' "$DIAG" || fail "persistent diagnostics marker missing"
 
-echo "STORAGE_POLICY_TEST=PASS tmp=flat_files_only install_router=flat start_txn=flat install_txn=sd_reboot_recoverable_exact_rollback install_ops=sd_fail_closed restore_ops=sd_preferred_tmp_fallback mirror_runtime=flat hook_log=flat restore_txn=sd_reboot_recoverable persistent_logs=sd managed_residue_reasons=explicit"
+echo "STORAGE_POLICY_TEST=PASS tmp=flat_files_only install_router=flat start_txn=flat install_txn=sd_reboot_recoverable_exact_rollback prepared_durable=1 snapshot_integrity=1 terminal_nonblocking=1 recovery_set_verify=1 install_ops=sd_fail_closed restore_ops=sd_preferred_tmp_fallback mirror_runtime=flat hook_log=flat restore_txn=sd_reboot_recoverable persistent_logs=sd managed_residue_reasons=explicit"
