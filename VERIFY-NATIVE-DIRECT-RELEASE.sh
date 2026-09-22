@@ -26,6 +26,7 @@ CTRL="$ROOT/Toolbox/scripts/altscreen_chain_test_universal.sh"
 LAUNCH="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/start_vehicle.sh"
 RELEASE_STOP="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh"
 STOP="$ROOT/Toolbox/scripts/stop_mmi_cockpit_carplay_test.sh"
+FINISH="$ROOT/Toolbox/scripts/finish_mmi_cockpit_carplay_test.sh"
 INSTALL="$ROOT/Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh"
 STATUS="$ROOT/Toolbox/scripts/status_mmi_cockpit_carplay_test.sh"
 CHAIN="$ROOT/Toolbox/scripts/altscreen_chain_test.sh"
@@ -46,17 +47,31 @@ sha256_file(){
 }
 binary_strings(){ strings "$1" 2>/dev/null || grep -a -o '[[:print:]][[:print:]]*' "$1"; }
 
-for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$TAP_H" "$AIRPLAY_SRC" "$RESOLVE" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$GL_RENDERER_CPP" "$MAIN_CPP" "$HMI_SRC" "$WHEEL_SRC" "$HMI_BUILD_INFO" "$WHEEL_PACING_TEST" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$STOP" "$INSTALL" "$STATUS" "$CHAIN" "$RESTORE_TXN" "$RESTORE_APPLY" "$PERSIST_DIAG" "$BOOT_DIAG" "$START_TX_TEST" "$STORAGE_POLICY_TEST" "$RESTORE_TX_TEST"; do
+for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$TAP_H" "$AIRPLAY_SRC" "$RESOLVE" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$GL_RENDERER_CPP" "$MAIN_CPP" "$HMI_SRC" "$WHEEL_SRC" "$HMI_BUILD_INFO" "$WHEEL_PACING_TEST" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$STOP" "$FINISH" "$INSTALL" "$STATUS" "$CHAIN" "$RESTORE_TXN" "$RESTORE_APPLY" "$PERSIST_DIAG" "$BOOT_DIAG" "$START_TX_TEST" "$STORAGE_POLICY_TEST" "$RESTORE_TX_TEST"; do
     [ -s "$f" ] || fail "missing/empty: $f"
 done
 
-for s in "$START" "$CTRL" "$CHAIN" "$RESTORE_TXN" "$RESTORE_APPLY" "$PERSIST_DIAG" "$LAUNCH" "$STOP" "$BOOT_DIAG" "$START_TX_TEST" "$RESTORE_TX_TEST" "$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh"; do
+for s in "$START" "$CTRL" "$CHAIN" "$RESTORE_TXN" "$RESTORE_APPLY" "$PERSIST_DIAG" "$LAUNCH" "$STOP" "$FINISH" "$INSTALL" "$BOOT_DIAG" "$START_TX_TEST" "$RESTORE_TX_TEST" "$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh"; do
     sh -n "$s" || fail "shell syntax: $s"
 done
 
 # ---- V3 transactional restore safety contract ----
 grep -Fq 'RESTORE_ENTRY=TRANSACTIONAL_V3' "$STOP" ||
     fail "V3 RESTORE ORIGINAL does not enter the transactional wrapper"
+grep -Fq 'OP_BEGIN action=INSTALL' "$INSTALL" ||
+    fail "INSTALL does not persist a complete SD operation journal"
+grep -Fq 'OP_BEGIN action=RESTORE_ORIGINAL' "$STOP" ||
+    fail "RESTORE ORIGINAL does not persist a complete SD operation journal"
+grep -Fq 'OP_BEGIN action=STORE_LOGS_RESTORE' "$FINISH" ||
+    fail "STORE LOGS + RESTORE does not persist a complete SD operation journal"
+grep -Fq 'RUNTIME_OWNER_PRESENT=' "$INSTALL" ||
+    fail "INSTALL residual classifier missing runtime-owner reason"
+grep -Fq 'SMARTPHONE_INTEGRATOR_HOOK=' "$INSTALL" ||
+    fail "INSTALL residual classifier missing smartphone_integrator reason"
+grep -Fq 'CURRENT_PACKAGE_JAR_PRESENT=' "$INSTALL" ||
+    fail "INSTALL residual classifier missing current-package JAR reason"
+grep -Fq 'KNOWN_MANAGED_JAR_PRESENT=' "$INSTALL" ||
+    fail "INSTALL residual classifier missing historical managed-JAR reason"
 grep -Fq 'RESTORE_TRANSACTION=PREPARED' "$RESTORE_TXN" ||
     fail "restore transaction PREPARED marker/log missing"
 grep -Fq 'ROLLBACK=PASS persistent_state=PRE_RESTORE' "$RESTORE_TXN" ||
