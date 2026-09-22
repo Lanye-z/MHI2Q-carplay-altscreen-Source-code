@@ -165,7 +165,7 @@ validate_dir_snapshot(){
   if [ "$kind" = present ]; then
     [ -d "$src" ] || return 1
     if [ -f "$TXN/meta/$name.manifest" ]; then
-      now="$TXN/meta/$name.verify.$"
+      now="$TXN/meta/$name.verify.current"
       dir_manifest "$src" "$now" || { rm -f "$now" 2>/dev/null || true; return 1; }
       cmp -s "$TXN/meta/$name.manifest" "$now" || { rm -f "$now" 2>/dev/null || true; return 1; }
       rm -f "$now" 2>/dev/null || true
@@ -182,7 +182,7 @@ restore_dir(){
   kind=$(snapshot_marker_kind "$TXN/dirs/$name") || return 1
   if [ "$kind" = present ]; then
     validate_dir_snapshot "$name" || return 1
-    tmp="${dst}.install-rollback.$"
+    tmp="${dst}.install-rollback.new"
     rm -rf "$tmp" 2>/dev/null || true
     ensure_dirs "$tmp" || return 1
     cp -R "$src/." "$tmp/" || return 1
@@ -277,7 +277,7 @@ snapshot(){
   snap_dir "$BACKUP" sd_backup || return 1
   snap_dir "$STAGING" sd_staging || return 1
 
-  printf '%s\n' "$" > "$TXN/pid" || return 1
+  printf '%s\n' "prepared" > "$TXN/pid" || return 1
   validate_snapshot || return 1
   touch "$TXN/PREPARED" || return 1
   # PREPARED must be durable before the first production mutation. Otherwise a
@@ -408,9 +408,12 @@ verify_boot_backup(){
 }
 
 verify_installed(){
-  [ -s "$JAR_SOURCE" ] && [ -s "$UNIVERSAL_SOURCE" ] || { log "INSTALL_VERIFY=FAIL reason=PACKAGE_ARTIFACT_MISSING"; return 1; }
-  same "$JAR_SOURCE" "$JAR" || { log "INSTALL_VERIFY=FAIL reason=HMI_JAR_MISMATCH"; return 1; }
-  same "$UNIVERSAL_SOURCE" "$UNIVERSAL_DST" || { log "INSTALL_VERIFY=FAIL reason=UNIVERSAL_HOOK_MISMATCH"; return 1; }
+  [ -s "$JAR_SOURCE" ] && [ -s "$UNIVERSAL_SOURCE" ] ||
+    { log "INSTALL_VERIFY=FAIL reason=PACKAGE_ARTIFACT_MISSING"; return 1; }
+  same "$JAR_SOURCE" "$JAR" ||
+    { log "INSTALL_VERIFY=FAIL reason=HMI_JAR_MISMATCH"; return 1; }
+  same "$UNIVERSAL_SOURCE" "$UNIVERSAL_DST" ||
+    { log "INSTALL_VERIFY=FAIL reason=UNIVERSAL_HOOK_MISMATCH"; return 1; }
 
   [ -f "$RUNTIME/.mmi-cockpit-carplay-runtime-owner" ] ||
     { log "INSTALL_VERIFY=FAIL reason=RUNTIME_OWNER_MISSING"; return 1; }
@@ -421,35 +424,44 @@ verify_installed(){
   [ -f "$RUNTIME/state/diagnostics.enabled" ] ||
     { log "INSTALL_VERIFY=FAIL reason=PERSISTENT_DIAGNOSTICS_NOT_ENABLED"; return 1; }
 
-  [ -f "$STATE/INSTALLED" ] || { log "INSTALL_VERIFY=FAIL reason=INSTALLED_MARKER_MISSING"; return 1; }
+  [ -f "$STATE/INSTALLED" ] ||
+    { log "INSTALL_VERIFY=FAIL reason=INSTALLED_MARKER_MISSING"; return 1; }
   [ "$(cat "$STATE/firmware_profile.txt" 2>/dev/null || true)" = UNIVERSAL ] ||
     { log "INSTALL_VERIFY=FAIL reason=FIRMWARE_PROFILE_NOT_UNIVERSAL"; return 1; }
   [ ! -e "$STATE/RESTORE_PENDING_REBOOT" ] ||
     { log "INSTALL_VERIFY=FAIL reason=STALE_RESTORE_PENDING_REBOOT"; return 1; }
 
-  [ ! -e "$RUNTIME_STAGE" ] || { log "INSTALL_VERIFY=FAIL reason=RUNTIME_STAGE_RESIDUE"; return 1; }
-  [ ! -e "$RUNTIME_PREV" ] || { log "INSTALL_VERIFY=FAIL reason=RUNTIME_PREVIOUS_RESIDUE"; return 1; }
+  [ ! -e "$RUNTIME_STAGE" ] ||
+    { log "INSTALL_VERIFY=FAIL reason=RUNTIME_STAGE_RESIDUE"; return 1; }
+  [ ! -e "$RUNTIME_PREV" ] ||
+    { log "INSTALL_VERIFY=FAIL reason=RUNTIME_PREVIOUS_RESIDUE"; return 1; }
 
   awk -v query="$UNIVERSAL_REL" -f "$PRELOAD_AWK" "$SI" >/dev/null 2>&1 ||
     { log "INSTALL_VERIFY=FAIL reason=SMARTPHONE_INTEGRATOR_NOT_ARMED"; return 1; }
 
-  STARTUP=$(find_startup) || { log "INSTALL_VERIFY=FAIL reason=STARTUP_NOT_FOUND"; return 1; }
-  b=$(grep -c '^# BEGIN ALTSCREEN DIAGNOSTICS
+  STARTUP=$(find_startup) ||
+    { log "INSTALL_VERIFY=FAIL reason=STARTUP_NOT_FOUND"; return 1; }
+  b=$(grep -c '^# BEGIN ALTSCREEN DIAGNOSTICS$' "$STARTUP" 2>/dev/null || true)
+  e=$(grep -c '^# END ALTSCREEN DIAGNOSTICS$' "$STARTUP" 2>/dev/null || true)
+  [ -n "$b" ] || b=0
+  [ -n "$e" ] || e=0
   [ "$b" = 1 ] && [ "$e" = 1 ] ||
     { log "INSTALL_VERIFY=FAIL reason=DIAGNOSTICS_BLOCK_COUNT begin=$b end=$e"; return 1; }
 
   # The uninstall path depends on these backups. Re-run the native restore
   # precheck and independently verify HMI/boot backups before COMMIT.
-  [ -f "$CONTROLLER" ] || { log "INSTALL_VERIFY=FAIL reason=CONTROLLER_MISSING"; return 1; }
+  [ -f "$CONTROLLER" ] ||
+    { log "INSTALL_VERIFY=FAIL reason=CONTROLLER_MISSING"; return 1; }
   ALTS_INSTALL_TXN_ACTIVE=1 /bin/sh "$CONTROLLER" restore-precheck ||
     { log "INSTALL_VERIFY=FAIL reason=NATIVE_RECOVERY_SET_INVALID"; return 1; }
-  verify_hmi_backup || { log "INSTALL_VERIFY=FAIL reason=HMI_BACKUP_INVALID"; return 1; }
-  verify_boot_backup || { log "INSTALL_VERIFY=FAIL reason=BOOT_DIAGNOSTICS_BACKUP_INVALID"; return 1; }
+  verify_hmi_backup ||
+    { log "INSTALL_VERIFY=FAIL reason=HMI_BACKUP_INVALID"; return 1; }
+  verify_boot_backup ||
+    { log "INSTALL_VERIFY=FAIL reason=BOOT_DIAGNOSTICS_BACKUP_INVALID"; return 1; }
 
   log "INSTALL_VERIFY=PASS runtime=owned jar=verified native_preload=verified diagnostics=verified sd_state=verified recovery_set=verified"
   return 0
 }
-
 fail(){
   msg=$1
   log "ERROR: $msg"
@@ -490,145 +502,6 @@ snapshot || { rm -rf "$TXN" 2>/dev/null || true; TXN_READY=0; fail "pre-install 
 touch "$TXN/APPLYING" || fail "cannot mark install transaction APPLYING"
 
 if [ "$#" -gt 0 ]; then shift; fi
-if [ "$#" -gt 0 ]; then
-  ALTS_INSTALL_TXN_ACTIVE=1 ALTS_OPLOG_CAPTURED=1 /bin/sh "$INSTALLER" "$@" || fail "install APPLY step failed"
-else
-  ALTS_INSTALL_TXN_ACTIVE=1 ALTS_OPLOG_CAPTURED=1 /bin/sh "$INSTALLER" || fail "install APPLY step failed"
-fi
-
-verify_installed || fail "final installed-state verification failed"
-sync >/dev/null 2>&1 || fail "sync failed before install commit"
-touch "$TXN/COMMITTED" || fail "cannot commit install transaction"
-TXN_READY=0
-sync >/dev/null 2>&1 || log "WARN: final post-commit sync reported failure; installed state was already verified and committed"
-log "INSTALL=PASS transaction=COMMITTED persistent_state=INSTALLED reboot_required=YES"
-rm -rf "$TXN" 2>/dev/null || log "WARN: committed install transaction retained; next INSTALL/RESTORE will clean it"
-trap - 1 2 15
-log "===== V3.1 transactional INSTALL finished ====="
-exit 0
- "$STARTUP" 2>/dev/null || true)
-  e=$(grep -c '^# END ALTSCREEN DIAGNOSTICS
-  [ "$b" = 1 ] && [ "$e" = 1 ] ||
-    { log "INSTALL_VERIFY=FAIL reason=DIAGNOSTICS_BLOCK_COUNT begin=$b end=$e"; return 1; }
-
-  # The uninstall path depends on these backups. Re-run the native restore
-  # precheck and independently verify HMI/boot backups before COMMIT.
-  [ -f "$CONTROLLER" ] || { log "INSTALL_VERIFY=FAIL reason=CONTROLLER_MISSING"; return 1; }
-  ALTS_INSTALL_TXN_ACTIVE=1 /bin/sh "$CONTROLLER" restore-precheck ||
-    { log "INSTALL_VERIFY=FAIL reason=NATIVE_RECOVERY_SET_INVALID"; return 1; }
-  verify_hmi_backup || { log "INSTALL_VERIFY=FAIL reason=HMI_BACKUP_INVALID"; return 1; }
-  verify_boot_backup || { log "INSTALL_VERIFY=FAIL reason=BOOT_DIAGNOSTICS_BACKUP_INVALID"; return 1; }
-
-  log "INSTALL_VERIFY=PASS runtime=owned jar=verified native_preload=verified diagnostics=verified sd_state=verified recovery_set=verified"
-  return 0
-}
-
-fail(){
-  msg=$1
-  log "ERROR: $msg"
-  finish_mounts >/dev/null 2>&1 || true
-  if [ "$ROLLING_BACK" = 0 ] && [ "$TXN_READY" = 1 ]; then
-    if rollback; then
-      log "INSTALL=ABORTED rollback=PASS persistent_state=PRE_INSTALL"
-    else
-      log "INSTALL=FAILED rollback=INCOMPLETE recovery_required=YES"
-    fi
-  else
-    log "INSTALL=REFUSED production_changed=NO"
-  fi
-  exit 1
-}
-
-ACTION=${1:-install}
-if [ "$ACTION" = recover ]; then
-  log "===== V3.1 transactional INSTALL recovery started ====="
-  recover_stale || { log "INSTALL_RECOVERY=FAIL"; exit 1; }
-  log "INSTALL_RECOVERY=PASS"
-  log "===== V3.1 transactional INSTALL recovery finished ====="
-  exit 0
-fi
-
-trap 'fail "install interrupted by signal"' 1 2 15
-log "===== V3.1 transactional INSTALL started ====="
-recover_stale || fail "previous install transaction could not be recovered"
-[ ! -e "$RESTORE_TXN" ] || fail "restore transaction is active"
-[ -f "$INSTALLER" ] || fail "installer missing"
-sh -n "$INSTALLER" || fail "installer shell syntax invalid"
-
-snapshot || { rm -rf "$TXN" 2>/dev/null || true; TXN_READY=0; fail "pre-install transaction snapshot failed"; }
-touch "$TXN/APPLYING" || fail "cannot mark install transaction APPLYING"
-
-shift || true
-if [ "$#" -gt 0 ]; then
-  ALTS_INSTALL_TXN_ACTIVE=1 ALTS_OPLOG_CAPTURED=1 /bin/sh "$INSTALLER" "$@" || fail "install APPLY step failed"
-else
-  ALTS_INSTALL_TXN_ACTIVE=1 ALTS_OPLOG_CAPTURED=1 /bin/sh "$INSTALLER" || fail "install APPLY step failed"
-fi
-
-verify_installed || fail "final installed-state verification failed"
-sync >/dev/null 2>&1 || fail "sync failed before install commit"
-touch "$TXN/COMMITTED" || fail "cannot commit install transaction"
-TXN_READY=0
-sync >/dev/null 2>&1 || log "WARN: final post-commit sync reported failure; installed state was already verified and committed"
-log "INSTALL=PASS transaction=COMMITTED persistent_state=INSTALLED reboot_required=YES"
-rm -rf "$TXN" 2>/dev/null || log "WARN: committed install transaction retained; next INSTALL/RESTORE will clean it"
-trap - 1 2 15
-log "===== V3.1 transactional INSTALL finished ====="
-exit 0
- "$STARTUP" 2>/dev/null || true)
-  [ -n "$b" ] || b=0
-  [ -n "$e" ] || e=0
-  [ "$b" = 1 ] && [ "$e" = 1 ] ||
-    { log "INSTALL_VERIFY=FAIL reason=DIAGNOSTICS_BLOCK_COUNT begin=$b end=$e"; return 1; }
-
-  # The uninstall path depends on these backups. Re-run the native restore
-  # precheck and independently verify HMI/boot backups before COMMIT.
-  [ -f "$CONTROLLER" ] || { log "INSTALL_VERIFY=FAIL reason=CONTROLLER_MISSING"; return 1; }
-  ALTS_INSTALL_TXN_ACTIVE=1 /bin/sh "$CONTROLLER" restore-precheck ||
-    { log "INSTALL_VERIFY=FAIL reason=NATIVE_RECOVERY_SET_INVALID"; return 1; }
-  verify_hmi_backup || { log "INSTALL_VERIFY=FAIL reason=HMI_BACKUP_INVALID"; return 1; }
-  verify_boot_backup || { log "INSTALL_VERIFY=FAIL reason=BOOT_DIAGNOSTICS_BACKUP_INVALID"; return 1; }
-
-  log "INSTALL_VERIFY=PASS runtime=owned jar=verified native_preload=verified diagnostics=verified sd_state=verified recovery_set=verified"
-  return 0
-}
-
-fail(){
-  msg=$1
-  log "ERROR: $msg"
-  finish_mounts >/dev/null 2>&1 || true
-  if [ "$ROLLING_BACK" = 0 ] && [ "$TXN_READY" = 1 ]; then
-    if rollback; then
-      log "INSTALL=ABORTED rollback=PASS persistent_state=PRE_INSTALL"
-    else
-      log "INSTALL=FAILED rollback=INCOMPLETE recovery_required=YES"
-    fi
-  else
-    log "INSTALL=REFUSED production_changed=NO"
-  fi
-  exit 1
-}
-
-ACTION=${1:-install}
-if [ "$ACTION" = recover ]; then
-  log "===== V3.1 transactional INSTALL recovery started ====="
-  recover_stale || { log "INSTALL_RECOVERY=FAIL"; exit 1; }
-  log "INSTALL_RECOVERY=PASS"
-  log "===== V3.1 transactional INSTALL recovery finished ====="
-  exit 0
-fi
-
-trap 'fail "install interrupted by signal"' 1 2 15
-log "===== V3.1 transactional INSTALL started ====="
-recover_stale || fail "previous install transaction could not be recovered"
-[ ! -e "$RESTORE_TXN" ] || fail "restore transaction is active"
-[ -f "$INSTALLER" ] || fail "installer missing"
-sh -n "$INSTALLER" || fail "installer shell syntax invalid"
-
-snapshot || { rm -rf "$TXN" 2>/dev/null || true; TXN_READY=0; fail "pre-install transaction snapshot failed"; }
-touch "$TXN/APPLYING" || fail "cannot mark install transaction APPLYING"
-
-shift || true
 if [ "$#" -gt 0 ]; then
   ALTS_INSTALL_TXN_ACTIVE=1 ALTS_OPLOG_CAPTURED=1 /bin/sh "$INSTALLER" "$@" || fail "install APPLY step failed"
 else
