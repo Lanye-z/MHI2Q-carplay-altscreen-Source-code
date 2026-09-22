@@ -93,6 +93,24 @@ else
 fi
 
 [ -n "$VOLUME" ] || { echo "FAIL: no Toolbox SD card discovered"; exit 1; }
+
+# All production mutations are owned by the persistent INSTALL transaction.
+# The outer operation-log wrapper re-enters this script once; that child then
+# hands control to the transaction wrapper.  The transaction calls back with
+# ALTS_INSTALL_TXN_ACTIVE=1 for the actual APPLY step.
+if [ "${ALTS_INSTALL_TXN_ACTIVE:-0}" != 1 ]; then
+    INSTALL_TXN="$VOLUME/Toolbox/scripts/altscreen_install_transaction.sh"
+    [ -f "$INSTALL_TXN" ] || {
+        echo "FAIL: transactional INSTALL wrapper missing: $INSTALL_TXN"
+        exit 127
+    }
+    if [ "$#" -gt 0 ]; then
+        exec /bin/sh "$INSTALL_TXN" install "$@"
+    else
+        exec /bin/sh "$INSTALL_TXN" install
+    fi
+fi
+
 CONTROLLER="$VOLUME/Toolbox/scripts/altscreen_chain_test.sh"
 MIRROR_RELEASE="$VOLUME/Toolbox/carplay_alt_screen/mirror_display/release"
 MIRROR_INFO="$MIRROR_RELEASE/BUILD_INFO.txt"
