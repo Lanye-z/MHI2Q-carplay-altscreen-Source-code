@@ -556,6 +556,7 @@ jobs:
           if is_v32 and sidecar_ready:
               mirror_updates = {
                   "vehicle_zip_status": "READY_FOR_VEHICLE_TEST",
+                  "hook_runtime_rebuild_required": "no",
                   "hook_layout_safearea_rebuild_required": "no",
                   "hook_safearea_policy": "V32_OEM_X_VISIBLE_Y",
                   "oem_layout_full_safearea_reference_455":
