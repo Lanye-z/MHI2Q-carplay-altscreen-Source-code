@@ -204,7 +204,11 @@ for marker in \
   'same_session=1' \
   'renderer_scale=0' \
   'OEM_STEPS_V1' \
+  'FRAME_HEALTH_ADAPTIVE' \
   'PHASE=WHEEL_ZOOM_ACCUMULATE' \
+  'PHASE=WHEEL_ZOOM_FRAME_STALL' \
+  'PHASE=WHEEL_ZOOM_FRAME_RECOVERED' \
+  'PHASE=WHEEL_ZOOM_PENDING_EXPIRE' \
   'PHASE=WHEEL_ZOOM_PACED_SEND' \
   'response_gates_next=0'
 do
