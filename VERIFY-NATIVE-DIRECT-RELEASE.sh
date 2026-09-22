@@ -409,6 +409,12 @@ grep -Fq '#define WHEEL_ZOOM_MONITOR_TICK_US 50000u' "$NATIVE" ||
     fail "wheel scheduler quantum must remain 50 ms"
 grep -Fq '#define WHEEL_ZOOM_MIN_PACE_US 100000u' "$NATIVE" ||
     fail "healthy target-follow minimum pacing must remain 100 ms"
+grep -Fq '#define WHEEL_ZOOM_SEND_RETRY_US 150000u' "$NATIVE" ||
+    fail "failed zoom submissions must use a 150 ms retry backoff"
+grep -Fq 'zoom_have_failed_send_time' "$NATIVE" ||
+    fail "failed zoom submission retry state missing"
+grep -Fq 'reason=successful_catchup' "$NATIVE" ||
+    fail "successful target catch-up is not rebased immediately"
 grep -Fq '#define WHEEL_ZOOM_FALLBACK_PACE_US 150000u' "$NATIVE" ||
     fail "target-follow telemetry fallback must remain 150 ms"
 grep -Fq '#define WHEEL_ZOOM_FRESH_FRAME_AGE_US 100000u' "$NATIVE" ||

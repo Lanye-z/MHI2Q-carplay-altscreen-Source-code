@@ -703,6 +703,7 @@ static int native_read_cluster_owned_for_zoom(void) {
 #define WHEEL_ZOOM_MONITOR_TICK_US 50000u
 #define ALT111_VIEW_AREA_POLL_US 100000u
 #define WHEEL_ZOOM_MIN_PACE_US 100000u
+#define WHEEL_ZOOM_SEND_RETRY_US 150000u
 #define WHEEL_ZOOM_FALLBACK_PACE_US 150000u
 #define WHEEL_ZOOM_FRESH_FRAME_AGE_US 100000u
 #define WHEEL_ZOOM_STALL_AGE_US 150000u
@@ -852,6 +853,7 @@ static void *native_monitor_worker(void *arg) {
     int zoom_send_frame_baseline_valid = 0;
     int zoom_have_send_time = 0;
     int zoom_have_input_time = 0;
+    int zoom_have_failed_send_time = 0;
     struct wheel_zoom_event zoom_events[WHEEL_ZOOM_BATCH_MAX];
     struct p111_frame_progress_snapshot zoom_progress;
     unsigned zoom_count, zoom_i;
@@ -860,6 +862,7 @@ static void *native_monitor_worker(void *arg) {
     uint32_t zoom_command_seq = 0;
     uint32_t zoom_last_send_at = 0;
     uint32_t zoom_last_input_at = 0;
+    uint32_t zoom_last_failed_send_at = 0;
     uint32_t zoom_stall_started_at = 0;
     uint32_t zoom_recovery_generation = 0;
     uint32_t zoom_recovery_frame_count = 0;
@@ -1022,7 +1025,7 @@ static void *native_monitor_worker(void *arg) {
         if (!zoom_gate &&
             (zoom_target_steps != 0 || zoom_sent_steps != 0 ||
              zoom_have_send_time || zoom_have_input_time ||
-             zoom_stall_latched)) {
+             zoom_have_failed_send_time || zoom_stall_latched)) {
             if (zoom_target_steps != zoom_sent_steps) {
                 altscreen_log(
                     "PHASE=WHEEL_ZOOM_TARGET_RESET receiver=%p stream=%p "
@@ -1037,6 +1040,8 @@ static void *native_monitor_worker(void *arg) {
             zoom_last_send_at = 0;
             zoom_have_input_time = 0;
             zoom_have_send_time = 0;
+            zoom_have_failed_send_time = 0;
+            zoom_last_failed_send_at = 0;
             zoom_stall_started_at = 0;
             zoom_stall_latched = 0;
             zoom_first_step_pending = 0;
@@ -1067,6 +1072,8 @@ static void *native_monitor_worker(void *arg) {
                 zoom_last_input_at = 0;
                 zoom_have_send_time = 0;
                 zoom_have_input_time = 0;
+                zoom_have_failed_send_time = 0;
+                zoom_last_failed_send_at = 0;
                 zoom_stall_started_at = 0;
                 zoom_stall_latched = 0;
                 zoom_first_step_pending = 0;
@@ -1130,6 +1137,7 @@ static void *native_monitor_worker(void *arg) {
 
         if (zoom_target_steps == zoom_sent_steps) {
             zoom_first_step_pending = 0;
+            zoom_have_failed_send_time = 0;
             if (zoom_stall_latched) {
                 altscreen_log(
                     "PHASE=WHEEL_ZOOM_STALL_CANCELLED receiver=%p stream=%p "
@@ -1280,6 +1288,11 @@ static void *native_monitor_worker(void *arg) {
                 }
             }
 
+            if (send_ready && zoom_have_failed_send_time &&
+                (uint32_t)(wheel_now - zoom_last_failed_send_at) <
+                    WHEEL_ZOOM_SEND_RETRY_US)
+                send_ready = 0;
+
             if (send_ready) {
                 int sent_before = zoom_sent_steps;
                 int attempted_sent;
@@ -1297,28 +1310,33 @@ static void *native_monitor_worker(void *arg) {
                 send_rc = alt_send_cluster_zoom(
                     receiver, stream, generation,
                     zoom_command_seq, direction);
-                zoom_last_send_at = wheel_now;
-                zoom_have_send_time = 1;
-
-                if (send_rc == 0) {
-                    zoom_sent_steps = attempted_sent;
-                    zoom_first_step_pending = 0;
-                }
 
                 memset(&after_send_progress, 0,
                        sizeof(after_send_progress));
-                after_send_progress_ok = p111_frame_tap_get_progress(
-                    stream, &after_send_progress);
-                if (after_send_progress_ok) {
-                    zoom_send_frame_baseline_valid = 1;
-                    zoom_send_frame_generation =
-                        after_send_progress.generation;
-                    zoom_send_frame_count =
-                        after_send_progress.frame_count;
+                after_send_progress_ok = 0;
+                if (send_rc == 0) {
+                    zoom_last_send_at = wheel_now;
+                    zoom_have_send_time = 1;
+                    zoom_have_failed_send_time = 0;
+                    zoom_sent_steps = attempted_sent;
+                    zoom_first_step_pending = 0;
+
+                    after_send_progress_ok = p111_frame_tap_get_progress(
+                        stream, &after_send_progress);
+                    if (after_send_progress_ok) {
+                        zoom_send_frame_baseline_valid = 1;
+                        zoom_send_frame_generation =
+                            after_send_progress.generation;
+                        zoom_send_frame_count =
+                            after_send_progress.frame_count;
+                    } else {
+                        zoom_send_frame_baseline_valid = 0;
+                        zoom_send_frame_generation = 0;
+                        zoom_send_frame_count = 0;
+                    }
                 } else {
-                    zoom_send_frame_baseline_valid = 0;
-                    zoom_send_frame_generation = 0;
-                    zoom_send_frame_count = 0;
+                    zoom_last_failed_send_at = wheel_now;
+                    zoom_have_failed_send_time = 1;
                 }
 
                 altscreen_log(
@@ -1344,11 +1362,23 @@ static void *native_monitor_worker(void *arg) {
                     WHEEL_ZOOM_MIN_PACE_US / 1000u,
                     send_rc);
 
-                if (send_rc != 0)
+                if (send_rc != 0) {
                     p1404_cockpit_native_zoom_result(
                         receiver, stream, generation,
                         zoom_command_seq, direction,
                         send_rc, 0);
+                } else if (zoom_target_steps == zoom_sent_steps &&
+                           zoom_target_steps != 0) {
+                    altscreen_log(
+                        "PHASE=WHEEL_ZOOM_TARGET_REBASE receiver=%p stream=%p "
+                        "generation=%u settled_relative_level=%d "
+                        "action=REBASE_TARGET_AND_SENT_TO_ZERO "
+                        "reason=successful_catchup outstanding_limit=%d",
+                        receiver, stream, generation, zoom_target_steps,
+                        WHEEL_ZOOM_TARGET_LIMIT);
+                    zoom_target_steps = 0;
+                    zoom_sent_steps = 0;
+                }
             }
         }
 

@@ -4,6 +4,7 @@
 TARGET_LIMIT = 12
 MAX_EVENT_STEPS = 16
 MIN_PACE_MS = 100
+SEND_RETRY_MS = 150
 FALLBACK_PACE_MS = 150
 FRESH_FRAME_AGE_MS = 100
 STALL_AGE_MS = 150
@@ -34,9 +35,13 @@ class Model:
         self.sent_level = 0
         self.have_input_time = False
         self.have_send_time = False
+        self.have_failed_send_time = False
         self.last_input_ms = 0
         self.last_send_ms = 0
+        self.last_failed_send_ms = 0
         self.sent = []
+        self.attempts = []
+        self.failures_remaining = 0
         self.frame_count = 0
         self.last_frame_ms = None
         self.telemetry = True
@@ -60,6 +65,7 @@ class Model:
             self.stall = False
             self.stall_start_ms = None
             self.recovery_base = None
+        self.have_failed_send_time = False
         if self.target != 0:
             self.target = 0
             self.sent_level = 0
@@ -90,6 +96,8 @@ class Model:
         self.last_send_ms = 0
         self.have_input_time = False
         self.have_send_time = False
+        self.have_failed_send_time = False
+        self.last_failed_send_ms = 0
         self.stall = False
         self.stall_start_ms = None
         self.first_step_pending = False
@@ -170,16 +178,35 @@ class Model:
         else:
             ready = elapsed >= FALLBACK_PACE_MS
 
+        if (
+            ready
+            and self.have_failed_send_time
+            and elapsed_u32(now_ms, self.last_failed_send_ms) < SEND_RETRY_MS
+        ):
+            ready = False
+
         if not ready:
             return
 
         direction = "IN" if self.target < self.sent_level else "OUT"
+        self.attempts.append((u32(now_ms), direction))
+        if self.failures_remaining:
+            self.failures_remaining -= 1
+            self.last_failed_send_ms = u32(now_ms)
+            self.have_failed_send_time = True
+            return
+
         self.sent_level += -1 if direction == "IN" else 1
         self.sent.append((u32(now_ms), direction, self.target, self.sent_level))
         self.last_send_ms = u32(now_ms)
         self.have_send_time = True
+        self.have_failed_send_time = False
         self.first_step_pending = False
         self.send_frame_base = self.frame_count if self.telemetry else None
+        if self.target == self.sent_level and self.target != 0:
+            self.target = 0
+            self.sent_level = 0
+            self.rebases += 1
 
 
 def test_first_detent_is_immediate():
@@ -341,6 +368,40 @@ def test_u32_wrap_zero_is_not_a_sentinel():
     assert len(m.sent) == 2
 
 
+def test_send_failure_does_not_advance_success_state():
+    m = Model()
+    m.telemetry = False
+    m.failures_remaining = 1
+    m.add(0, 1)
+    assert m.attempts == [(0, "OUT")]
+    assert m.sent == []
+    assert not m.have_send_time
+    assert m.send_frame_base is None
+    assert m.target == 1 and m.sent_level == 0
+    m.tick(50)
+    assert len(m.attempts) == 1
+    m.tick(149)
+    assert len(m.attempts) == 1
+    m.tick(150)
+    assert len(m.attempts) == 2
+    assert m.sent == [(150, "OUT", 1, 1)]
+    assert m.have_send_time
+    assert not m.have_failed_send_time
+    assert m.target == m.sent_level == 0
+
+
+def test_successful_catchup_rebases_before_next_event():
+    m = Model()
+    m.telemetry = False
+    m.add(0, 1)
+    assert m.target == m.sent_level == 0
+    m.add(50, 1)
+    assert len(m.sent) == 1
+    m.tick(100)
+    assert len(m.sent) == 2
+    assert m.target == m.sent_level == 0
+
+
 def test_gate_close_clears_valid_zero_timestamp_state():
     m = Model()
     m.telemetry = False
@@ -367,6 +428,8 @@ def main():
     test_limit_applies_to_outstanding_error_not_session_total()
     test_fast_backlog_is_bounded_without_permanent_ceiling()
     test_u32_wrap_zero_is_not_a_sentinel()
+    test_send_failure_does_not_advance_success_state()
+    test_successful_catchup_rebases_before_next_event()
     test_gate_close_clears_valid_zero_timestamp_state()
     print(
         "WHEEL_ZOOM_PACING_TEST=PASS "
@@ -375,7 +438,8 @@ def main():
         "recovery_frames=3 fresh_age_ms=100 stall_age_ms=150 "
         "burst_gap_ms=300 stall_abort_quiet_ms=350 "
         "stall_abort_ms=1200 outstanding_limit=12 "
-        "settled_rebase=YES u32_zero_sentinel=NO"
+        "settled_rebase=IMMEDIATE send_retry_ms=150 "
+        "submit_failure_advances_state=NO u32_zero_sentinel=NO"
     )
 
 

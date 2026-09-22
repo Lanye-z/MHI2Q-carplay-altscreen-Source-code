@@ -421,6 +421,12 @@ jobs:
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
           grep -Fq '#define WHEEL_ZOOM_MIN_PACE_US 100000u' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq '#define WHEEL_ZOOM_SEND_RETRY_US 150000u' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'zoom_have_failed_send_time' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'reason=successful_catchup' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
           grep -Fq '#define WHEEL_ZOOM_FALLBACK_PACE_US 150000u' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
           grep -Fq '#define WHEEL_ZOOM_FRESH_FRAME_AGE_US 100000u' \
@@ -493,7 +499,7 @@ jobs:
           sh -n Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh
           sh -n Toolbox/scripts/status_mmi_cockpit_carplay_test.sh
 
-          echo "WHEEL_PROTOCOL_STATIC=PASS wire=changeMapZoomLevel params=uuid+zoomDirection direction=0_in_1_out event_model=OEM_STEPS_V1 scheduler=OEM_TARGET_FOLLOW_V1 tick_ms=50 min_pace_ms=100 fallback_ms=150 recovery_frames=3 stall_age_ms=150 burst_gap_ms=300 stall_abort_quiet_ms=350 stall_abort_ms=1200 outstanding_limit=12 settled_rebase=YES u32_zero_sentinel=NO opposite=retarget local_pixel_zoom=NO gate=java80_verified_ownership"
+          echo "WHEEL_PROTOCOL_STATIC=PASS wire=changeMapZoomLevel params=uuid+zoomDirection direction=0_in_1_out event_model=OEM_STEPS_V1 scheduler=OEM_TARGET_FOLLOW_V1 tick_ms=50 min_pace_ms=100 send_retry_ms=150 fallback_ms=150 recovery_frames=3 stall_age_ms=150 burst_gap_ms=300 stall_abort_quiet_ms=350 stall_abort_ms=1200 outstanding_limit=12 settled_rebase=IMMEDIATE submit_failure_advances_state=NO u32_zero_sentinel=NO opposite=retarget local_pixel_zoom=NO gate=java80_verified_ownership"
 
       - name: Refresh package identities in test artifact
         run: |
@@ -573,6 +579,10 @@ jobs:
               "wheel_zoom_pacing": "TARGET_FOLLOW_STALL_GUARD",
               "wheel_zoom_scheduler_tick_ms": "50",
               "wheel_zoom_min_pace_ms": "100",
+              "wheel_zoom_send_retry_ms": "150",
+              "wheel_zoom_submit_failure":
+                  "DO_NOT_ADVANCE_SENT_OR_SUCCESS_BASELINE",
+              "wheel_zoom_catchup_rebase": "IMMEDIATE_AFTER_SUCCESS",
               "wheel_zoom_fallback_pace_ms": "150",
               "wheel_zoom_recovery_frames": "3",
               "wheel_zoom_fresh_frame_age_ms": "100",
@@ -676,6 +686,10 @@ jobs:
                   "wheel_zoom_pacing": "TARGET_FOLLOW_STALL_GUARD",
                   "wheel_zoom_scheduler_tick_ms": "50",
                   "wheel_zoom_min_pace_ms": "100",
+                  "wheel_zoom_send_retry_ms": "150",
+                  "wheel_zoom_submit_failure":
+                      "DO_NOT_ADVANCE_SENT_OR_SUCCESS_BASELINE",
+                  "wheel_zoom_catchup_rebase": "IMMEDIATE_AFTER_SUCCESS",
                   "wheel_zoom_fallback_pace_ms": "150",
                   "wheel_zoom_recovery_frames": "3",
                   "wheel_zoom_fresh_frame_age_ms": "100",
