@@ -33,8 +33,12 @@ grep -Fq '#define ALTSCREEN_VOLATILE_ROOT "/tmp"' "$PATHS" || fail "native hook 
 # Reboot-recoverable transactions and persistent logs belong on SD.
 grep -Fq 'TXN_ROOT="$SD/install-transaction"' "$INSTALL_TXN" || fail "INSTALL transaction root is not on SD"
 grep -Fq 'TXN="$TXN_ROOT/active"' "$INSTALL_TXN" || fail "INSTALL transaction active state is not reboot-recoverable"
+grep -Fq "printf '%s\\n' 2 > \"\$TXN/FORMAT\"" "$INSTALL_TXN" ||
+    fail "INSTALL transaction format version marker missing"
 grep -Fq 'INSTALL_TRANSACTION=PREPARED persistent_state=PRE_INSTALL durable=YES' "$INSTALL_TXN" ||
     fail "INSTALL PREPARED marker is not durably synced"
+grep -Fq 'cannot durably commit install transaction' "$INSTALL_TXN" ||
+    fail "INSTALL COMMITTED marker is not durably synced"
 grep -Fq 'reason=PREPARED_SYNC_FAILED production_changed=NO' "$INSTALL_TXN" ||
     fail "INSTALL does not fail closed when PREPARED sync fails"
 grep -Fq 'SNAPSHOT_INTEGRITY=PASS' "$INSTALL_TXN" ||
@@ -58,6 +62,18 @@ grep -Fq 'install_transaction_cleanup_terminal' "$CHAIN" ||
 grep -Fq 'INSTALL_TRANSACTION=TERMINAL_STALE' "$CHAIN" ||
     fail "STATUS cannot distinguish terminal stale INSTALL transaction"
 grep -Fq 'ACTIVE_INSTALL_TRANSACTION=DETECTED' "$RESTORE_TXN" || fail "RESTORE does not recover interrupted INSTALL first"
+grep -Fq "printf '%s\\n' 2 > \"\$TXN/FORMAT\"" "$RESTORE_TXN" ||
+    fail "RESTORE transaction format version marker missing"
+grep -Fq 'RESTORE_TRANSACTION=PREPARED durable=YES' "$RESTORE_TXN" ||
+    fail "RESTORE PREPARED marker is not durably synced"
+grep -Fq 'RESTORE=REFUSED reason=PREPARED_SYNC_FAILED production_changed=NO' "$RESTORE_TXN" ||
+    fail "RESTORE does not fail closed when PREPARED sync fails"
+grep -Fq 'ROLLBACK=REFUSED reason=SNAPSHOT_INTEGRITY_FAILED' "$RESTORE_TXN" ||
+    fail "RESTORE may destructively roll back from a corrupt snapshot"
+grep -Fq 'ROLLBACK_VERIFY=PASS' "$RESTORE_TXN" ||
+    fail "RESTORE rollback exact-state verification missing"
+grep -Fq 'cannot durably commit restore transaction' "$RESTORE_TXN" ||
+    fail "RESTORE COMMITTED marker is not durably synced"
 grep -Fq 'restore-transaction/active' "$RESTORE_TXN" || fail "RESTORE transaction is not reboot-recoverable on SD"
 grep -Fq 'staging/restore-apply' "$RESTORE_APPLY" || fail "RESTORE APPLY scratch is not SD staging"
 grep -Fq 'STAGING_ROOT/controller-txn' "$CTRL" || fail "controller scratch is not SD staging"
