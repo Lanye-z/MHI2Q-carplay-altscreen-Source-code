@@ -52,6 +52,10 @@ grep -Fq 'same_bytes "$JAR_SOURCE" "$JAR_TARGET"' "$INSTALL" ||
     fail "current package JAR identity is not recognized as managed"
 grep -Fq 'historical_managed_jar' "$INSTALL" ||
     fail "historical managed-JAR classifier missing"
+grep -Fq 'com/luka/carplay/cluster/WheelZoomBridge.class' "$INSTALL" ||
+    fail "previous V3 JAR detection is not stable across CI rebuild checksums"
+grep -Fq '[ "$current_package_jar" != YES ] && historical_managed_jar "$JAR_TARGET"' "$INSTALL" ||
+    fail "current-package and historical-JAR reasons can overlap"
 
 # INSTALL must explain exactly which managed residue triggered fail-closed.
 grep -Fq 'RUNTIME_OWNER_PRESENT=' "$INSTALL" || fail "INSTALL does not report runtime-owner residue"
