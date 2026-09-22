@@ -119,6 +119,7 @@ validate_file_snapshot(){
     if [ -f "$TXN/meta/$name.cksum" ]; then
       [ "$(cksum < "$src")" = "$(cat "$TXN/meta/$name.cksum")" ] || return 1
     else
+      [ "$(cat "$TXN/FORMAT" 2>/dev/null || true)" != 2 ] || return 1
       log "SNAPSHOT_INTEGRITY=LEGACY_WEAK kind=file name=$name reason=missing_cksum_metadata"
     fi
   else
@@ -170,6 +171,7 @@ validate_dir_snapshot(){
       cmp -s "$TXN/meta/$name.manifest" "$now" || { rm -f "$now" 2>/dev/null || true; return 1; }
       rm -f "$now" 2>/dev/null || true
     else
+      [ "$(cat "$TXN/FORMAT" 2>/dev/null || true)" != 2 ] || return 1
       log "SNAPSHOT_INTEGRITY=LEGACY_WEAK kind=dir name=$name reason=missing_manifest_metadata"
     fi
   else
@@ -258,6 +260,7 @@ snapshot(){
   chain_lock_precheck || return 1
   rm -rf "$TXN" 2>/dev/null || return 1
   ensure_dirs "$TXN/files" "$TXN/dirs" "$TXN/meta" || return 1
+  printf '%s\n' 2 > "$TXN/FORMAT" || return 1
 
   STARTUP=$(find_startup) || { log "INSTALL=REFUSED reason=STARTUP_NOT_FOUND production_changed=NO"; return 1; }
   printf '%s\n' "$STARTUP" > "$TXN/startup.path" || return 1
@@ -511,10 +514,11 @@ fi
 verify_installed || fail "final installed-state verification failed"
 sync >/dev/null 2>&1 || fail "sync failed before install commit"
 touch "$TXN/COMMITTED" || fail "cannot commit install transaction"
+sync >/dev/null 2>&1 || fail "cannot durably commit install transaction"
 TXN_READY=0
-sync >/dev/null 2>&1 || log "WARN: final post-commit sync reported failure; installed state was already verified and committed"
 log "INSTALL=PASS transaction=COMMITTED persistent_state=INSTALLED reboot_required=YES"
 rm -rf "$TXN" 2>/dev/null || log "WARN: committed install transaction retained; next INSTALL/RESTORE will clean it"
+sync >/dev/null 2>&1 || log "WARN: committed transaction cleanup was not durably synced; terminal COMMITTED residue is non-blocking"
 trap - 1 2 15
 log "===== V3.1 transactional INSTALL finished ====="
 exit 0
