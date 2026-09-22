@@ -17,6 +17,55 @@ ensure_dirs() {
     return 0
 }
 
+# Persist the complete INSTALL transaction on the currently inserted SD card.
+# This wrapper runs before any production mutation.  The child re-enters the
+# same script with ALTS_OPLOG_CAPTURED=1 so every stdout/stderr line from this
+# installer and its nested controllers is captured in one operation log.
+if [ "${ALTS_OPLOG_CAPTURED:-0}" != 1 ]; then
+    CAPTURE_ENTRY="$0"
+    RESOLVED_CAPTURE=$(command -v -- "$CAPTURE_ENTRY" 2>/dev/null)
+    [ -n "$RESOLVED_CAPTURE" ] && CAPTURE_ENTRY="$RESOLVED_CAPTURE"
+
+    journal_volume=""
+    if [ "${ALTSCREEN_CHAIN_TESTING:-0}" = 1 ]; then
+        journal_volume=${ALTSCREEN_CHAIN_VOLUME:-}
+        case "$journal_volume" in /tmp/*|/var/tmp/*) ;; *) echo "FAIL: invalid ALTSCREEN_CHAIN_VOLUME"; exit 2 ;; esac
+    else
+        for candidate in /net/mmx/fs/sda0 /net/mmx/fs/sda1 /net/mmx/fs/sdb0 /net/mmx/fs/sdb1 /fs/sda0 /fs/sda1 /fs/sdb0 /fs/sdb1; do
+            if [ -d "$candidate/Toolbox" ]; then journal_volume=$candidate; break; fi
+        done
+    fi
+    [ -n "$journal_volume" ] && [ -d "$journal_volume/Toolbox" ] || {
+        echo "FAIL: no Toolbox SD card discovered; INSTALL not started and no production files changed"
+        exit 1
+    }
+
+    journal_dir="$journal_volume/MMI-Cockpit-Carplay/logs/operations"
+    ensure_dirs "$journal_dir" 2>/dev/null || {
+        echo "FAIL: cannot create persistent INSTALL log directory on SD: $journal_dir"
+        exit 1
+    }
+    journal_stamp=$(date +%Y%m%d_%H%M%S 2>/dev/null || echo unknown)
+    journal="$journal_dir/install_${journal_stamp}_$.log"
+    if ! (printf 'OP_BEGIN action=INSTALL script=%s storage=SD\n' "$CAPTURE_ENTRY" > "$journal") 2>/dev/null; then
+        echo "FAIL: cannot create persistent INSTALL log on SD: $journal"
+        exit 1
+    fi
+    printf 'DIAGNOSTICS_VOLUME=%s\n' "$journal_volume" >> "$journal"
+
+    if [ "$#" -gt 0 ]; then
+        ALTS_OPLOG_CAPTURED=1 /bin/sh "$CAPTURE_ENTRY" "$@" >> "$journal" 2>&1
+    else
+        ALTS_OPLOG_CAPTURED=1 /bin/sh "$CAPTURE_ENTRY" >> "$journal" 2>&1
+    fi
+    journal_rc=$?
+    printf 'OP_END action=INSTALL rc=%s\n' "$journal_rc" >> "$journal"
+    printf 'OPERATION_LOG=%s\n' "$journal" >> "$journal"
+    sync >/dev/null 2>&1 || true
+    cat "$journal"
+    exit "$journal_rc"
+fi
+
 BASE="$0"
 RESOLVED=$(command -v -- "$BASE" 2>/dev/null)
 [ -n "$RESOLVED" ] || RESOLVED="$BASE"
@@ -118,11 +167,58 @@ known_managed_jar(){
     esac
 }
 live_managed_install_detected(){
-    [ -f "$MANAGED_RUNTIME_OWNER" ] && return 0
-    grep -Fq 'libcarplay_altscreen.so' "$LIVE_JSON_SI" 2>/dev/null && return 0
-    [ -f "$JAR_TARGET" ] && same_bytes "$JAR_SOURCE" "$JAR_TARGET" && return 0
-    [ -f "$JAR_TARGET" ] && known_managed_jar "$JAR_TARGET" && return 0
-    return 1
+    managed=0
+    owner_present=NO
+    si_hook_present=NO
+    current_package_jar=NO
+    known_managed=NO
+    known_managed_match=NONE
+    target_jar_present=NO
+    target_jar_size=ABSENT
+    target_jar_cksum=ABSENT
+
+    if [ -f "$MANAGED_RUNTIME_OWNER" ]; then
+        owner_present=YES
+        managed=1
+    fi
+    if grep -Fq 'libcarplay_altscreen.so' "$LIVE_JSON_SI" 2>/dev/null; then
+        si_hook_present=YES
+        managed=1
+    fi
+    if [ -f "$JAR_TARGET" ]; then
+        target_jar_present=YES
+        target_jar_size=$(file_size "$JAR_TARGET")
+        target_jar_cksum=$(file_cksum "$JAR_TARGET")
+        if same_bytes "$JAR_SOURCE" "$JAR_TARGET"; then
+            current_package_jar=YES
+            managed=1
+        fi
+        if known_managed_jar "$JAR_TARGET"; then
+            known_managed=YES
+            known_managed_match="$target_jar_size:$target_jar_cksum"
+            managed=1
+        fi
+    fi
+
+    echo "LIVE_MANAGED_CHECK_BEGIN"
+    echo "RUNTIME_OWNER_PRESENT=$owner_present path=/mnt/app/root/carplay-altscreen/.mmi-cockpit-carplay-runtime-owner"
+    echo "SMARTPHONE_INTEGRATOR_HOOK=$si_hook_present path=/mnt/system/etc/eso/production/smartphone_integrator.json token=libcarplay_altscreen.so"
+    echo "JAR_TARGET_PRESENT=$target_jar_present path=/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar size=$target_jar_size cksum=$target_jar_cksum"
+    echo "CURRENT_PACKAGE_JAR_PRESENT=$current_package_jar expected_size=$EXPECTED_SIZE expected_cksum=$EXPECTED_CKSUM"
+    echo "KNOWN_MANAGED_JAR_PRESENT=$known_managed matched_identity=$known_managed_match"
+    if [ "$managed" = 1 ]; then
+        reasons=""
+        [ "$owner_present" != YES ] || reasons="${reasons}RUNTIME_OWNER_PRESENT,"
+        [ "$si_hook_present" != YES ] || reasons="${reasons}SMARTPHONE_INTEGRATOR_PRELOAD_PRESENT,"
+        [ "$current_package_jar" != YES ] || reasons="${reasons}CURRENT_PACKAGE_JAR_PRESENT,"
+        [ "$known_managed" != YES ] || reasons="${reasons}KNOWN_MANAGED_JAR_PRESENT,"
+        reasons=${reasons%,}
+        echo "LIVE_MANAGED_SUMMARY=MANAGED reasons=$reasons"
+    else
+        echo "LIVE_MANAGED_SUMMARY=CLEAN reasons=NONE"
+    fi
+    echo "LIVE_MANAGED_CHECK_END"
+    [ "$managed" = 1 ]
 }
 mount_app_rw(){ [ "$TESTING" = 1 ] || mount -uw /mnt/app; }
 mount_app_ro(){ [ "$TESTING" = 1 ] || mount -ur /mnt/app; }
@@ -152,6 +248,7 @@ backup_original_jar(){
     if live_managed_install_detected; then
         echo "FAIL: trusted original Java HMI backup is absent but the live system is already managed by this project; refusing to snapshot a V2/V3 JAR as OEM"
         echo "ACTION=REUSE_ORIGINAL_SD_BACKUP_OR_RESTORE_STOCK_FIRST"
+        echo "ACTION_DETAIL=See LIVE_MANAGED_CHECK_* above to identify the exact residual condition before changing or deleting anything"
         return 1
     fi
     rm -rf "$BACKUP_TMP" 2>/dev/null || true
