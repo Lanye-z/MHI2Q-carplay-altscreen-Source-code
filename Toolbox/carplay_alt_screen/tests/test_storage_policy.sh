@@ -31,7 +31,8 @@ grep -Fq 'AUTOLOG=/tmp/altscreen_autostart.log' "$START" || fail "autostart log 
 grep -Fq '#define ALTSCREEN_VOLATILE_ROOT "/tmp"' "$PATHS" || fail "native hook log root is not flat /tmp"
 
 # Reboot-recoverable transactions and persistent logs belong on SD.
-grep -Fq 'install-transaction/active' "$INSTALL_TXN" || fail "INSTALL transaction is not reboot-recoverable on SD"
+grep -Fq 'TXN_ROOT="$SD/install-transaction"' "$INSTALL_TXN" || fail "INSTALL transaction root is not on SD"
+grep -Fq 'TXN="$TXN_ROOT/active"' "$INSTALL_TXN" || fail "INSTALL transaction active state is not reboot-recoverable"
 grep -Fq 'INSTALL_TRANSACTION=PREPARED' "$INSTALL_TXN" || fail "INSTALL PREPARED marker missing"
 grep -Fq 'INSTALL_ROLLBACK=PASS persistent_state=PRE_INSTALL' "$INSTALL_TXN" || fail "INSTALL rollback contract missing"
 grep -Fq 'INSTALL_VERIFY=PASS' "$INSTALL_TXN" || fail "INSTALL final verifier missing"
