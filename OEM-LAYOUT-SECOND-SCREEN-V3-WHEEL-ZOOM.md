@@ -152,13 +152,15 @@ first command in a session
   -> send immediately
 
 after each command
-  -> wait at least 100 ms
+  -> wait at least 120 ms
   -> require >= 3 new decoded frames
   -> require latest decoded frame age <= 100 ms
   -> then allow the next pending step
 ```
 
 If the decoded source becomes stale for >=150 ms, the scheduler latches a render stall, resets its recovery baseline, and waits for **three new recovery frames** before another zoom command is allowed. This directly targets the Amap behavior seen in vehicle logs where the type111 stream froze for roughly 0.4–0.47 s after rapid zoom input.
+
+With the existing 100 ms control-monitor cadence, the 120 ms minimum means a healthy stream normally dispatches the next step on the ~200 ms poll rather than at ~100 ms; slower frame production or a stall extends that interval automatically.
 
 If process-local decoded-frame telemetry is temporarily unavailable, the scheduler falls back to the previous conservative 200 ms timer. Pending intent is also expired after 1.5 s without new wheel input so a stalled map cannot replay old zoom commands much later.
 
@@ -259,7 +261,7 @@ Java callback
   -> clamp pending to four steps
   -> first command immediately
   -> decoded-frame health gate
-       minimum wait = 100 ms
+       minimum wait = 120 ms
        fresh frames >= 3
        latest frame age <= 100 ms
        stall threshold = 150 ms
