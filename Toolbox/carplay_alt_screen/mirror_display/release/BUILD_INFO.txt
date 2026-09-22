@@ -11,7 +11,7 @@ window58_readback=disabled
 sidecar_screen_read_window=disabled
 hook_screen_read_window=enabled
 hook_runtime_policy=uncapped_source_callbacks
-hook_runtime_rebuild_required=no
+hook_runtime_rebuild_required=yes
 window_manager_context=disabled_in_sidecar
 
 mirror_sink=displayable3_gles
