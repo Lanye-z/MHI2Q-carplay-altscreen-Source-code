@@ -87,12 +87,141 @@ snap_file(){
   fi
 }
 validate_file_snapshot(){
+  name=$1; src="$TXN/files/$name"
+  kind=$(snapshot_marker_kind "$src") || return 1
+  if [ "$kind" = present ]; then
+    [ -f "$src" ] || return 1
+    if [ -f "$TXN/meta/$name.cksum" ]; then
+      [ "$(cksum < "$src")" = "$(cat "$TXN/meta/$name.cksum")" ] || return 1
+    else
+      log "RESTORE_SNAPSHOT_INTEGRITY=LEGACY_WEAK kind=file name=$name reason=missing_cksum_metadata"
+    fi
+  else
+    [ ! -e "$src" ] || return 1
+  fi
+  return 0
+}
+restore_file(){
+  dst=$1; name=$2; mode=$3; src="$TXN/files/$name"
+  kind=$(snapshot_marker_kind "$src") || return 1
+  if [ "$kind" = present ]; then
+    validate_file_snapshot "$name" || return 1
+    ensure_dirs "$(dirname -- "$dst")" || return 1
+    tmp="${dst}.restore.new"
+    rm -f "$tmp" 2>/dev/null || true
+    cp "$src" "$tmp" && chmod "$mode" "$tmp" && same "$src" "$tmp" && mv "$tmp" "$dst"
+  else
+    rm -f "$dst"
+  fi
+}
+verify_file_snapshot(){
+  dst=$1; name=$2; src="$TXN/files/$name"
+  kind=$(snapshot_marker_kind "$src") || return 1
+  if [ "$kind" = present ]; then same "$src" "$dst"; else [ ! -e "$dst" ]; fi
+}
+snap_dir(){
+  src=$1; name=$2; dst="$TXN/dirs/$name"
+  if [ -d "$src" ]; then
+    ensure_dirs "$dst" || return 1
+    cp -R "$src/." "$dst/" || return 1
+    same_dir_exact "$src" "$dst" || return 1
+    dir_manifest "$dst" "$TXN/meta/$name.manifest" || return 1
+    touch "$TXN/dirs/$name.present"
+  else
+    touch "$TXN/dirs/$name.absent"
+  fi
+}
+validate_dir_snapshot(){
+  name=$1; src="$TXN/dirs/$name"
+  kind=$(snapshot_marker_kind "$TXN/dirs/$name") || return 1
+  if [ "$kind" = present ]; then
+    [ -d "$src" ] || return 1
+    if [ -f "$TXN/meta/$name.manifest" ]; then
+      now="$TXN/meta/$name.verify.current"
+      dir_manifest "$src" "$now" || { rm -f "$now" 2>/dev/null || true; return 1; }
+      cmp -s "$TXN/meta/$name.manifest" "$now" || { rm -f "$now" 2>/dev/null || true; return 1; }
+      rm -f "$now" 2>/dev/null || true
+    else
+      log "RESTORE_SNAPSHOT_INTEGRITY=LEGACY_WEAK kind=dir name=$name reason=missing_manifest_metadata"
+    fi
+  else
+    [ ! -e "$src" ] || return 1
+  fi
+  return 0
+}
+restore_dir(){
+  dst=$1; name=$2; src="$TXN/dirs/$name"
+  kind=$(snapshot_marker_kind "$TXN/dirs/$name") || return 1
+  if [ "$kind" = present ]; then
+    validate_dir_snapshot "$name" || return 1
+    tmp="${dst}.restore.new"
+    rm -rf "$tmp" 2>/dev/null || true
+    ensure_dirs "$tmp" || return 1
+    cp -R "$src/." "$tmp/" || return 1
+    same_dir_exact "$src" "$tmp" || { rm -rf "$tmp" 2>/dev/null || true; return 1; }
+    rm -rf "$dst" 2>/dev/null || { rm -rf "$tmp" 2>/dev/null || true; return 1; }
+    mv "$tmp" "$dst"
+  else
+    rm -rf "$dst" 2>/dev/null || return 1
+  fi
+}
+verify_dir_snapshot(){
+  dst=$1; name=$2; src="$TXN/dirs/$name"
+  kind=$(snapshot_marker_kind "$TXN/dirs/$name") || return 1
+  if [ "$kind" = present ]; then [ -d "$dst" ] && same_dir_exact "$src" "$dst"; else [ ! -e "$dst" ]; fi
+}
+
+validate_restore_snapshot(){
+  s=$(cat "$TXN/startup.path" 2>/dev/null || true)
+  case "$s" in
+    "$(p /mnt/system/etc/boot/startup.sh)"|"$(p /etc/boot/startup.sh)") ;;
+    *) log "RESTORE_SNAPSHOT_INTEGRITY=FAIL reason=invalid_startup_path"; return 1 ;;
+  esac
+  for n in startup.sh smartphone_integrator.json dio_manager.json pf.conf carplay_hook.jar legacy_hook libtarget_libairplay.so libtarget_libairplax.so libtarget_libNmeBaseClasses.so; do
+    validate_file_snapshot "$n" || { log "RESTORE_SNAPSHOT_INTEGRITY=FAIL kind=file name=$n"; return 1; }
+  done
+  lp=0; la=0
+  [ ! -f "$TXN/libtarget.dir_present" ] || lp=1
+  [ ! -f "$TXN/libtarget.dir_absent" ] || la=1
+  [ $((lp + la)) -eq 1 ] || { log "RESTORE_SNAPSHOT_INTEGRITY=FAIL kind=libtarget_presence"; return 1; }
+  for n in runtime state; do
+    validate_dir_snapshot "$n" || { log "RESTORE_SNAPSHOT_INTEGRITY=FAIL kind=dir name=$n"; return 1; }
+  done
+  log "RESTORE_SNAPSHOT_INTEGRITY=PASS"
+  return 0
+}
+
+verify_restore_rollback(){
+  s=$(cat "$TXN/startup.path" 2>/dev/null || true)
+  [ -n "$s" ] || return 1
+  verify_file_snapshot "$s" startup.sh || return 1
+  verify_file_snapshot "$SI" smartphone_integrator.json || return 1
+  verify_file_snapshot "$DIO" dio_manager.json || return 1
+  verify_file_snapshot "$PF" pf.conf || return 1
+  verify_file_snapshot "$JAR" carplay_hook.jar || return 1
+  verify_file_snapshot "$LEGACY_HOOK" legacy_hook || return 1
+  for n in libairplay.so libairplax.so libNmeBaseClasses.so; do
+    verify_file_snapshot "$LIBTARGET/$n" "libtarget_$n" || return 1
+  done
+  if [ -f "$TXN/libtarget.dir_present" ]; then [ -d "$LIBTARGET" ] || return 1; else [ ! -d "$LIBTARGET" ] || return 1; fi
+  verify_dir_snapshot "$RUNTIME" runtime || return 1
+  verify_dir_snapshot "$STATE" state || return 1
+  [ ! -e "$STAGE" ] && [ ! -e "$PREV" ] || return 1
+  return 0
+}
+
+verify_hmi(){
+  [ -f "$HMI/COMPLETE" ] && [ -f "$HMI/target" ] || return 1
+  [ "$(cat "$HMI/target" 2>/dev/null)" = /mnt/app/eso/hmi/lsd/jars/carplay_hook.jar ] || return 1
+  if [ -f "$HMI/present" ]; then [ -s "$HMI/carplay_hook.jar" ] || return 1; [ ! -f "$HMI/cksum" ] || [ "$(cksum < "$HMI/carplay_hook.jar")" = "$(cat "$HMI/cksum")" ]; else [ -f "$HMI/absent" ]; fi
+}
+
+snapshot(){
   [ ! -e "$STAGE" ] || { log "RESTORE=REFUSED reason=RUNTIME_STAGE_PRESENT production_changed=NO"; return 1; }
   [ ! -e "$PREV" ] || { log "RESTORE=REFUSED reason=RUNTIME_PREVIOUS_PRESENT production_changed=NO"; return 1; }
   [ ! -e "$STATE/.chain_test.lock" ] || { log "RESTORE=REFUSED reason=CHAIN_LOCK_PRESENT_AFTER_PRECHECK production_changed=NO"; return 1; }
   rm -rf "$TXN" 2>/dev/null || return 1
   ensure_dirs "$TXN/files" "$TXN/dirs" "$TXN/meta" || return 1
-
   STARTUP=$(find_startup) || return 1
   echo "$STARTUP" > "$TXN/startup.path" || return 1
   snap_file "$STARTUP" startup.sh || return 1
@@ -101,14 +230,10 @@ validate_file_snapshot(){
   snap_file "$PF" pf.conf || return 1
   snap_file "$JAR" carplay_hook.jar || return 1
   snap_file "$LEGACY_HOOK" legacy_hook || return 1
-
   if [ -d "$LIBTARGET" ]; then touch "$TXN/libtarget.dir_present" || return 1; else touch "$TXN/libtarget.dir_absent" || return 1; fi
-  for n in libairplay.so libairplax.so libNmeBaseClasses.so; do
-    snap_file "$LIBTARGET/$n" "libtarget_$n" || return 1
-  done
+  for n in libairplay.so libairplax.so libNmeBaseClasses.so; do snap_file "$LIBTARGET/$n" "libtarget_$n" || return 1; done
   snap_dir "$RUNTIME" runtime || return 1
   snap_dir "$STATE" state || return 1
-
   validate_restore_snapshot || return 1
   touch "$TXN/PREPARED" || return 1
   sync >/dev/null 2>&1 || {
@@ -130,10 +255,8 @@ rollback(){
   trap - 1 2 15
   log "ROLLBACK=STARTED"
   r=0
-
   mount_system_rw >/dev/null 2>&1 && SYS_RW=1 || r=1
   mount_app_rw >/dev/null 2>&1 && APP_RW=1 || r=1
-
   if [ "$SYS_RW" = 1 ]; then
     s=$(cat "$TXN/startup.path" 2>/dev/null || true)
     [ -n "$s" ] && restore_file "$s" startup.sh 755 || r=1
@@ -141,23 +264,18 @@ rollback(){
     restore_file "$DIO" dio_manager.json 644 || r=1
     restore_file "$PF" pf.conf 644 || r=1
   fi
-
   if [ "$APP_RW" = 1 ]; then
     restore_file "$JAR" carplay_hook.jar 644 || r=1
     restore_file "$LEGACY_HOOK" legacy_hook 755 || r=1
     ensure_dirs "$LIBTARGET" || r=1
-    for n in libairplay.so libairplax.so libNmeBaseClasses.so; do
-      restore_file "$LIBTARGET/$n" "libtarget_$n" 755 || r=1
-    done
+    for n in libairplay.so libairplax.so libNmeBaseClasses.so; do restore_file "$LIBTARGET/$n" "libtarget_$n" 755 || r=1; done
     if [ -f "$TXN/libtarget.dir_absent" ]; then rmdir "$LIBTARGET" 2>/dev/null || true; fi
     restore_dir "$RUNTIME" runtime || r=1
     rm -rf "$STAGE" "$PREV" 2>/dev/null || true
   fi
-
   finish_mounts || r=1
   restore_dir "$STATE" state || r=1
   sync >/dev/null 2>&1 || r=1
-
   if [ "$r" = 0 ] && verify_restore_rollback; then
     touch "$TXN/ROLLED_BACK"
     rm -f "$TXN/APPLYING"
