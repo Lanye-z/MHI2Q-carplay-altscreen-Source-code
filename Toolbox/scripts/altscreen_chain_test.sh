@@ -82,10 +82,11 @@ RUNTIME_STAGE_PARENT="$(p /mnt/app/root)"
 RUNTIME_PREV="$(p /mnt/app/root/.carplay-altscreen.previous)"
 ROUTER_TMP="$(p /tmp/altscreen_router_child_install.$$)"
 RESTORE_TXN_DIR="$SD_ROOT/restore-transaction/active"
+INSTALL_TXN_DIR="$SD_ROOT/install-transaction/active"
 RUNTIME_OWNER=.mmi-cockpit-carplay-runtime-owner
 RUNTIME_PUBLISHED=0
 RUNTIME_HAD_CURRENT=0
-RUNTIME_SCRIPTS="altscreen_chain_test.sh altscreen_chain_test_known.sh altscreen_chain_test_universal.sh altscreen_restore_transaction.sh altscreen_restore_apply.sh altscreen_persistent_diag.sh altscreen_adaptive_diag.sh altscreen_boot_diag.sh altscreen_live_diag.sh altscreen_preload.awk install_mmi_cockpit_carplay_rx.sh start_mmi_cockpit_carplay_test.sh start_mmi_cockpit_carplay_rx_test.sh force_start_mmi_cockpit_carplay_rx_test.sh stop_mmi_cockpit_carplay_test.sh status_mmi_cockpit_carplay_test.sh finish_mmi_cockpit_carplay_test.sh"
+RUNTIME_SCRIPTS="altscreen_chain_test.sh altscreen_chain_test_known.sh altscreen_chain_test_universal.sh altscreen_install_transaction.sh altscreen_restore_transaction.sh altscreen_restore_apply.sh altscreen_persistent_diag.sh altscreen_adaptive_diag.sh altscreen_boot_diag.sh altscreen_live_diag.sh altscreen_preload.awk install_mmi_cockpit_carplay_rx.sh start_mmi_cockpit_carplay_test.sh start_mmi_cockpit_carplay_rx_test.sh force_start_mmi_cockpit_carplay_rx_test.sh stop_mmi_cockpit_carplay_test.sh status_mmi_cockpit_carplay_test.sh finish_mmi_cockpit_carplay_test.sh"
 
 mount_app_rw(){ [ "$TESTING" = 1 ] || mount -uw /mnt/app; }
 mount_app_ro(){ [ "$TESTING" = 1 ] || mount -ur /mnt/app; }
@@ -446,6 +447,9 @@ CMD=${1:-}
 case "$CMD" in
   install)
     restore_transaction_active && fail "restore transaction is active; recover/finish RESTORE ORIGINAL before INSTALL"
+    if [ -d "$INSTALL_TXN_DIR" ] && [ "${ALTS_INSTALL_TXN_ACTIVE:-0}" != 1 ]; then
+        fail "install transaction is active; recover/finish transactional INSTALL before direct controller INSTALL"
+    fi
     route=$(select_install_route "${2:-}") || exit 1
     existing_route=""
     if [ -f "$INSTALLED_MARKER" ] && [ -f "$ROUTE_FILE" ]; then existing_route="$ROUTE_FILE";
@@ -483,7 +487,10 @@ case "$CMD" in
     fi
     ensure_dirs "$STATE_DIR" || exit 1
     echo "$route" > "$ROUTE_FILE" || exit 1
-    commit_runtime_scripts || echo "WARN: installed runtime is valid but previous-runtime rollback slot cleanup failed" >&2
+    commit_runtime_scripts || {
+        echo "FAIL: installed runtime rollback-slot cleanup failed; transactional INSTALL will restore PRE_INSTALL state" >&2
+        exit 1
+    }
     echo "ROUTER_INSTALL=PASS profile=$route runtime=/mnt/app/root/carplay-altscreen/bin no_eso_write=YES"
     ;;
   restore-precheck)
@@ -508,6 +515,7 @@ case "$CMD" in
     ;;
   start)
     restore_transaction_active && fail "restore transaction is active; START is blocked until recovery/restore completes"
+    [ ! -d "$INSTALL_TXN_DIR" ] || fail "install transaction is active; START is blocked until INSTALL commits or rolls back"
     route=$(route_for_existing) || fail "no installed firmware route; run INSTALL first"
     echo "ROUTER_PROFILE=$route"
     delegate "$route" "$CMD"
@@ -516,6 +524,7 @@ case "$CMD" in
     route=$(route_for_existing) || fail "no installed firmware route; run INSTALL first"
     echo "ROUTER_PROFILE=$route"
     restore_transaction_active && echo "RESTORE_TRANSACTION=ACTIVE path=$RESTORE_TXN_DIR"
+    [ ! -d "$INSTALL_TXN_DIR" ] || echo "INSTALL_TRANSACTION=ACTIVE path=$INSTALL_TXN_DIR"
     delegate "$route" "$CMD"
     ;;
   *) echo "usage: altscreen_chain_test.sh {install|start|status|restore-precheck|restore|collect}" >&2; exit 2 ;;
