@@ -165,6 +165,10 @@ fi
 SOURCE_ONLY=0
 HOOK_PENDING=0
 NATIVE_REBUILDS=0
+SAFEAREA_V32=0
+if grep -Fq 'safearea_revision=V32_OEM_X_VISIBLE_Y' "$AIRPLAY_SRC"; then
+    SAFEAREA_V32=1
+fi
 if grep -Fq 'release_binary_status=V1_BINARY_STALE_V2_SOURCE_REBUILD_REQUIRED' "$INFO"; then
     SOURCE_ONLY=1
     grep -Fq 'vehicle_zip_status=NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED' "$INFO" ||
@@ -277,10 +281,21 @@ elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$INFO"; then
             binary_strings "$BIN" | grep -Fq "$marker" ||
                 fail "V3.1 sidecar marker missing: $marker"
         done
-        binary_strings "$HOOK" | grep -Fq 'safe_yh_mapping=map_local_unscaled' ||
-            fail "V3.1 universal hook missing map-local safeArea mapping"
-        binary_strings "$HOOK" | grep -Fq 'geometry_revision=V31_ONE_TO_ONE_CLIP' ||
-            fail "V3.1 universal hook missing geometry revision marker"
+        if [ "$HOOK_PENDING" = 0 ]; then
+            if [ "$SAFEAREA_V32" = 1 ]; then
+                binary_strings "$HOOK" | grep -Fq 'safe_yh_mapping=vertical_full_visible_0_455' ||
+                    fail "V3.2 universal hook missing visible-height safeArea mapping"
+                binary_strings "$HOOK" | grep -Fq 'safearea_revision=V32_OEM_X_VISIBLE_Y' ||
+                    fail "V3.2 universal hook missing safeArea revision marker"
+                binary_strings "$HOOK" | grep -Fq 'renderer_geometry_revision=V31_ONE_TO_ONE_CLIP' ||
+                    fail "V3.2 universal hook missing retained V3.1 renderer geometry marker"
+            else
+                binary_strings "$HOOK" | grep -Fq 'safe_yh_mapping=map_local_unscaled' ||
+                    fail "V3.1 universal hook missing map-local safeArea mapping"
+                binary_strings "$HOOK" | grep -Fq 'geometry_revision=V31_ONE_TO_ONE_CLIP' ||
+                    fail "V3.1 universal hook missing geometry revision marker"
+            fi
+        fi
     else
         for marker in 'carplay-private111-direct-display-v2-source-driven-layout-live-v4' 'PHASE=DECODED_SHM_WAIT_SIZE' 'PHASE=SOURCE_SESSION' 'PHASE=GATE_RECOVER_CURRENT_SESSION' 'matching_identity_plus_frame_progress' 'packed_tight_required=1' 'stream111_request_or_phone_marker' 'STREAM_111_REQUESTED=YES' 'PHASE=PIPELINE_SOURCE_PRIMED' 'startup_frame_progress_required=2' 'PHASE=DISPLAYABLE3_FIRST_PRESENT' 'PHASE=DISPLAYABLE3_OWNERSHIP' 'DISPLAYABLE3_OWNERSHIP_V1' '/tmp/mmi-mirror-displayable3.state' 'PHASE=DIRECT111_ACTIVE' 'present_policy=source-driven'
         do
@@ -556,26 +571,39 @@ fi
 if grep -Fq 'alt_safe_y_455_to_canvas' "$AIRPLAY_SRC"; then
     fail "V3.1 must not scale OEM map-local safeArea Y/H from 455 to 542"
 fi
-grep -Fq 'safe_yh_mapping=map_local_unscaled' "$AIRPLAY_SRC" ||
-    fail "V3.1 map-local safeArea coordinate-space diagnostic missing"
-grep -Fq 'geometry_revision=V31_ONE_TO_ONE_CLIP' "$AIRPLAY_SRC" ||
-    fail "V3.1 safeArea geometry revision marker missing"
 grep -Fq 'r.x = 370u;' "$AIRPLAY_SRC" ||
     fail "FULL safeArea X missing"
-grep -Fq 'r.y = 49u;' "$AIRPLAY_SRC" ||
-    fail "FULL/SMALL safeArea Y must remain OEM map-local 49"
 grep -Fq 'r.w = 700u;' "$AIRPLAY_SRC" ||
     fail "FULL safeArea width missing"
-grep -Fq 'r.h = 300u;' "$AIRPLAY_SRC" ||
-    fail "FULL/SMALL safeArea height must remain OEM map-local 300"
 grep -Fq 'r.x = 490u;' "$AIRPLAY_SRC" ||
     fail "SMALL safeArea X missing"
 grep -Fq 'r.w = 460u;' "$AIRPLAY_SRC" ||
     fail "SMALL safeArea width missing"
 grep -Fq 'map_plane_terminal_y_policy=metadata_only_not_renderer_offset' "$AIRPLAY_SRC" ||
-    fail "OEM terminal Y=26 must remain metadata-only in V3.1"
-grep -Fq 'physical_y = 49 + (int64_t)r.renderer_dy;' "$AIRPLAY_SRC" ||
-    fail "physical safe-region Y must stay in the measured 455 sink plane"
+    fail "OEM terminal Y=26 must remain metadata-only"
+if [ "$SAFEAREA_V32" = 1 ]; then
+    grep -Fq 'safe_yh_mapping=vertical_full_visible_0_455' "$AIRPLAY_SRC" ||
+        fail "V3.2 visible-height safeArea coordinate-space diagnostic missing"
+    grep -Fq 'renderer_geometry_revision=V31_ONE_TO_ONE_CLIP' "$AIRPLAY_SRC" ||
+        fail "V3.2 must retain the V3.1 renderer geometry revision"
+    grep -Fq 'r.y = 0u;' "$AIRPLAY_SRC" ||
+        fail "V3.2 FULL/SMALL safeArea Y must be 0"
+    grep -Fq 'r.h = 455u;' "$AIRPLAY_SRC" ||
+        fail "V3.2 FULL/SMALL safeArea height must be 455"
+    grep -Fq 'physical_y = (int64_t)r.renderer_dy;' "$AIRPLAY_SRC" ||
+        fail "V3.2 physical safe-region Y must follow renderer translation from zero"
+else
+    grep -Fq 'safe_yh_mapping=map_local_unscaled' "$AIRPLAY_SRC" ||
+        fail "V3.1 map-local safeArea coordinate-space diagnostic missing"
+    grep -Fq 'geometry_revision=V31_ONE_TO_ONE_CLIP' "$AIRPLAY_SRC" ||
+        fail "V3.1 safeArea geometry revision marker missing"
+    grep -Fq 'r.y = 49u;' "$AIRPLAY_SRC" ||
+        fail "V3.1 FULL/SMALL safeArea Y must remain OEM map-local 49"
+    grep -Fq 'r.h = 300u;' "$AIRPLAY_SRC" ||
+        fail "V3.1 FULL/SMALL safeArea height must remain OEM map-local 300"
+    grep -Fq 'physical_y = 49 + (int64_t)r.renderer_dy;' "$AIRPLAY_SRC" ||
+        fail "V3.1 physical safe-region Y must stay in the measured 455 sink plane"
+fi
 if grep -Fq 'r.physical_x - (int64_t)r.renderer_dx' "$AIRPLAY_SRC" ||
    grep -Fq 'source x=966' "$AIRPLAY_SRC"; then
     fail "retired Sport SMALL safeArea compensation still present"
