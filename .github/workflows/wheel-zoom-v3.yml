@@ -753,7 +753,7 @@ jobs:
           strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_FRAME_STALL'
           strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_FRAME_RECOVERED'
           strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_STALL_ABORT'
-          strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_PACED_SEND'          strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_PACED_SEND'
+          strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_PACED_SEND'
           python3 Toolbox/carplay_alt_screen/tests/test_wheel_zoom_pacing.py
 
           python3 - "$JAR" <<'PY'

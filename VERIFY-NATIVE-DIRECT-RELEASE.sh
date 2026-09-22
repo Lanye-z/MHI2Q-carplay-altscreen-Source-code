@@ -236,11 +236,15 @@ if [ "$HOOK_PENDING" = 0 ]; then
     binary_strings "$HOOK" | grep -Fq 'ALTAREA_LAYOUT_SAFE_V3' ||
         fail "universal hook binary is stale: rebuilt live CarPlay view-area marker missing"
     binary_strings "$HOOK" | grep -Fq 'OEM_STEPS_V1' ||
-        fail "universal hook binary is stale: OEM wheel step model missing"
-    binary_strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_ACCUMULATE' ||
-        fail "universal hook binary is stale: wheel accumulator marker missing"
+        fail "universal hook binary is stale: OEM wheel event model missing"
+    binary_strings "$HOOK" | grep -Fq 'OEM_TARGET_FOLLOW_V1' ||
+        fail "universal hook binary is stale: OEM target-follow scheduler missing"
+    binary_strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_TARGET' ||
+        fail "universal hook binary is stale: wheel target marker missing"
+    binary_strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_STALL_ABORT' ||
+        fail "universal hook binary is stale: wheel stall-abort marker missing"
     binary_strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_PACED_SEND' ||
-        fail "universal hook binary is stale: wheel pacing marker missing"
+        fail "universal hook binary is stale: wheel target-follow pacing marker missing"
 fi
 
 grep -Fq 'window58_readback=disabled' "$INFO" ||
