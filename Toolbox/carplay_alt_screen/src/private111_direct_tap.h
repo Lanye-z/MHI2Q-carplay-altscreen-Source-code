@@ -23,6 +23,23 @@ int p111_frame_tap_write(void *stream, const unsigned char *buffer,
                          uint32_t format, uint32_t usage);
 
 /*
+ * Read-only, process-local decoded-frame progress for control-plane pacing.
+ * This does not change the /carplay111_decoded SHM ABI and never touches the
+ * renderer. last_publish_us32 is modular microseconds from gettimeofday();
+ * callers only use it for short (< seconds) age checks.
+ */
+struct p111_frame_progress_snapshot {
+    uint32_t generation;
+    uint32_t frame_count;
+    uint32_t sequence;
+    uint32_t last_publish_us32;
+    int active;
+};
+
+int p111_frame_tap_get_progress(
+    void *stream, struct p111_frame_progress_snapshot *out);
+
+/*
  * V2 preferred path. Call this only after stock CScreenRender::render() has
  * posted the decoded vendor buffer. Screen is then asked to read the exact
  * stock window into a normal pixmap, which lets the platform linearize the
