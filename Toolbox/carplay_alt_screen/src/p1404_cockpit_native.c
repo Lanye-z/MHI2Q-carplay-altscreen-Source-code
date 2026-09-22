@@ -813,6 +813,7 @@ static void *native_monitor_worker(void *arg) {
     int desired_view_area, view_area_send_index, zoom_gate, cluster_owned;
     int wheel_generation_current;
     int zoom_pending_steps = 0;
+    int zoom_pending_at_poll = 0;
     int zoom_direction = -1;
     struct wheel_zoom_event zoom_events[WHEEL_ZOOM_BATCH_MAX];
     unsigned zoom_count, zoom_i;
@@ -954,6 +955,8 @@ static void *native_monitor_worker(void *arg) {
             zoom_pending_steps = 0;
         }
 
+        zoom_pending_at_poll = zoom_pending_steps;
+
         for (zoom_i = 0; zoom_i < zoom_count; ++zoom_i) {
             struct wheel_zoom_event *ze = &zoom_events[zoom_i];
             int pending_before, saturated, cancellation;
@@ -1047,8 +1050,7 @@ static void *native_monitor_worker(void *arg) {
                 zoom_direction == 0 ? "ZOOM_IN" : "ZOOM_OUT",
                 zoom_direction, pending_before, pending_after,
                 WHEEL_ZOOM_PACE_US / 1000u,
-                zoom_last_send_at == now && pending_before != 0 &&
-                    zoom_command_seq == 1 ? 1 : 0,
+                zoom_pending_at_poll == 0 ? 1 : 0,
                 send_rc);
 
             if (send_rc != 0)
