@@ -58,14 +58,26 @@ for s in "$START" "$CTRL" "$CHAIN" "$INSTALL_TXN" "$RESTORE_TXN" "$RESTORE_APPLY
 done
 
 # ---- V3.1 transactional install safety contract ----
-grep -Fq 'INSTALL_TRANSACTION=PREPARED persistent_state=PRE_INSTALL' "$INSTALL_TXN" ||
-    fail "INSTALL PREPARED marker/log missing"
+grep -Fq 'INSTALL_TRANSACTION=PREPARED persistent_state=PRE_INSTALL durable=YES' "$INSTALL_TXN" ||
+    fail "INSTALL PREPARED snapshot is not durably synced before mutation"
+grep -Fq 'reason=PREPARED_SYNC_FAILED production_changed=NO' "$INSTALL_TXN" ||
+    fail "INSTALL does not fail closed when PREPARED sync fails"
+grep -Fq 'SNAPSHOT_INTEGRITY=PASS' "$INSTALL_TXN" ||
+    fail "INSTALL snapshot integrity verification missing"
+grep -Fq 'INSTALL_ROLLBACK=REFUSED reason=SNAPSHOT_INTEGRITY_FAILED' "$INSTALL_TXN" ||
+    fail "INSTALL rollback can proceed from a corrupt snapshot"
 grep -Fq 'INSTALL_ROLLBACK=PASS persistent_state=PRE_INSTALL' "$INSTALL_TXN" ||
     fail "INSTALL rollback-to-preinstall contract missing"
 grep -Fq 'STALE_INSTALL_TRANSACTION=DETECTED action=ROLLBACK_PRE_INSTALL' "$INSTALL_TXN" ||
     fail "stale INSTALL transaction recovery missing"
 grep -Fq 'INSTALL_VERIFY=PASS' "$INSTALL_TXN" ||
     fail "INSTALL final exact-state verifier missing"
+grep -Fq 'restore-precheck' "$INSTALL_TXN" ||
+    fail "INSTALL final verifier does not validate native recovery backups"
+grep -Fq 'verify_hmi_backup' "$INSTALL_TXN" ||
+    fail "INSTALL final verifier does not validate HMI recovery backup"
+grep -Fq 'verify_boot_backup' "$INSTALL_TXN" ||
+    fail "INSTALL final verifier does not validate boot diagnostics backup"
 grep -Fq 'INSTALL=PASS transaction=COMMITTED persistent_state=INSTALLED' "$INSTALL_TXN" ||
     fail "INSTALL commit contract missing"
 grep -Fq 'ALTS_INSTALL_TXN_ACTIVE=1' "$INSTALL_TXN" ||
@@ -74,6 +86,10 @@ grep -Fq 'transactional INSTALL wrapper missing' "$INSTALL" ||
     fail "top-level INSTALL does not require transaction wrapper"
 grep -Fq 'install transaction is active; START is blocked' "$CHAIN" ||
     fail "START is not blocked during incomplete INSTALL"
+grep -Fq 'install_transaction_cleanup_terminal' "$CHAIN" ||
+    fail "terminal INSTALL transaction residue can still block START"
+grep -Fq 'INSTALL_TRANSACTION=TERMINAL_STALE' "$CHAIN" ||
+    fail "STATUS cannot distinguish terminal INSTALL residue from an active transaction"
 grep -Fq 'ACTIVE_INSTALL_TRANSACTION=DETECTED action=ROLLBACK_PRE_INSTALL_BEFORE_RESTORE' "$RESTORE_TXN" ||
     fail "RESTORE does not recover interrupted INSTALL first"
 grep -Fq 'commit_runtime_scripts || {' "$CHAIN" ||
