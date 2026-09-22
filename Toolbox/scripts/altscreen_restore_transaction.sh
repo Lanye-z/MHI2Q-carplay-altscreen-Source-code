@@ -94,6 +94,7 @@ validate_file_snapshot(){
     if [ -f "$TXN/meta/$name.cksum" ]; then
       [ "$(cksum < "$src")" = "$(cat "$TXN/meta/$name.cksum")" ] || return 1
     else
+      [ "$(cat "$TXN/FORMAT" 2>/dev/null || true)" != 2 ] || return 1
       log "RESTORE_SNAPSHOT_INTEGRITY=LEGACY_WEAK kind=file name=$name reason=missing_cksum_metadata"
     fi
   else
@@ -142,6 +143,7 @@ validate_dir_snapshot(){
       cmp -s "$TXN/meta/$name.manifest" "$now" || { rm -f "$now" 2>/dev/null || true; return 1; }
       rm -f "$now" 2>/dev/null || true
     else
+      [ "$(cat "$TXN/FORMAT" 2>/dev/null || true)" != 2 ] || return 1
       log "RESTORE_SNAPSHOT_INTEGRITY=LEGACY_WEAK kind=dir name=$name reason=missing_manifest_metadata"
     fi
   else
@@ -222,6 +224,7 @@ snapshot(){
   [ ! -e "$STATE/.chain_test.lock" ] || { log "RESTORE=REFUSED reason=CHAIN_LOCK_PRESENT_AFTER_PRECHECK production_changed=NO"; return 1; }
   rm -rf "$TXN" 2>/dev/null || return 1
   ensure_dirs "$TXN/files" "$TXN/dirs" "$TXN/meta" || return 1
+  printf '%s\n' 2 > "$TXN/FORMAT" || return 1
   STARTUP=$(find_startup) || return 1
   echo "$STARTUP" > "$TXN/startup.path" || return 1
   snap_file "$STARTUP" startup.sh || return 1
@@ -381,12 +384,13 @@ STARTUP=$(find_startup) || fail "startup.sh missing after restore"
 
 sync >/dev/null 2>&1 || fail "sync failed before restore commit"
 touch "$TXN/COMMITTED" || fail "cannot commit restore transaction"
+sync >/dev/null 2>&1 || fail "cannot durably commit restore transaction"
 TXN_READY=0
-sync >/dev/null 2>&1 || log "WARN: final post-commit sync reported failure; on-disk restore was already verified and committed"
 log "RESTORE_VERIFY=PASS"
 log "RESTORE=PASS transaction=COMMITTED persistent_state=PRE_INSTALL reboot_required=YES"
 log "IMPORTANT=DO_NOT_TEST_CARPLAY_BEFORE_FULL_MMI_REBOOT"
 rm -rf "$TXN" 2>/dev/null || log "WARN: committed transaction retained; next run will clean it"
+sync >/dev/null 2>&1 || log "WARN: committed restore transaction cleanup was not durably synced; terminal COMMITTED residue is safe"
 trap - 1 2 15
 log "===== V3 transactional RESTORE ORIGINAL finished ====="
 exit 0
