@@ -74,7 +74,7 @@ class Model:
 
         if (
             input_quiet is not None
-            and input_quiet >= PENDING_HARD_EXPIRE_MS
+            and input_quiet > PENDING_HARD_EXPIRE_MS
         ):
             self._clear_pending(now_ms, "hard_expire")
             return
@@ -143,7 +143,7 @@ def test_first_step_immediate():
     assert m.sent == [(0, "OUT")]
 
 
-def test_healthy_burst_finishes_only_inside_short_tail():
+def test_healthy_burst_can_finish_on_600ms_boundary():
     m = Model()
     m.frame(0, 1)
     m.add(0, 4)
@@ -154,9 +154,10 @@ def test_healthy_burst_finishes_only_inside_short_tail():
         (0, "OUT"),
         (200, "OUT"),
         (400, "OUT"),
+        (600, "OUT"),
     ]
     assert m.pending == 0
-    assert m.clears == [(600, "hard_expire", 1)]
+    assert m.clears == []
 
 
 def test_stall_plus_quiet_clears_without_recovery_replay():
@@ -208,24 +209,29 @@ def test_telemetry_unavailable_uses_200ms_fallback_but_no_long_tail():
         (0, "OUT"),
         (200, "OUT"),
         (400, "OUT"),
+        (600, "OUT"),
     ]
     assert m.pending == 0
-    assert m.clears == [(600, "hard_expire", 1)]
+    assert m.clears == []
 
 
-def test_hard_expiry_is_never_later_than_600ms():
+def test_hard_expiry_clears_only_older_than_600ms():
     m = Model()
     m.frame(0, 1)
     m.add(0, 4)
-    m.frame(200, 3)
-    m.tick(200)
-    m.frame(400, 3)
-    m.tick(400)
-    m.frame(600, 3)
-    m.tick(600)
-    assert m.sent[-1] == (400, "OUT")
+    m.tick(200)       # stalled
+    m.tick(400)       # quiet+stalled clear wins before hard expiry
     assert m.pending == 0
-    assert m.clears[-1][0:2] == (600, "hard_expire")
+    assert m.clears[-1][0:2] == (400, "quiet_stall")
+
+    n = Model()
+    n.telemetry = False
+    n.add(0, 4)
+    n.tick(200)
+    n.tick(400)
+    n.tick(600)       # exact boundary may still consume final healthy/fallback step
+    assert n.sent[-1] == (600, "OUT")
+    assert n.pending == 0
 
 
 def test_pending_limit_stays_bounded():
@@ -238,12 +244,12 @@ def test_pending_limit_stays_bounded():
 
 if __name__ == "__main__":
     test_first_step_immediate()
-    test_healthy_burst_finishes_only_inside_short_tail()
+    test_healthy_burst_can_finish_on_600ms_boundary()
     test_stall_plus_quiet_clears_without_recovery_replay()
     test_recovery_before_quiet_timeout_can_continue()
     test_opposite_steps_cancel_unsent_pending()
     test_telemetry_unavailable_uses_200ms_fallback_but_no_long_tail()
-    test_hard_expiry_is_never_later_than_600ms()
+    test_hard_expiry_clears_only_older_than_600ms()
     test_pending_limit_stays_bounded()
     print(
         "WHEEL_ZOOM_PACING_TEST=PASS "
