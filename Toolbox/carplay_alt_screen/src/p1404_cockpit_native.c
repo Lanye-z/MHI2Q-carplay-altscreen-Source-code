@@ -684,14 +684,23 @@ static int native_read_cluster_owned_for_zoom(void) {
 
 /*
  * OEM-style delayed step handling adapted to CarPlay's one-step directional
- * changeMapZoomLevel command.  The first intent after an idle period is sent
- * immediately; subsequent accumulated intent drains at most once per 200 ms.
- * Opposite signed steps cancel before transmission and the pending target is
- * bounded so a stopped wheel cannot leave seconds of stale zoom commands.
+ * changeMapZoomLevel command.
+ *
+ * Unlike a fixed-rate limiter, V3.1 now waits for healthy decoded-frame
+ * progress after each command.  A stable ~30 fps source can therefore advance
+ * again after roughly one 100 ms monitor period, while an Amap/phone-side
+ * render stall automatically blocks the next command until several fresh
+ * frames have returned.  If frame telemetry is unavailable, fall back to the
+ * previously proven 200 ms pacing interval.
  */
 #define WHEEL_ZOOM_EVENT_MODEL "OEM_STEPS_V1"
-#define WHEEL_ZOOM_PACE_US 200000u
 #define WHEEL_ZOOM_PENDING_LIMIT 4
+#define WHEEL_ZOOM_MIN_PACE_US 100000u
+#define WHEEL_ZOOM_FALLBACK_PACE_US 200000u
+#define WHEEL_ZOOM_FRESH_FRAME_AGE_US 100000u
+#define WHEEL_ZOOM_STALL_AGE_US 150000u
+#define WHEEL_ZOOM_FRESH_FRAMES 3u
+#define WHEEL_ZOOM_PENDING_EXPIRE_US 1500000u
 
 static int native_wheel_zoom_accumulate(int pending, int delta,
                                         int *saturated) {
@@ -815,21 +824,36 @@ static void *native_monitor_worker(void *arg) {
     int zoom_pending_steps = 0;
     int zoom_pending_at_poll = 0;
     int zoom_direction = -1;
+    int zoom_frame_baseline_valid = 0;
+    int zoom_wait_saw_stall = 0;
     struct wheel_zoom_event zoom_events[WHEEL_ZOOM_BATCH_MAX];
+    struct p111_frame_progress_snapshot zoom_progress;
     unsigned zoom_count, zoom_i;
     uint32_t zoom_last_epoch = 0;
     uint32_t zoom_last_seq = 0;
     uint32_t zoom_command_seq = 0;
+    uint32_t zoom_wait_generation = 0;
+    uint32_t zoom_wait_frame_count = 0;
+    uint32_t zoom_recovery_frame_count = 0;
     uint64_t zoom_last_send_at = 0;
+    uint64_t zoom_last_input_at = 0;
 
     native_wheel_zoom_tail(&zoom_last_epoch, &zoom_last_seq);
     altscreen_log(
         "PHASE=WHEEL_ZOOM_QUEUE_RESET receiver=%p stream=%p generation=%u "
         "baseline_epoch=%u baseline_seq=%u stale_events_before_attach=discarded "
-        "model=%s pace_ms=%u pending_limit=%d",
+        "model=%s pacing=FRAME_HEALTH_ADAPTIVE min_pace_ms=%u "
+        "fallback_pace_ms=%u fresh_frames=%u fresh_age_ms=%u "
+        "stall_age_ms=%u pending_limit=%d pending_expire_ms=%u",
         receiver, stream, generation, zoom_last_epoch, zoom_last_seq,
-        WHEEL_ZOOM_EVENT_MODEL, WHEEL_ZOOM_PACE_US / 1000u,
-        WHEEL_ZOOM_PENDING_LIMIT);
+        WHEEL_ZOOM_EVENT_MODEL,
+        WHEEL_ZOOM_MIN_PACE_US / 1000u,
+        WHEEL_ZOOM_FALLBACK_PACE_US / 1000u,
+        WHEEL_ZOOM_FRESH_FRAMES,
+        WHEEL_ZOOM_FRESH_FRAME_AGE_US / 1000u,
+        WHEEL_ZOOM_STALL_AGE_US / 1000u,
+        WHEEL_ZOOM_PENDING_LIMIT,
+        WHEEL_ZOOM_PENDING_EXPIRE_US / 1000u);
 
     for (;;) {
         /*
@@ -953,6 +977,10 @@ static void *native_monitor_worker(void *arg) {
                 "generation=%u pending_before=%d reason=gate_closed",
                 receiver, stream, generation, zoom_pending_steps);
             zoom_pending_steps = 0;
+            zoom_last_input_at = 0;
+            zoom_last_send_at = 0;
+            zoom_frame_baseline_valid = 0;
+            zoom_wait_saw_stall = 0;
         }
 
         zoom_pending_at_poll = zoom_pending_steps;
@@ -972,6 +1000,12 @@ static void *native_monitor_worker(void *arg) {
                 zoom_last_seq = 0;
                 zoom_pending_steps = 0;
                 zoom_last_send_at = 0;
+                zoom_last_input_at = 0;
+                zoom_frame_baseline_valid = 0;
+                zoom_wait_saw_stall = 0;
+                zoom_wait_generation = 0;
+                zoom_wait_frame_count = 0;
+                zoom_recovery_frame_count = 0;
                 zoom_command_seq = 0;
             }
             if (ze->seq <= zoom_last_seq) continue;
@@ -1004,6 +1038,7 @@ static void *native_monitor_worker(void *arg) {
             zoom_pending_steps = native_wheel_zoom_accumulate(
                 zoom_pending_steps, ze->delta, &saturated);
 
+            zoom_last_input_at = now;
             altscreen_log(
                 "PHASE=WHEEL_ZOOM_ACCUMULATE receiver=%p stream=%p "
                 "generation=%u source_seq=%u signed_steps=%d "
@@ -1015,49 +1050,206 @@ static void *native_monitor_worker(void *arg) {
         }
 
         /*
-         * CarPlay only exposes a one-step directional command, so drain the
-         * OEM-style signed target accumulator one command at a time.  The
-         * response callback is observational only; it does not gate the next
-         * send because status=0 means command accepted, not map animation done.
+         * Do not replay stale wheel intent long after the driver stopped.
+         * 1.5 s is intentionally longer than the worst ~0.5 s Amap stalls
+         * observed in the previous vehicle logs, while still preventing a
+         * frozen map from resuming several old zoom commands later.
          */
-        if (zoom_gate && zoom_pending_steps != 0 &&
-            (!zoom_last_send_at ||
-             now >= zoom_last_send_at + (uint64_t)WHEEL_ZOOM_PACE_US)) {
-            int pending_before = zoom_pending_steps;
-            int pending_after;
-
-            zoom_direction = zoom_pending_steps < 0 ? 0 : 1;
-            pending_after = zoom_pending_steps +
-                (zoom_direction == 0 ? 1 : -1);
-
-            ++zoom_command_seq;
-            if (!zoom_command_seq) ++zoom_command_seq;
-
-            send_rc = alt_send_cluster_zoom(
-                receiver, stream, generation,
-                zoom_command_seq, zoom_direction);
-
-            zoom_pending_steps = pending_after;
-            zoom_last_send_at = now;
-
+        if (zoom_gate && zoom_pending_steps != 0 && zoom_last_input_at &&
+            now > zoom_last_input_at +
+                  (uint64_t)WHEEL_ZOOM_PENDING_EXPIRE_US) {
             altscreen_log(
-                "PHASE=WHEEL_ZOOM_PACED_SEND receiver=%p stream=%p "
-                "generation=%u command_seq=%u source_tail_seq=%u "
-                "action=%s direction=%d pending_before=%d pending_after=%d "
-                "pace_ms=%u first_after_idle=%d response_gates_next=0 rc=%d",
-                receiver, stream, generation, zoom_command_seq,
-                zoom_last_seq,
-                zoom_direction == 0 ? "ZOOM_IN" : "ZOOM_OUT",
-                zoom_direction, pending_before, pending_after,
-                WHEEL_ZOOM_PACE_US / 1000u,
-                zoom_pending_at_poll == 0 ? 1 : 0,
-                send_rc);
+                "PHASE=WHEEL_ZOOM_PENDING_EXPIRE receiver=%p stream=%p "
+                "generation=%u pending_before=%d age_ms=%llu action=CLEAR",
+                receiver, stream, generation, zoom_pending_steps,
+                (unsigned long long)((now - zoom_last_input_at) / 1000ULL));
+            zoom_pending_steps = 0;
+            zoom_frame_baseline_valid = 0;
+            zoom_wait_saw_stall = 0;
+        }
 
-            if (send_rc != 0)
-                p1404_cockpit_native_zoom_result(
+        /*
+         * CarPlay only exposes a one-step directional command, so drain the
+         * OEM-style signed target accumulator one command at a time.
+         *
+         * Dynamic gate:
+         *   - first command in a session: immediately;
+         *   - normal path: >=100 ms + >=3 new decoded frames + latest frame
+         *     age <=100 ms;
+         *   - if a decoded stall is observed (age >=150 ms), reset the frame
+         *     baseline and require three fresh recovery frames;
+         *   - if process-local frame telemetry is unavailable, fail soft to
+         *     the previous 200 ms timer.
+         *
+         * CLUSTER_ZOOM_RESPONSE remains observational only. status=0 confirms
+         * command acceptance, not completion of the phone map animation.
+         */
+        if (zoom_gate && zoom_pending_steps != 0) {
+            int send_ready = 0;
+            int progress_ok = 0;
+            int frame_ready = 0;
+            int fallback_timer = 0;
+            int first_send = zoom_last_send_at == 0;
+            uint64_t elapsed_us = first_send ? 0 : now - zoom_last_send_at;
+            uint32_t frame_age_us = 0;
+            uint32_t fresh_frames = 0;
+            uint32_t frame_base = 0;
+
+            memset(&zoom_progress, 0, sizeof(zoom_progress));
+            if (first_send) {
+                send_ready = 1;
+            } else {
+                progress_ok = p111_frame_tap_get_progress(
+                    stream, &zoom_progress);
+
+                if (progress_ok) {
+                    frame_age_us =
+                        (uint32_t)now - zoom_progress.last_publish_us32;
+
+                    if (!zoom_frame_baseline_valid ||
+                        zoom_wait_generation != zoom_progress.generation) {
+                        altscreen_log(
+                            "PHASE=WHEEL_ZOOM_FRAME_BASELINE receiver=%p "
+                            "stream=%p generation=%u tap_generation=%u "
+                            "old_valid=%d old_tap_generation=%u frames=%u "
+                            "seq=%u reason=%s",
+                            receiver, stream, generation,
+                            zoom_progress.generation,
+                            zoom_frame_baseline_valid,
+                            zoom_wait_generation,
+                            zoom_progress.frame_count,
+                            zoom_progress.sequence,
+                            zoom_frame_baseline_valid ?
+                                "tap_generation_changed" :
+                                "telemetry_became_available");
+                        zoom_frame_baseline_valid = 1;
+                        zoom_wait_generation = zoom_progress.generation;
+                        zoom_wait_frame_count = zoom_progress.frame_count;
+                        zoom_recovery_frame_count =
+                            zoom_progress.frame_count;
+                        zoom_wait_saw_stall = 0;
+                    }
+
+                    if (!zoom_wait_saw_stall &&
+                        elapsed_us >=
+                            (uint64_t)WHEEL_ZOOM_MIN_PACE_US &&
+                        frame_age_us >= WHEEL_ZOOM_STALL_AGE_US) {
+                        zoom_wait_saw_stall = 1;
+                        zoom_recovery_frame_count =
+                            zoom_progress.frame_count;
+                        altscreen_log(
+                            "PHASE=WHEEL_ZOOM_FRAME_STALL receiver=%p "
+                            "stream=%p generation=%u command_seq=%u "
+                            "frame_age_ms=%u frames=%u seq=%u "
+                            "action=BLOCK_NEXT_UNTIL_FRESH_FRAMES",
+                            receiver, stream, generation,
+                            zoom_command_seq,
+                            frame_age_us / 1000u,
+                            zoom_progress.frame_count,
+                            zoom_progress.sequence);
+                    }
+
+                    frame_base = zoom_wait_saw_stall ?
+                        zoom_recovery_frame_count :
+                        zoom_wait_frame_count;
+                    fresh_frames =
+                        zoom_progress.frame_count - frame_base;
+
+                    frame_ready =
+                        elapsed_us >=
+                            (uint64_t)WHEEL_ZOOM_MIN_PACE_US &&
+                        frame_age_us <= WHEEL_ZOOM_FRESH_FRAME_AGE_US &&
+                        fresh_frames >= WHEEL_ZOOM_FRESH_FRAMES;
+
+                    if (frame_ready) {
+                        if (zoom_wait_saw_stall) {
+                            altscreen_log(
+                                "PHASE=WHEEL_ZOOM_FRAME_RECOVERED "
+                                "receiver=%p stream=%p generation=%u "
+                                "command_seq=%u fresh_frames=%u "
+                                "frame_age_ms=%u action=ALLOW_NEXT",
+                                receiver, stream, generation,
+                                zoom_command_seq, fresh_frames,
+                                frame_age_us / 1000u);
+                        }
+                        send_ready = 1;
+                    }
+                } else if (
+                    elapsed_us >=
+                        (uint64_t)WHEEL_ZOOM_FALLBACK_PACE_US) {
+                    fallback_timer = 1;
+                    send_ready = 1;
+                }
+            }
+
+            if (send_ready) {
+                int pending_before = zoom_pending_steps;
+                int pending_after;
+                struct p111_frame_progress_snapshot after_send_progress;
+                int after_send_progress_ok;
+
+                zoom_direction = zoom_pending_steps < 0 ? 0 : 1;
+                pending_after = zoom_pending_steps +
+                    (zoom_direction == 0 ? 1 : -1);
+
+                ++zoom_command_seq;
+                if (!zoom_command_seq) ++zoom_command_seq;
+
+                send_rc = alt_send_cluster_zoom(
                     receiver, stream, generation,
-                    zoom_command_seq, zoom_direction,
-                    send_rc, 0);
+                    zoom_command_seq, zoom_direction);
+
+                zoom_pending_steps = pending_after;
+                zoom_last_send_at = now;
+
+                memset(&after_send_progress, 0,
+                       sizeof(after_send_progress));
+                after_send_progress_ok = p111_frame_tap_get_progress(
+                    stream, &after_send_progress);
+                if (after_send_progress_ok) {
+                    zoom_frame_baseline_valid = 1;
+                    zoom_wait_generation =
+                        after_send_progress.generation;
+                    zoom_wait_frame_count =
+                        after_send_progress.frame_count;
+                    zoom_recovery_frame_count =
+                        after_send_progress.frame_count;
+                } else {
+                    zoom_frame_baseline_valid = 0;
+                    zoom_wait_generation = 0;
+                    zoom_wait_frame_count = 0;
+                    zoom_recovery_frame_count = 0;
+                }
+                zoom_wait_saw_stall = 0;
+
+                altscreen_log(
+                    "PHASE=WHEEL_ZOOM_PACED_SEND receiver=%p stream=%p "
+                    "generation=%u command_seq=%u source_tail_seq=%u "
+                    "action=%s direction=%d pending_before=%d "
+                    "pending_after=%d pacing=FRAME_HEALTH_ADAPTIVE "
+                    "first_send=%d telemetry=%s fallback_timer=%d "
+                    "elapsed_ms=%llu fresh_frames=%u frame_age_ms=%u "
+                    "min_pace_ms=%u required_fresh_frames=%u "
+                    "response_gates_next=0 rc=%d",
+                    receiver, stream, generation, zoom_command_seq,
+                    zoom_last_seq,
+                    zoom_direction == 0 ? "ZOOM_IN" : "ZOOM_OUT",
+                    zoom_direction, pending_before, pending_after,
+                    first_send,
+                    progress_ok ? "decoded_progress" : "unavailable",
+                    fallback_timer,
+                    (unsigned long long)(elapsed_us / 1000ULL),
+                    fresh_frames, frame_age_us / 1000u,
+                    WHEEL_ZOOM_MIN_PACE_US / 1000u,
+                    WHEEL_ZOOM_FRESH_FRAMES,
+                    send_rc);
+
+                if (send_rc != 0)
+                    p1404_cockpit_native_zoom_result(
+                        receiver, stream, generation,
+                        zoom_command_seq, zoom_direction,
+                        send_rc, 0);
+            }
         }
 
         if (route_ready && !visible && !pending && native_route_requested()) {
