@@ -1052,12 +1052,14 @@ static void *native_monitor_worker(void *arg) {
         /*
          * Treat wheel input as a short OEM-style interaction burst, not a
          * historical command queue.  No unsent intent may survive more than
-         * 600 ms after the final detent.  A separate 350 ms quiet/stall rule
+         * 600 ms after the final detent.  A command exactly on the 600 ms
+         * boundary is still allowed; only older intent is expired.  A separate
+         * 350 ms quiet/stall rule
          * below clears even earlier when the phone-side map is still frozen.
          */
         if (zoom_gate && zoom_pending_steps != 0 && zoom_last_input_at &&
-            now >= zoom_last_input_at +
-                   (uint64_t)WHEEL_ZOOM_PENDING_HARD_EXPIRE_US) {
+            now > zoom_last_input_at +
+                  (uint64_t)WHEEL_ZOOM_PENDING_HARD_EXPIRE_US) {
             altscreen_log(
                 "PHASE=WHEEL_ZOOM_PENDING_HARD_EXPIRE receiver=%p stream=%p "
                 "generation=%u pending_before=%d input_quiet_us=%llu "
