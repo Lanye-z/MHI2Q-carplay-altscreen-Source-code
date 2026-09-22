@@ -971,6 +971,7 @@ jobs:
             Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar \
             Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt \
             Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt \
+            Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS \
             Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so \
             Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh \
             Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh \
