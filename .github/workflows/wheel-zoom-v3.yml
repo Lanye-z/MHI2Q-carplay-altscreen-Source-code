@@ -587,6 +587,23 @@ jobs:
                       mirror_text += line + "\n"
               mirror_info.write_text(mirror_text)
 
+              release_sums = mirror_info.parent / "SHA256SUMS"
+              release_text = release_sums.read_text()
+              build_info_sha = hashlib.sha256(
+                  mirror_info.read_bytes()
+              ).hexdigest()
+              release_text, count = re.subn(
+                  r"^[0-9a-fA-F]{64}[ \t]+BUILD_INFO\.txt$",
+                  build_info_sha + "  BUILD_INFO.txt",
+                  release_text,
+                  flags=re.M,
+              )
+              if count != 1:
+                  raise SystemExit(
+                      "V32_RELEASE_SUMS_FAIL expected one BUILD_INFO.txt entry"
+                  )
+              release_sums.write_text(release_text)
+
           mirror_ready = (
               sidecar_ready
               and "vehicle_zip_status=READY_FOR_VEHICLE_TEST" in mirror_text
