@@ -38,7 +38,7 @@ MIRROR="$RUNTIME/bin/mirror"
 MIRROR_PID="$DEVICE_ROOT/tmp/altscreen_mirror.pid"
 MIRROR_LOG="$DEVICE_ROOT/tmp/altscreen_mirror.log"
 EXPECTED_SIZE=151037
-EXPECTED_CKSUM=2408509935
+EXPECTED_CKSUM=3771236557
 
 file_size(){ n=$(wc -c < "$1" 2>/dev/null) || { echo 0; return; }; set -- $n; echo "${1:-0}"; }
 file_cksum(){ if command -v cksum >/dev/null 2>&1; then cksum < "$1" 2>/dev/null | awk '{print $1}'; else echo unavailable; fi; }
