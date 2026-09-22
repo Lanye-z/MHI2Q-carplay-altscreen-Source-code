@@ -27,6 +27,8 @@ SD="$VOLUME/MMI-Cockpit-Carplay"; STATE="$SD/state"; BACKUP="$SD/backup"
 TXN="$SD/restore-transaction/active"; LOG="$SD/logs/restore-transaction.log"
 CONTROLLER="$VOLUME/Toolbox/scripts/altscreen_chain_test.sh"
 APPLY="$VOLUME/Toolbox/scripts/altscreen_restore_apply.sh"
+INSTALL_TXN_HELPER="$VOLUME/Toolbox/scripts/altscreen_install_transaction.sh"
+INSTALL_TXN="$SD/install-transaction/active"
 HMI="$BACKUP/basevideo3-hmi-original"; NATIVE="$BACKUP/original"
 RUNTIME="$(p /mnt/app/root/carplay-altscreen)"; STAGE="$(p /mnt/app/root/.carplay-altscreen.new)"; PREV="$(p /mnt/app/root/.carplay-altscreen.previous)"
 SI="$(p /mnt/system/etc/eso/production/smartphone_integrator.json)"; DIO="$(p /mnt/system/etc/eso/production/dio_manager.json)"; PF="$(p /mnt/system/etc/pf.conf)"
@@ -94,6 +96,11 @@ fail(){ msg=$1; log "ERROR: $msg"; finish_mounts >/dev/null 2>&1 || true; if [ "
 trap 'fail "restore interrupted by signal"' 1 2 15
 
 log "===== V3 transactional RESTORE ORIGINAL started ====="
+if [ -d "$INSTALL_TXN" ]; then
+  [ -f "$INSTALL_TXN_HELPER" ] || fail "active install transaction exists but recovery helper is missing"
+  log "ACTIVE_INSTALL_TRANSACTION=DETECTED action=ROLLBACK_PRE_INSTALL_BEFORE_RESTORE"
+  /bin/sh "$INSTALL_TXN_HELPER" recover || fail "active install transaction could not be recovered before restore"
+fi
 recover_stale || fail "previous restore transaction could not be recovered"
 [ -f "$CONTROLLER" ] && [ -f "$APPLY" ] || fail "restore controller/apply helper missing"
 verify_hmi || fail "trusted HMI backup unavailable/damaged"
