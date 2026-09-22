@@ -162,7 +162,9 @@ If the decoded source becomes stale for >=150 ms, the scheduler latches a render
 
 With the existing 100 ms control-monitor cadence, the 120 ms minimum means a healthy stream normally dispatches the next step on the ~200 ms poll rather than at ~100 ms; slower frame production or a stall extends that interval automatically.
 
-If process-local decoded-frame telemetry is temporarily unavailable, the scheduler falls back to the previous conservative 200 ms timer. Pending intent is also expired after 1.5 s without new wheel input so a stalled map cannot replay old zoom commands much later.
+If process-local decoded-frame telemetry is temporarily unavailable, the scheduler falls back to the previous conservative 200 ms timer.
+
+Wheel intent is treated as a short interaction burst rather than a historical command queue. After **350 ms without new roller input**, if the decoded stream is still stale, all unsent pending steps are cleared immediately so a recovered Amap session cannot replay old zoom requests. Even when the frame stream is healthy, unsent pending intent has a **600 ms hard lifetime** from the final detent; anything still queued at that point is discarded.
 
 The frame feedback is process-local and read-only; it does not change the `/carplay111_decoded` SHM ABI, the sidecar, GLES, Context80, or any display geometry.
 
@@ -265,6 +267,8 @@ Java callback
        fresh frames >= 3
        latest frame age <= 100 ms
        stall threshold = 150 ms
+       quiet+stalled clear = 350 ms
+       hard pending lifetime = 600 ms
        fallback timer = 200 ms
   -> one CarPlay zoom step
 ```
@@ -279,7 +283,8 @@ WHEEL_ZOOM_QUEUE
 WHEEL_ZOOM_ACCUMULATE
 WHEEL_ZOOM_FRAME_STALL
 WHEEL_ZOOM_FRAME_RECOVERED
-WHEEL_ZOOM_PENDING_EXPIRE
+WHEEL_ZOOM_QUIET_STALL_CLEAR
+WHEEL_ZOOM_PENDING_HARD_EXPIRE
 WHEEL_ZOOM_PACED_SEND
 CLUSTER_ZOOM_SUBMIT
 CLUSTER_ZOOM_RESPONSE
@@ -292,8 +297,9 @@ The key acceptance checks are now:
 3. opposite direction input cancels unsent pending intent;
 4. stable Apple Maps/type111 output can advance after the minimum frame-health gate rather than waiting an arbitrary fixed delay;
 5. while Amap/type111 is stalled, no additional zoom command is emitted;
-6. after a stall, at least three fresh decoded frames are observed before the next command;
-7. stale pending input is discarded instead of replaying after a long freeze;
-8. the incoming type111 content itself changes scale; no local pixel zoom is introduced.
+6. after a stall, at least three fresh decoded frames are observed before the next command while the wheel burst is still active;
+7. if the roller has been quiet for 350 ms and the decoded stream is still stalled, unsent pending steps are cleared instead of replaying after recovery;
+8. no pending wheel intent survives beyond 600 ms after the final detent, even on a healthy stream;
+9. the incoming type111 content itself changes scale; no local pixel zoom is introduced.
 
 The display chain, V3.1 1440x542-to-1440x455 1:1 viewport clipping, Context80, OMX/SHM path, CPU CSC and lifecycle remain outside this wheel change.
