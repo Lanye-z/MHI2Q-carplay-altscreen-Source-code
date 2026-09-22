@@ -48,8 +48,10 @@ grep -Fq 'PUBLISH_SKIP_IDENTICAL' "$CTRL" || fail "universal publish lacks no-op
 grep -Fq 'trusted original backup is absent' "$CTRL" || fail "native backup pollution guard missing"
 grep -Fq 'trusted original Java HMI backup is absent' "$INSTALL" || fail "HMI backup pollution guard missing"
 grep -Fq 'live_managed_install_detected' "$INSTALL" || fail "HMI managed-install detector missing"
-grep -Fq '[ "$size" = "$EXPECTED_SIZE" ] && [ "$sum" = "$EXPECTED_CKSUM" ] && return 0' "$INSTALL" ||
+grep -Fq 'same_bytes "$JAR_SOURCE" "$JAR_TARGET"' "$INSTALL" ||
     fail "current package JAR identity is not recognized as managed"
+grep -Fq 'historical_managed_jar' "$INSTALL" ||
+    fail "historical managed-JAR classifier missing"
 
 # INSTALL must explain exactly which managed residue triggered fail-closed.
 grep -Fq 'RUNTIME_OWNER_PRESENT=' "$INSTALL" || fail "INSTALL does not report runtime-owner residue"
