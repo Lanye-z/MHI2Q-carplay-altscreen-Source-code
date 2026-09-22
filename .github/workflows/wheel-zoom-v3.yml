@@ -1,4 +1,4 @@
-name: CarPlay Cluster Wheel Zoom V3
+name: CarPlay Cluster Wheel Zoom V3/V3.1
 
 on:
   push:
@@ -30,6 +30,9 @@ concurrency:
 
 permissions:
   contents: write
+
+# V3.1 uses this workflow as the single hook/HMI artifact promoter to avoid
+# manifest races with the generic authorization-marker rebuild workflow.
 
 jobs:
   build-vehicle-package:
