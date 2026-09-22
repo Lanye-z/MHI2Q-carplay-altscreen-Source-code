@@ -26,7 +26,7 @@ on:
 
 concurrency:
   group: carplay-cluster-wheel-zoom-v3-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -364,7 +364,7 @@ jobs:
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
           grep -Fq '#define WHEEL_ZOOM_PENDING_LIMIT 4' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
-          grep -Fq '#define WHEEL_ZOOM_MIN_PACE_US 100000u' \
+          grep -Fq '#define WHEEL_ZOOM_MIN_PACE_US 120000u' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
           grep -Fq '#define WHEEL_ZOOM_FALLBACK_PACE_US 200000u' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
@@ -427,7 +427,7 @@ jobs:
           sh -n Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh
           sh -n Toolbox/scripts/status_mmi_cockpit_carplay_test.sh
 
-          echo "WHEEL_PROTOCOL_STATIC=PASS wire=changeMapZoomLevel params=uuid+zoomDirection direction=0_in_1_out model=OEM_STEPS_V1 pacing=FRAME_HEALTH_ADAPTIVE min_pace_ms=100 fallback_ms=200 fresh_frames=3 stall_age_ms=150 pending_expire_ms=1500 pending_limit=4 opposite=cancel local_pixel_zoom=NO gate=java80_verified_ownership"
+          echo "WHEEL_PROTOCOL_STATIC=PASS wire=changeMapZoomLevel params=uuid+zoomDirection direction=0_in_1_out model=OEM_STEPS_V1 pacing=FRAME_HEALTH_ADAPTIVE min_pace_ms=120 fallback_ms=200 fresh_frames=3 stall_age_ms=150 pending_expire_ms=1500 pending_limit=4 opposite=cancel local_pixel_zoom=NO gate=java80_verified_ownership"
 
       - name: Refresh package identities in test artifact
         run: |
@@ -484,7 +484,7 @@ jobs:
               "wheel_zoom_event_expansion":
                   "DISABLED_ONE_RECORD_PER_CALLBACK",
               "wheel_zoom_pacing": "FRAME_HEALTH_ADAPTIVE",
-              "wheel_zoom_min_pace_ms": "100",
+              "wheel_zoom_min_pace_ms": "120",
               "wheel_zoom_fallback_pace_ms": "200",
               "wheel_zoom_fresh_frames": "3",
               "wheel_zoom_fresh_frame_age_ms": "100",
