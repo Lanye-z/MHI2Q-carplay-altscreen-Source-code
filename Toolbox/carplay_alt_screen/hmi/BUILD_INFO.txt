@@ -66,6 +66,6 @@ geometry_policy=OEM_MAP_PLANE_1TO1_CLIP_V31
 safearea_policy=V32_OEM_X_VISIBLE_Y
 geometry_source_canvas=1440x542
 geometry_sink_plane=1440x455
-geometry_safearea_space=MAP_LOCAL_UNSCALED
+geometry_safearea_space=OEM_X_VISIBLE_Y_0_455
 geometry_clip_bottom=87
 wheel_zoom_queue_rotation=EPOCH_RESET_AT_256K
