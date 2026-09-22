@@ -2,6 +2,63 @@
 # MMI-Cockpit-Carplay GEM STORE LOGS + RESTORE action.
 # Log collection is best effort; integrated restore (AltScreen + Mirror) always
 # follows and its exit status is the visible GEM result.
+
+ensure_dirs() {
+    for dir in "$@"; do
+        [ -d "$dir" ] && continue
+        mkdir -p "$dir" || return 1
+    done
+    return 0
+}
+
+# Capture collection + restore as one persistent SD operation log.  The generic
+# ALTS_OPLOG_CAPTURED marker is inherited by RESTORE ORIGINAL so the nested
+# launcher does not create a second, partial log.
+if [ "${ALTS_OPLOG_CAPTURED:-0}" != 1 ]; then
+    CAPTURE_ENTRY="$0"
+    RESOLVED_CAPTURE=$(command -v -- "$CAPTURE_ENTRY" 2>/dev/null)
+    [ -n "$RESOLVED_CAPTURE" ] && CAPTURE_ENTRY="$RESOLVED_CAPTURE"
+
+    journal_volume=""
+    if [ "${ALTSCREEN_CHAIN_TESTING:-0}" = 1 ]; then
+        journal_volume=${ALTSCREEN_CHAIN_VOLUME:-}
+        case "$journal_volume" in /tmp/*|/var/tmp/*) ;; *) echo "FAIL: invalid ALTSCREEN_CHAIN_VOLUME"; exit 2 ;; esac
+    else
+        for candidate in /net/mmx/fs/sda0 /net/mmx/fs/sda1 /net/mmx/fs/sdb0 /net/mmx/fs/sdb1 /fs/sda0 /fs/sda1 /fs/sdb0 /fs/sdb1; do
+            if [ -d "$candidate/Toolbox" ]; then journal_volume=$candidate; break; fi
+        done
+    fi
+    [ -n "$journal_volume" ] && [ -d "$journal_volume/Toolbox" ] || {
+        echo "RESTORE=REFUSED reason=SD_WITH_TOOLBOX_NOT_FOUND production_changed=NO"
+        exit 1
+    }
+
+    journal_dir="$journal_volume/MMI-Cockpit-Carplay/logs/operations"
+    ensure_dirs "$journal_dir" 2>/dev/null || {
+        echo "RESTORE=REFUSED reason=SD_OPERATION_LOG_DIR_UNWRITABLE production_changed=NO"
+        exit 1
+    }
+    journal_stamp=$(date +%Y%m%d_%H%M%S 2>/dev/null || echo unknown)
+    journal="$journal_dir/store_restore_${journal_stamp}_$.log"
+    if ! (printf 'OP_BEGIN action=STORE_LOGS_RESTORE script=%s storage=SD\n' "$CAPTURE_ENTRY" > "$journal") 2>/dev/null; then
+        echo "RESTORE=REFUSED reason=SD_OPERATION_LOG_UNWRITABLE production_changed=NO"
+        exit 1
+    fi
+    printf 'DIAGNOSTICS_VOLUME=%s\n' "$journal_volume" >> "$journal"
+
+    if [ "$#" -gt 0 ]; then
+        ALTS_OPLOG_CAPTURED=1 /bin/sh "$CAPTURE_ENTRY" "$@" >> "$journal" 2>&1
+    else
+        ALTS_OPLOG_CAPTURED=1 /bin/sh "$CAPTURE_ENTRY" >> "$journal" 2>&1
+    fi
+    journal_rc=$?
+    printf 'OP_END action=STORE_LOGS_RESTORE rc=%s\n' "$journal_rc" >> "$journal"
+    printf 'OPERATION_LOG=%s\n' "$journal" >> "$journal"
+    sync >/dev/null 2>&1 || true
+    cat "$journal"
+    exit "$journal_rc"
+fi
+
 BASE="$0"
 RESOLVED=$(command -v -- "$BASE" 2>/dev/null)
 [ -n "$RESOLVED" ] || RESOLVED="$BASE"
