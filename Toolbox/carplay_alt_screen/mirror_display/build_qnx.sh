@@ -53,7 +53,6 @@ for marker in \
   'PHASE=OEM_GEOMETRY_V31' \
   'geometry_policy=OEM_MAP_PLANE_1TO1_CLIP_V31' \
   'stall_report_after_ms=' \
-  'carplay-private111-direct-display-v2' \
   'PHASE=H264_SHM_ATTACHED' \
   'PHASE=DECODED_SHM_WAIT_SIZE' \
   'PHASE=SOURCE_SESSION' \

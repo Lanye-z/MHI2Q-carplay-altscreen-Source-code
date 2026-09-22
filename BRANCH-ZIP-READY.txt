@@ -1,4 +1,4 @@
-BRANCH_ZIP_READY=NO
+BRANCH_ZIP_READY=YES
 branch=experiment/oem-layout-second-screen_v3.1
 validated_source_commit=d56296c9d88f60a7e12f39f2d1fd378f0cee6329
 mode=PRIVATE111_DIRECT_DISPLAY_V3_WHEEL_ZOOM
