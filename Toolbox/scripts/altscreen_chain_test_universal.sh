@@ -321,6 +321,7 @@ backup_originals() (
     if [ -f "$COMPLETE_MARKER" ]; then verify_backup || return 1; say "BACKUP=EXISTING kept"; return 0; fi
     live_si=$(p "$LIVE_JSON_SI")
     if grep -Fq 'libcarplay_altscreen.so' "$live_si" 2>/dev/null; then
+        say "NATIVE_REINSTALL_PRECHECK=FAIL reason=SMARTPHONE_INTEGRATOR_PRELOAD_PRESENT path=$LIVE_JSON_SI token=libcarplay_altscreen.so"
         say "FAIL: trusted original backup is absent but live CarPlay config already references an AltScreen hook; reuse the original SD backup or restore stock first"
         return 1
     fi
