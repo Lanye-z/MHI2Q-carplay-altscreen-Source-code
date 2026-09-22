@@ -7,8 +7,17 @@
 #define CP_FEATURE_ALTSCREEN   0x04000000ULL
 /* The private stream is activated with display-specific showUI followed by
  * forceKeyFrame through the measured AirPlayReceiverSessionSendCommand ABI.
- * Both commands use the exact Alt UUID; showUI uses this cluster Maps URL. */
-#define CP_ALT_CLUSTER_MAP_URL "maps:/car/instrumentcluster/map"
+ * Both commands use the exact Alt UUID.
+ *
+ * Keep the cluster-map appearance vocabulary identical to the CarPlay
+ * Simulator wire format: speed-limit/compass use user|no, ETA uses yes|no,
+ * and maneuverLayout is present with an empty value in the captured map URL.
+ * These flags only ask the phone/navigation app to include the corresponding
+ * elements in the type111 navigation video; they do not alter the private111
+ * transport, decoder, SHM ABI, renderer geometry, Context80, or wheel control.
+ */
+#define CP_ALT_CLUSTER_MAP_URL \
+    "maps:/car/instrumentcluster/map?showSpeedLimit=user&showCompass=user&showETA=yes&maneuverLayout="
 
 struct altscreen_display {
     const char *uuid;
