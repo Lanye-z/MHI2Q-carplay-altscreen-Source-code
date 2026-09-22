@@ -398,6 +398,8 @@ def test_successful_catchup_rebases_before_next_event():
     m.add(50, 1)
     assert len(m.sent) == 1
     m.tick(100)
+    assert len(m.sent) == 1
+    m.tick(150)
     assert len(m.sent) == 2
     assert m.target == m.sent_level == 0
 
