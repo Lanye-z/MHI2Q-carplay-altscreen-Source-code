@@ -407,6 +407,25 @@ restore_transaction_active(){
     [ -f "$RESTORE_TXN_DIR/PREPARED" ] || [ -f "$RESTORE_TXN_DIR/APPLYING" ]
 }
 
+install_transaction_active(){
+    [ -d "$INSTALL_TXN_DIR" ] || return 1
+    [ -f "$INSTALL_TXN_DIR/COMMITTED" ] && return 1
+    [ -f "$INSTALL_TXN_DIR/ROLLED_BACK" ] && return 1
+    return 0
+}
+
+install_transaction_cleanup_terminal(){
+    [ -d "$INSTALL_TXN_DIR" ] || return 0
+    if [ -f "$INSTALL_TXN_DIR/COMMITTED" ] || [ -f "$INSTALL_TXN_DIR/ROLLED_BACK" ]; then
+        rm -rf "$INSTALL_TXN_DIR" 2>/dev/null || {
+            echo "WARN: terminal install transaction retained on SD; it is non-blocking" >&2
+            return 0
+        }
+        echo "INSTALL_TRANSACTION_TERMINAL_CLEANUP=PASS"
+    fi
+    return 0
+}
+
 delegate(){
     route=$1; shift
     case "$route" in
@@ -447,7 +466,8 @@ CMD=${1:-}
 case "$CMD" in
   install)
     restore_transaction_active && fail "restore transaction is active; recover/finish RESTORE ORIGINAL before INSTALL"
-    if [ -d "$INSTALL_TXN_DIR" ] && [ "${ALTS_INSTALL_TXN_ACTIVE:-0}" != 1 ]; then
+    install_transaction_cleanup_terminal
+    if install_transaction_active && [ "${ALTS_INSTALL_TXN_ACTIVE:-0}" != 1 ]; then
         fail "install transaction is active; recover/finish transactional INSTALL before direct controller INSTALL"
     fi
     route=$(select_install_route "${2:-}") || exit 1
@@ -515,7 +535,8 @@ case "$CMD" in
     ;;
   start)
     restore_transaction_active && fail "restore transaction is active; START is blocked until recovery/restore completes"
-    [ ! -d "$INSTALL_TXN_DIR" ] || fail "install transaction is active; START is blocked until INSTALL commits or rolls back"
+    install_transaction_cleanup_terminal
+    install_transaction_active && fail "install transaction is active; START is blocked until INSTALL commits or rolls back"
     route=$(route_for_existing) || fail "no installed firmware route; run INSTALL first"
     echo "ROUTER_PROFILE=$route"
     delegate "$route" "$CMD"
@@ -524,7 +545,11 @@ case "$CMD" in
     route=$(route_for_existing) || fail "no installed firmware route; run INSTALL first"
     echo "ROUTER_PROFILE=$route"
     restore_transaction_active && echo "RESTORE_TRANSACTION=ACTIVE path=$RESTORE_TXN_DIR"
-    [ ! -d "$INSTALL_TXN_DIR" ] || echo "INSTALL_TRANSACTION=ACTIVE path=$INSTALL_TXN_DIR"
+    if install_transaction_active; then
+        echo "INSTALL_TRANSACTION=ACTIVE path=$INSTALL_TXN_DIR"
+    elif [ -d "$INSTALL_TXN_DIR" ]; then
+        echo "INSTALL_TRANSACTION=TERMINAL_STALE path=$INSTALL_TXN_DIR non_blocking=YES"
+    fi
     delegate "$route" "$CMD"
     ;;
   *) echo "usage: altscreen_chain_test.sh {install|start|status|restore-precheck|restore|collect}" >&2; exit 2 ;;
