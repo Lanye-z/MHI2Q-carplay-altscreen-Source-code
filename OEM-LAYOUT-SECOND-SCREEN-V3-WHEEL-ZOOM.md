@@ -145,14 +145,24 @@ new input = -2
 -> pending = +1
 ```
 
-CarPlay exposes only a one-step directional `changeMapZoomLevel` command, so the pending target is drained one command at a time:
+CarPlay exposes only a one-step directional `changeMapZoomLevel` command, so the pending target is drained one command at a time. V3.1 now uses decoded-frame health instead of a fixed 200 ms cadence:
 
 ```text
-first eligible intent after idle -> send immediately
-remaining pending intent          -> at most one command per 200 ms
+first command in a session
+  -> send immediately
+
+after each command
+  -> wait at least 100 ms
+  -> require >= 3 new decoded frames
+  -> require latest decoded frame age <= 100 ms
+  -> then allow the next pending step
 ```
 
-The 200 ms interval is an initial vehicle-test pacing value, not a claim about the exact Audi OEM timeout. It is deliberately kept in one constant (`WHEEL_ZOOM_PACE_US`) so the next vehicle log can tune it without touching any video/display path.
+If the decoded source becomes stale for >=150 ms, the scheduler latches a render stall, resets its recovery baseline, and waits for **three new recovery frames** before another zoom command is allowed. This directly targets the Amap behavior seen in vehicle logs where the type111 stream froze for roughly 0.4–0.47 s after rapid zoom input.
+
+If process-local decoded-frame telemetry is temporarily unavailable, the scheduler falls back to the previous conservative 200 ms timer. Pending intent is also expired after 1.5 s without new wheel input so a stalled map cannot replay old zoom commands much later.
+
+The frame feedback is process-local and read-only; it does not change the `/carplay111_decoded` SHM ABI, the sidecar, GLES, Context80, or any display geometry.
 
 The CarPlay completion callback remains observational. A `status=0` response means the command was accepted; it does **not** prove that Apple Maps/Amap has finished its zoom animation, so the callback never unlocks an immediate next send.
 
@@ -247,11 +257,17 @@ Java callback
   -> native accumulator
   -> +/- cancellation
   -> clamp pending to four steps
-  -> first eligible command immediately
-  -> remaining commands at >=200 ms spacing
+  -> first command immediately
+  -> decoded-frame health gate
+       minimum wait = 100 ms
+       fresh frames >= 3
+       latest frame age <= 100 ms
+       stall threshold = 150 ms
+       fallback timer = 200 ms
+  -> one CarPlay zoom step
 ```
 
-The queue still carries an epoch and monotonic source sequence, and stale pre-attach records are discarded. Native still gates zoom on the current private111 generation, route readiness and verified Java80 ownership. If any gate closes, unsent pending zoom intent is cleared instead of leaking into a later session.
+The queue still carries an epoch and monotonic source sequence, and stale pre-attach records are discarded. Native still gates zoom on the current private111 generation, route readiness and verified Java80 ownership. If any gate closes, unsent pending zoom intent is cleared instead of leaking into a later session. Process-local frame progress is sampled under the existing tap lock; no SHM layout/version changes are introduced.
 
 Vehicle-test logging must include:
 
@@ -259,6 +275,9 @@ Vehicle-test logging must include:
 WHEEL_ZOOM_INPUT
 WHEEL_ZOOM_QUEUE
 WHEEL_ZOOM_ACCUMULATE
+WHEEL_ZOOM_FRAME_STALL
+WHEEL_ZOOM_FRAME_RECOVERED
+WHEEL_ZOOM_PENDING_EXPIRE
 WHEEL_ZOOM_PACED_SEND
 CLUSTER_ZOOM_SUBMIT
 CLUSTER_ZOOM_RESPONSE
@@ -269,9 +288,10 @@ The key acceptance checks are now:
 1. slow single detents still feel immediate;
 2. a multi-step magnification jump produces one signed intent, not an immediate command burst;
 3. opposite direction input cancels unsent pending intent;
-4. no two CarPlay zoom submits are intentionally emitted inside the 200 ms pacing window;
-5. Apple Maps remains responsive;
-6. Amap no longer shows the previous severe burst-induced stall/catch-up behavior;
-7. the incoming type111 content itself changes scale; no local pixel zoom is introduced.
+4. stable Apple Maps/type111 output can advance after the minimum frame-health gate rather than waiting an arbitrary fixed delay;
+5. while Amap/type111 is stalled, no additional zoom command is emitted;
+6. after a stall, at least three fresh decoded frames are observed before the next command;
+7. stale pending input is discarded instead of replaying after a long freeze;
+8. the incoming type111 content itself changes scale; no local pixel zoom is introduced.
 
 The display chain, V3.1 1440x542-to-1440x455 1:1 viewport clipping, Context80, OMX/SHM path, CPU CSC and lifecycle remain outside this wheel change.
