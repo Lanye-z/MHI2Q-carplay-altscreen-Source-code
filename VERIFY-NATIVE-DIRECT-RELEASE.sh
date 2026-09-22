@@ -378,20 +378,44 @@ if grep -Fq 'for (i = 1; i <= steps; ++i)' "$WHEEL_SRC"; then
 fi
 grep -Fq '#define WHEEL_ZOOM_EVENT_MODEL "OEM_STEPS_V1"' "$NATIVE" ||
     fail "native wheel parser model mismatch"
-grep -Fq '#define WHEEL_ZOOM_PACE_US 200000u' "$NATIVE" ||
-    fail "wheel pacing interval must remain 200 ms for V3.1 vehicle test"
 grep -Fq '#define WHEEL_ZOOM_PENDING_LIMIT 4' "$NATIVE" ||
     fail "wheel pending target must remain bounded to four steps"
+grep -Fq '#define WHEEL_ZOOM_MIN_PACE_US 100000u' "$NATIVE" ||
+    fail "adaptive wheel minimum pacing must remain 100 ms"
+grep -Fq '#define WHEEL_ZOOM_FALLBACK_PACE_US 200000u' "$NATIVE" ||
+    fail "adaptive wheel telemetry fallback must remain 200 ms"
+grep -Fq '#define WHEEL_ZOOM_FRESH_FRAME_AGE_US 100000u' "$NATIVE" ||
+    fail "adaptive wheel fresh-frame age threshold mismatch"
+grep -Fq '#define WHEEL_ZOOM_STALL_AGE_US 150000u' "$NATIVE" ||
+    fail "adaptive wheel stall threshold mismatch"
+grep -Fq '#define WHEEL_ZOOM_FRESH_FRAMES 3u' "$NATIVE" ||
+    fail "adaptive wheel recovery frame count mismatch"
+grep -Fq '#define WHEEL_ZOOM_PENDING_EXPIRE_US 1500000u' "$NATIVE" ||
+    fail "adaptive wheel pending expiry mismatch"
 grep -Fq 'native_wheel_zoom_accumulate' "$NATIVE" ||
     fail "signed wheel intent accumulator missing"
+grep -Fq 'p111_frame_tap_get_progress' "$NATIVE" ||
+    fail "adaptive wheel pacing does not consume decoded-frame progress"
+grep -Fq 'struct p111_frame_progress_snapshot' "$TAP_H" ||
+    fail "decoded-frame progress snapshot ABI declaration missing"
+grep -Fq 'g_last_frame_publish_us32' "$TAP" ||
+    fail "process-local decoded-frame freshness timestamp missing"
 grep -Fq 'PHASE=WHEEL_ZOOM_ACCUMULATE' "$NATIVE" ||
     fail "wheel accumulator diagnostics missing"
+grep -Fq 'PHASE=WHEEL_ZOOM_FRAME_STALL' "$NATIVE" ||
+    fail "adaptive wheel stall diagnostic missing"
+grep -Fq 'PHASE=WHEEL_ZOOM_FRAME_RECOVERED' "$NATIVE" ||
+    fail "adaptive wheel recovery diagnostic missing"
+grep -Fq 'PHASE=WHEEL_ZOOM_PENDING_EXPIRE' "$NATIVE" ||
+    fail "adaptive wheel stale-pending expiry diagnostic missing"
+grep -Fq 'pacing=FRAME_HEALTH_ADAPTIVE' "$NATIVE" ||
+    fail "adaptive wheel pacing marker missing"
 grep -Fq 'PHASE=WHEEL_ZOOM_PACED_SEND' "$NATIVE" ||
-    fail "paced CarPlay zoom dispatch missing"
+    fail "adaptive CarPlay zoom dispatch missing"
 grep -Fq 'response_gates_next=0' "$NATIVE" ||
-    fail "CarPlay acceptance callback must not gate the next paced command"
+    fail "CarPlay acceptance callback must not gate the next adaptive command"
 python3 "$WHEEL_PACING_TEST" ||
-    fail "wheel pacing behavioral contract failed"
+    fail "adaptive wheel pacing behavioral contract failed"
 
 # ---- CarPlay protocol-level live layout/safe-area + OEM map placement contract ----
 grep -Fq 'ALTAREA_LAYOUT_SAFE_V3' "$AIRPLAY_SRC" ||
