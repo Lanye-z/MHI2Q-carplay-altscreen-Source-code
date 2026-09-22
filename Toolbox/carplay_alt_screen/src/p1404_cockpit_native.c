@@ -700,7 +700,8 @@ static int native_read_cluster_owned_for_zoom(void) {
 #define WHEEL_ZOOM_FRESH_FRAME_AGE_US 100000u
 #define WHEEL_ZOOM_STALL_AGE_US 150000u
 #define WHEEL_ZOOM_FRESH_FRAMES 3u
-#define WHEEL_ZOOM_PENDING_EXPIRE_US 1500000u
+#define WHEEL_ZOOM_INPUT_QUIET_US 350000u
+#define WHEEL_ZOOM_PENDING_HARD_EXPIRE_US 600000u
 
 static int native_wheel_zoom_accumulate(int pending, int delta,
                                         int *saturated) {
@@ -843,7 +844,8 @@ static void *native_monitor_worker(void *arg) {
         "baseline_epoch=%u baseline_seq=%u stale_events_before_attach=discarded "
         "model=%s pacing=FRAME_HEALTH_ADAPTIVE min_pace_ms=%u "
         "fallback_pace_ms=%u fresh_frames=%u fresh_age_ms=%u "
-        "stall_age_ms=%u pending_limit=%d pending_expire_ms=%u",
+        "stall_age_ms=%u input_quiet_ms=%u pending_hard_expire_ms=%u "
+        "pending_limit=%d",
         receiver, stream, generation, zoom_last_epoch, zoom_last_seq,
         WHEEL_ZOOM_EVENT_MODEL,
         WHEEL_ZOOM_MIN_PACE_US / 1000u,
@@ -851,8 +853,9 @@ static void *native_monitor_worker(void *arg) {
         WHEEL_ZOOM_FRESH_FRAMES,
         WHEEL_ZOOM_FRESH_FRAME_AGE_US / 1000u,
         WHEEL_ZOOM_STALL_AGE_US / 1000u,
-        WHEEL_ZOOM_PENDING_LIMIT,
-        WHEEL_ZOOM_PENDING_EXPIRE_US / 1000u);
+        WHEEL_ZOOM_INPUT_QUIET_US / 1000u,
+        WHEEL_ZOOM_PENDING_HARD_EXPIRE_US / 1000u,
+        WHEEL_ZOOM_PENDING_LIMIT);
 
     for (;;) {
         /*
@@ -1047,20 +1050,23 @@ static void *native_monitor_worker(void *arg) {
         }
 
         /*
-         * Do not replay stale wheel intent long after the driver stopped.
-         * 1.5 s is intentionally longer than the worst ~0.5 s Amap stalls
-         * observed in the previous vehicle logs, while still preventing a
-         * frozen map from resuming several old zoom commands later.
+         * Treat wheel input as a short OEM-style interaction burst, not a
+         * historical command queue.  No unsent intent may survive more than
+         * 600 ms after the final detent.  A separate 350 ms quiet/stall rule
+         * below clears even earlier when the phone-side map is still frozen.
          */
         if (zoom_gate && zoom_pending_steps != 0 && zoom_last_input_at &&
-            now > zoom_last_input_at +
-                  (uint64_t)WHEEL_ZOOM_PENDING_EXPIRE_US) {
+            now >= zoom_last_input_at +
+                   (uint64_t)WHEEL_ZOOM_PENDING_HARD_EXPIRE_US) {
             altscreen_log(
-                "PHASE=WHEEL_ZOOM_PENDING_EXPIRE receiver=%p stream=%p "
-                "generation=%u pending_before=%d age_us=%llu action=CLEAR",
+                "PHASE=WHEEL_ZOOM_PENDING_HARD_EXPIRE receiver=%p stream=%p "
+                "generation=%u pending_before=%d input_quiet_us=%llu "
+                "hard_expire_ms=%u action=CLEAR_NO_LATE_REPLAY",
                 receiver, stream, generation, zoom_pending_steps,
-                (unsigned long long)(now - zoom_last_input_at));
+                (unsigned long long)(now - zoom_last_input_at),
+                WHEEL_ZOOM_PENDING_HARD_EXPIRE_US / 1000u);
             zoom_pending_steps = 0;
+            zoom_last_input_at = 0;
             zoom_frame_baseline_valid = 0;
             zoom_wait_saw_stall = 0;
         }
@@ -1088,6 +1094,8 @@ static void *native_monitor_worker(void *arg) {
             int fallback_timer = 0;
             int first_send = zoom_last_send_at == 0;
             uint64_t elapsed_us = first_send ? 0 : now - zoom_last_send_at;
+            uint64_t input_quiet_us = zoom_last_input_at ?
+                now - zoom_last_input_at : 0;
             uint32_t frame_age_us = 0;
             uint32_t fresh_frames = 0;
             uint32_t frame_base = 0;
@@ -1144,6 +1152,35 @@ static void *native_monitor_worker(void *arg) {
                             frame_age_us / 1000u,
                             zoom_progress.frame_count,
                             zoom_progress.sequence);
+                    }
+
+                    /*
+                     * If the driver has stopped rolling for 350 ms and the
+                     * decoded stream is still stale, the interaction burst is
+                     * over.  Drop unsent intent instead of replaying it when
+                     * Amap eventually recovers.  A recovered/fresh stream is
+                     * allowed to finish briefly until the 600 ms hard limit.
+                     */
+                    if (zoom_pending_steps != 0 &&
+                        input_quiet_us >=
+                            (uint64_t)WHEEL_ZOOM_INPUT_QUIET_US &&
+                        frame_age_us >= WHEEL_ZOOM_STALL_AGE_US) {
+                        altscreen_log(
+                            "PHASE=WHEEL_ZOOM_QUIET_STALL_CLEAR receiver=%p "
+                            "stream=%p generation=%u command_seq=%u "
+                            "pending_before=%d input_quiet_ms=%u "
+                            "frame_age_ms=%u stall_latched=%d "
+                            "action=CLEAR_NO_RECOVERY_REPLAY",
+                            receiver, stream, generation,
+                            zoom_command_seq, zoom_pending_steps,
+                            (unsigned)(input_quiet_us / 1000u),
+                            frame_age_us / 1000u,
+                            zoom_wait_saw_stall);
+                        zoom_pending_steps = 0;
+                        zoom_last_input_at = 0;
+                        zoom_frame_baseline_valid = 0;
+                        zoom_wait_saw_stall = 0;
+                        continue;
                     }
 
                     frame_base = zoom_wait_saw_stall ?
