@@ -161,12 +161,11 @@ same_bytes(){
         cmp "$1" "$2" >/dev/null 2>&1
     fi
 }
-known_managed_jar(){
+historical_managed_jar(){
     [ -f "$1" ] || return 1
     size=$(file_size "$1")
     sum=$(file_cksum "$1")
     [ "$sum" != unavailable ] || return 1
-    [ "$size" = "$EXPECTED_SIZE" ] && [ "$sum" = "$EXPECTED_CKSUM" ] && return 0
     case "$size:$sum" in
       149510:180684234|149979:2362627699|150026:3028143795) return 0 ;;
       *) return 1 ;;
@@ -199,7 +198,7 @@ live_managed_install_detected(){
             current_package_jar=YES
             managed=1
         fi
-        if known_managed_jar "$JAR_TARGET"; then
+        if historical_managed_jar "$JAR_TARGET"; then
             known_managed=YES
             known_managed_match="$target_jar_size:$target_jar_cksum"
             managed=1
