@@ -303,6 +303,7 @@ jobs:
             'PHASE=WHEEL_ZOOM_QUEUE' \
             'PHASE=CLUSTER_ZOOM_SUBMIT' \
             'PHASE=CLUSTER_ZOOM_RESPONSE' \
+            'maps:/car/instrumentcluster/map?showSpeedLimit=user&showCompass=user&showETA=yes&maneuverLayout=' \
             '/tmp/mmi-mirror-wheel-zoom.events'
           do
             strings "$BIN" | grep -Fq "$marker"
@@ -336,6 +337,11 @@ jobs:
           grep -Fq 'set_i64(params, "zoomDirection"' \
             Toolbox/carplay_alt_screen/src/p1404_airplay.c
           grep -Fq 'direction == 0 ? "ZOOM_IN" : "ZOOM_OUT"' \
+            Toolbox/carplay_alt_screen/src/p1404_airplay.c
+          grep -Fq \
+            'maps:/car/instrumentcluster/map?showSpeedLimit=user&showCompass=user&showETA=yes&maneuverLayout=' \
+            Toolbox/carplay_alt_screen/src/altscreen_core.h
+          grep -Fq 'cf_str_new(CP_ALT_CLUSTER_MAP_URL, -1)' \
             Toolbox/carplay_alt_screen/src/p1404_airplay.c
 
           grep -Fq \
@@ -559,6 +565,14 @@ jobs:
                   "experiment-oem-layout-second-screen-v3.1-oem-map-1to1-clip"
                   if is_v31 else
                   "experiment-oem-layout-second-screen-v3-wheel-zoom",
+              "cluster_appearance_model":
+                  "CARPLAY_SIMULATOR_QUERY_V1",
+              "cluster_show_speed_limit": "user",
+              "cluster_show_compass": "user",
+              "cluster_show_eta": "yes",
+              "cluster_maneuver_layout": "empty",
+              "cluster_appearance_build_status":
+                  "COMPILED_READY_FOR_VEHICLE_TEST",
               "wheel_zoom_control":
                   "CARPLAY_CHANGE_MAP_ZOOM_LEVEL_V1",
               "wheel_zoom_wire":
@@ -681,6 +695,12 @@ jobs:
                   "jar_sha256": os.environ["JAR_SHA"],
                   "universal_runtime_sha256": os.environ["HOOK_SHA"],
                   "display_chain": "V3_1_OEM_MAP_1TO1_CLIP",
+                  "cluster_appearance_model":
+                      "CARPLAY_SIMULATOR_QUERY_V1",
+                  "cluster_show_speed_limit": "user",
+                  "cluster_show_compass": "user",
+                  "cluster_show_eta": "yes",
+                  "cluster_maneuver_layout": "empty",
                   "wheel_zoom_event_model": "OEM_STEPS_V1",
                   "wheel_zoom_model": "OEM_TARGET_FOLLOW_V1",
                   "wheel_zoom_pacing": "TARGET_FOLLOW_STALL_GUARD",
@@ -801,6 +821,7 @@ jobs:
           strings "$HOOK" | grep -Fq 'changeMapZoomLevel'
           strings "$HOOK" | grep -Fq 'PHASE=CLUSTER_ZOOM_SUBMIT'
           strings "$HOOK" | grep -Fq 'PHASE=CLUSTER_ZOOM_RESPONSE'
+          strings "$HOOK" | grep -Fq 'maps:/car/instrumentcluster/map?showSpeedLimit=user&showCompass=user&showETA=yes&maneuverLayout='
           strings "$HOOK" | grep -Fq 'OEM_STEPS_V1'
           strings "$HOOK" | grep -Fq 'OEM_TARGET_FOLLOW_V1'
           strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_TARGET'
@@ -838,6 +859,14 @@ jobs:
           grep -Fq 'mode=PRIVATE111_DIRECT_DISPLAY_V3_WHEEL_ZOOM' \
             Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt
           grep -Fq 'wheel_zoom_build_status=COMPILED_READY_FOR_VEHICLE_TEST' \
+            Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt
+          grep -Fq 'cluster_appearance_model=CARPLAY_SIMULATOR_QUERY_V1' \
+            Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt
+          grep -Fq 'cluster_show_speed_limit=user' \
+            Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt
+          grep -Fq 'cluster_show_compass=user' \
+            Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt
+          grep -Fq 'cluster_show_eta=yes' \
             Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt
           grep -Fq 'ACTION=RUN_WHEEL_ZOOM_V3_BUILD' \
             Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh
