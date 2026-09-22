@@ -369,7 +369,7 @@ grep -Fq 'startup_frame_progress_required=2' "$MAIN_CPP" ||
 grep -Fq 'carplay-private111-direct-display-v3.1-oem-map-1to1-clip' "$MAIN_CPP" ||
     fail "V3.1 OEM geometry sidecar build id missing"
 
-# ---- OEM-style wheel intent accumulator / CarPlay paced drain contract ----
+# ---- OEM target-follow wheel intent / CarPlay paced drain contract ----
 grep -Fq 'model=OEM_STEPS_V1' "$WHEEL_SRC" ||
     fail "Java wheel observer does not publish OEM signed-step intent model"
 grep -Fq 'step=0' "$WHEEL_SRC" ||
@@ -378,51 +378,58 @@ if grep -Fq 'for (i = 1; i <= steps; ++i)' "$WHEEL_SRC"; then
     fail "retired per-step Java event expansion remains"
 fi
 grep -Fq '#define WHEEL_ZOOM_EVENT_MODEL "OEM_STEPS_V1"' "$NATIVE" ||
-    fail "native wheel parser model mismatch"
-grep -Fq '#define WHEEL_ZOOM_PENDING_LIMIT 4' "$NATIVE" ||
-    fail "wheel pending target must remain bounded to four steps"
-grep -Fq '#define WHEEL_ZOOM_MIN_PACE_US 120000u' "$NATIVE" ||
-    fail "adaptive wheel minimum pacing must remain 120 ms"
-grep -Fq '#define WHEEL_ZOOM_FALLBACK_PACE_US 200000u' "$NATIVE" ||
-    fail "adaptive wheel telemetry fallback must remain 200 ms"
+    fail "native wheel event parser model mismatch"
+grep -Fq '#define WHEEL_ZOOM_SCHEDULER_MODEL "OEM_TARGET_FOLLOW_V1"' "$NATIVE" ||
+    fail "native OEM target-follow scheduler marker missing"
+grep -Fq '#define WHEEL_ZOOM_TARGET_LIMIT 12' "$NATIVE" ||
+    fail "wheel target safety clamp mismatch"
+grep -Fq '#define WHEEL_ZOOM_MONITOR_TICK_US 50000u' "$NATIVE" ||
+    fail "wheel scheduler quantum must remain 50 ms"
+grep -Fq '#define WHEEL_ZOOM_MIN_PACE_US 100000u' "$NATIVE" ||
+    fail "healthy target-follow minimum pacing must remain 100 ms"
+grep -Fq '#define WHEEL_ZOOM_FALLBACK_PACE_US 150000u' "$NATIVE" ||
+    fail "target-follow telemetry fallback must remain 150 ms"
 grep -Fq '#define WHEEL_ZOOM_FRESH_FRAME_AGE_US 100000u' "$NATIVE" ||
-    fail "adaptive wheel fresh-frame age threshold mismatch"
+    fail "stall-recovery fresh-frame age threshold mismatch"
 grep -Fq '#define WHEEL_ZOOM_STALL_AGE_US 150000u' "$NATIVE" ||
-    fail "adaptive wheel stall threshold mismatch"
-grep -Fq '#define WHEEL_ZOOM_FRESH_FRAMES 3u' "$NATIVE" ||
-    fail "adaptive wheel recovery frame count mismatch"
-grep -Fq '#define WHEEL_ZOOM_INPUT_QUIET_US 350000u' "$NATIVE" ||
-    fail "adaptive wheel quiet-burst timeout mismatch"
-grep -Fq '#define WHEEL_ZOOM_PENDING_HARD_EXPIRE_US 600000u' "$NATIVE" ||
-    fail "adaptive wheel hard pending expiry mismatch"
-grep -Fq 'native_wheel_zoom_accumulate' "$NATIVE" ||
-    fail "signed wheel intent accumulator missing"
+    fail "wheel stall threshold mismatch"
+grep -Fq '#define WHEEL_ZOOM_RECOVERY_FRAMES 3u' "$NATIVE" ||
+    fail "stall-recovery frame count mismatch"
+grep -Fq '#define WHEEL_ZOOM_BURST_GAP_US 300000u' "$NATIVE" ||
+    fail "new-burst gap mismatch"
+grep -Fq '#define WHEEL_ZOOM_STALL_ABORT_QUIET_US 350000u' "$NATIVE" ||
+    fail "stall-abort quiet threshold mismatch"
+grep -Fq '#define WHEEL_ZOOM_STALL_ABORT_US 1200000u' "$NATIVE" ||
+    fail "stall-abort lifetime mismatch"
+grep -Fq 'static uint32_t wheel_now_us32(void)' "$NATIVE" ||
+    fail "dedicated wheel microsecond timebase missing"
+grep -Fq 'native_wheel_zoom_target_accumulate' "$NATIVE" ||
+    fail "desired wheel target accumulator missing"
 grep -Fq 'p111_frame_tap_get_progress' "$NATIVE" ||
-    fail "adaptive wheel pacing does not consume decoded-frame progress"
+    fail "wheel stall guard does not consume decoded-frame progress"
 grep -Fq 'struct p111_frame_progress_snapshot' "$TAP_H" ||
     fail "decoded-frame progress snapshot ABI declaration missing"
 grep -Fq 'g_last_frame_publish_us32' "$TAP" ||
     fail "process-local decoded-frame freshness timestamp missing"
-grep -Fq 'PHASE=WHEEL_ZOOM_ACCUMULATE' "$NATIVE" ||
-    fail "wheel accumulator diagnostics missing"
+grep -Fq 'PHASE=WHEEL_ZOOM_TARGET' "$NATIVE" ||
+    fail "wheel target diagnostics missing"
 grep -Fq 'PHASE=WHEEL_ZOOM_FRAME_STALL' "$NATIVE" ||
-    fail "adaptive wheel stall diagnostic missing"
+    fail "wheel stall diagnostic missing"
 grep -Fq 'PHASE=WHEEL_ZOOM_FRAME_RECOVERED' "$NATIVE" ||
-    fail "adaptive wheel recovery diagnostic missing"
-grep -Fq 'PHASE=WHEEL_ZOOM_QUIET_STALL_CLEAR' "$NATIVE" ||
-    fail "adaptive wheel quiet/stall clear diagnostic missing"
-grep -Fq 'PHASE=WHEEL_ZOOM_PENDING_HARD_EXPIRE' "$NATIVE" ||
-    fail "adaptive wheel hard-expiry diagnostic missing"
-grep -Fq 'pacing=FRAME_HEALTH_ADAPTIVE' "$NATIVE" ||
-    fail "adaptive wheel pacing marker missing"
+    fail "wheel recovery diagnostic missing"
+grep -Fq 'PHASE=WHEEL_ZOOM_STALL_ABORT' "$NATIVE" ||
+    fail "long-stall no-late-replay diagnostic missing"
 grep -Fq 'PHASE=WHEEL_ZOOM_PACED_SEND' "$NATIVE" ||
-    fail "adaptive CarPlay zoom dispatch missing"
+    fail "target-follow CarPlay zoom dispatch missing"
 grep -Fq 'response_gates_next=0' "$NATIVE" ||
-    fail "CarPlay acceptance callback must not gate the next adaptive command"
+    fail "CarPlay acceptance callback must remain observational"
+if grep -Fq 'WHEEL_ZOOM_PENDING_HARD_EXPIRE' "$NATIVE"; then
+    fail "retired hard-expire pending queue remains"
+fi
 python3 "$WHEEL_PACING_TEST" ||
-    fail "adaptive wheel pacing behavioral contract failed"
+    fail "OEM target-follow wheel behavioral contract failed"
 
-# ---- CarPlay protocol-level live layout/safe-area + OEM map placement contract ----
+# ---- CarPlay protocol-level live layout/safe-area + OEM map placement contract ----# ---- CarPlay protocol-level live layout/safe-area + OEM map placement contract ----
 grep -Fq 'ALTAREA_LAYOUT_SAFE_V3' "$AIRPLAY_SRC" ||
     fail "CarPlay cluster live safeArea marker missing"
 grep -Fq '/tmp/mmi-mirror-hmi.state' "$AIRPLAY_SRC" ||

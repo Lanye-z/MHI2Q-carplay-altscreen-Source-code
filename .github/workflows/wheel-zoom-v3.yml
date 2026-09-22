@@ -381,42 +381,53 @@ jobs:
             Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
           grep -Fq '#define WHEEL_ZOOM_EVENT_MODEL "OEM_STEPS_V1"' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
-          grep -Fq '#define WHEEL_ZOOM_PENDING_LIMIT 4' \
+          grep -Fq '#define WHEEL_ZOOM_SCHEDULER_MODEL "OEM_TARGET_FOLLOW_V1"' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
-          grep -Fq '#define WHEEL_ZOOM_MIN_PACE_US 120000u' \
+          grep -Fq '#define WHEEL_ZOOM_TARGET_LIMIT 12' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
-          grep -Fq '#define WHEEL_ZOOM_FALLBACK_PACE_US 200000u' \
+          grep -Fq '#define WHEEL_ZOOM_MONITOR_TICK_US 50000u' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq '#define WHEEL_ZOOM_MIN_PACE_US 100000u' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq '#define WHEEL_ZOOM_FALLBACK_PACE_US 150000u' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
           grep -Fq '#define WHEEL_ZOOM_FRESH_FRAME_AGE_US 100000u' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
           grep -Fq '#define WHEEL_ZOOM_STALL_AGE_US 150000u' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
-          grep -Fq '#define WHEEL_ZOOM_FRESH_FRAMES 3u' \
+          grep -Fq '#define WHEEL_ZOOM_RECOVERY_FRAMES 3u' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
-          grep -Fq '#define WHEEL_ZOOM_INPUT_QUIET_US 350000u' \
+          grep -Fq '#define WHEEL_ZOOM_BURST_GAP_US 300000u' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
-          grep -Fq '#define WHEEL_ZOOM_PENDING_HARD_EXPIRE_US 600000u' \
+          grep -Fq '#define WHEEL_ZOOM_STALL_ABORT_QUIET_US 350000u' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq '#define WHEEL_ZOOM_STALL_ABORT_US 1200000u' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'static uint32_t wheel_now_us32(void)' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'native_wheel_zoom_target_accumulate' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
           grep -Fq 'p111_frame_tap_get_progress' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
           grep -Fq 'struct p111_frame_progress_snapshot' \
             Toolbox/carplay_alt_screen/src/private111_direct_tap.h
-          grep -Fq 'PHASE=WHEEL_ZOOM_ACCUMULATE' \
+          grep -Fq 'PHASE=WHEEL_ZOOM_TARGET' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
           grep -Fq 'PHASE=WHEEL_ZOOM_FRAME_STALL' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
           grep -Fq 'PHASE=WHEEL_ZOOM_FRAME_RECOVERED' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
-          grep -Fq 'PHASE=WHEEL_ZOOM_QUIET_STALL_CLEAR' \
-            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
-          grep -Fq 'PHASE=WHEEL_ZOOM_PENDING_HARD_EXPIRE' \
-            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
-          grep -Fq 'pacing=FRAME_HEALTH_ADAPTIVE' \
+          grep -Fq 'PHASE=WHEEL_ZOOM_STALL_ABORT' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
           grep -Fq 'PHASE=WHEEL_ZOOM_PACED_SEND' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
           grep -Fq 'response_gates_next=0' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          if grep -Fq 'WHEEL_ZOOM_PENDING_HARD_EXPIRE' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c; then
+            echo 'ERROR: retired hard-expire queue model remains' >&2
+            exit 1
+          fi
           python3 Toolbox/carplay_alt_screen/tests/test_wheel_zoom_pacing.py
           grep -Fq 'if (!active) WheelZoomBridge.reset();' \
             Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java
@@ -450,7 +461,7 @@ jobs:
           sh -n Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh
           sh -n Toolbox/scripts/status_mmi_cockpit_carplay_test.sh
 
-          echo "WHEEL_PROTOCOL_STATIC=PASS wire=changeMapZoomLevel params=uuid+zoomDirection direction=0_in_1_out model=OEM_STEPS_V1 pacing=FRAME_HEALTH_ADAPTIVE min_pace_ms=120 fallback_ms=200 fresh_frames=3 stall_age_ms=150 input_quiet_ms=350 pending_hard_expire_ms=600 pending_limit=4 opposite=cancel local_pixel_zoom=NO gate=java80_verified_ownership"
+          echo "WHEEL_PROTOCOL_STATIC=PASS wire=changeMapZoomLevel params=uuid+zoomDirection direction=0_in_1_out event_model=OEM_STEPS_V1 scheduler=OEM_TARGET_FOLLOW_V1 tick_ms=50 min_pace_ms=100 fallback_ms=150 recovery_frames=3 stall_age_ms=150 burst_gap_ms=300 stall_abort_quiet_ms=350 stall_abort_ms=1200 target_limit=12 opposite=retarget local_pixel_zoom=NO gate=java80_verified_ownership"
 
       - name: Refresh package identities in test artifact
         run: |
@@ -521,30 +532,36 @@ jobs:
                   "EPOCH_RESET_AT_256K",
               "wheel_zoom_java_log":
                   "/tmp/mmi-mirror-wheel-zoom.log",
-              "wheel_zoom_model": "OEM_STEPS_V1",
+              "wheel_zoom_event_model": "OEM_STEPS_V1",
+              "wheel_zoom_model": "OEM_TARGET_FOLLOW_V1",
               "wheel_zoom_dispatch":
-                  "SIGNED_ACCUMULATOR_FRAME_HEALTH_ADAPTIVE_DRAIN",
+                  "DESIRED_TARGET_FOLLOW_ONE_STEP_DRAIN",
               "wheel_zoom_event_expansion":
                   "DISABLED_ONE_RECORD_PER_CALLBACK",
-              "wheel_zoom_pacing": "FRAME_HEALTH_ADAPTIVE",
-              "wheel_zoom_min_pace_ms": "120",
-              "wheel_zoom_fallback_pace_ms": "200",
-              "wheel_zoom_fresh_frames": "3",
+              "wheel_zoom_pacing": "TARGET_FOLLOW_STALL_GUARD",
+              "wheel_zoom_scheduler_tick_ms": "50",
+              "wheel_zoom_min_pace_ms": "100",
+              "wheel_zoom_fallback_pace_ms": "150",
+              "wheel_zoom_recovery_frames": "3",
               "wheel_zoom_fresh_frame_age_ms": "100",
               "wheel_zoom_stall_age_ms": "150",
-              "wheel_zoom_input_quiet_ms": "350",
-              "wheel_zoom_pending_hard_expire_ms": "600",
-              "wheel_zoom_pending_limit": "4",
-              "wheel_zoom_opposite_direction": "CANCELS_PENDING",
+              "wheel_zoom_burst_gap_ms": "300",
+              "wheel_zoom_stall_abort_quiet_ms": "350",
+              "wheel_zoom_stall_abort_ms": "1200",
+              "wheel_zoom_target_limit": "12",
+              "wheel_zoom_opposite_direction": "RETARGETS_DESIRED_LEVEL",
               "wheel_zoom_response_gate":
                   "NO_ACCEPTANCE_CALLBACK_IS_OBSERVE_ONLY",
               "wheel_zoom_frame_feedback":
                   "PROCESS_LOCAL_DECODED_PROGRESS_NO_SHM_ABI_CHANGE",
               "wheel_zoom_stall_policy":
-                  "BLOCK_UNTIL_3_FRESH_FRAMES_OR_CLEAR_AFTER_350MS_QUIET",
+                  "BLOCK_ONLY_ON_POST_SEND_STALL_RECOVER_AFTER_3_FRESH_FRAMES",
               "wheel_zoom_telemetry_fallback":
-                  "200MS_TIMER",
+                  "150MS_TIMER",
+              "wheel_zoom_timebase":
+                  "DEDICATED_MODULAR_US32_MATCHES_DECODED_TAP",
               "wheel_zoom_build_status":
+                  "COMPILED_READY_FOR_VEHICLE_TEST",              "wheel_zoom_build_status":
                   "COMPILED_READY_FOR_VEHICLE_TEST",
           }
 
@@ -570,6 +587,18 @@ jobs:
                       text += "\n"
                   text += line + "\n"
 
+          for retired_key in [
+              "wheel_zoom_fresh_frames",
+              "wheel_zoom_input_quiet_ms",
+              "wheel_zoom_pending_hard_expire_ms",
+              "wheel_zoom_pending_limit",
+          ]:
+              text = re.sub(
+                  r"^" + re.escape(retired_key) + r"=.*\n?",
+                  "",
+                  text,
+                  flags=re.M,
+              )
           info.write_text(text)
 
           for rel in [
@@ -607,17 +636,20 @@ jobs:
                   "jar_sha256": os.environ["JAR_SHA"],
                   "universal_runtime_sha256": os.environ["HOOK_SHA"],
                   "display_chain": "V3_1_OEM_MAP_1TO1_CLIP",
-                  "wheel_zoom_model": "OEM_STEPS_V1",
-                  "wheel_zoom_pacing": "FRAME_HEALTH_ADAPTIVE",
-                  "wheel_zoom_min_pace_ms": "120",
-                  "wheel_zoom_fallback_pace_ms": "200",
-                  "wheel_zoom_fresh_frames": "3",
+                  "wheel_zoom_event_model": "OEM_STEPS_V1",
+                  "wheel_zoom_model": "OEM_TARGET_FOLLOW_V1",
+                  "wheel_zoom_pacing": "TARGET_FOLLOW_STALL_GUARD",
+                  "wheel_zoom_scheduler_tick_ms": "50",
+                  "wheel_zoom_min_pace_ms": "100",
+                  "wheel_zoom_fallback_pace_ms": "150",
+                  "wheel_zoom_recovery_frames": "3",
                   "wheel_zoom_fresh_frame_age_ms": "100",
                   "wheel_zoom_stall_age_ms": "150",
-                  "wheel_zoom_input_quiet_ms": "350",
-                  "wheel_zoom_pending_hard_expire_ms": "600",
-                  "wheel_zoom_pending_limit": "4",
-                  "install_policy": "EXTRACT_BRANCH_ZIP_CONTENTS_TO_SD_ROOT",
+                  "wheel_zoom_burst_gap_ms": "300",
+                  "wheel_zoom_stall_abort_quiet_ms": "350",
+                  "wheel_zoom_stall_abort_ms": "1200",
+                  "wheel_zoom_target_limit": "12",
+                  "install_policy": "EXTRACT_BRANCH_ZIP_CONTENTS_TO_SD_ROOT",                  "install_policy": "EXTRACT_BRANCH_ZIP_CONTENTS_TO_SD_ROOT",
                   "verifier": "VERIFY-BRANCH-ZIP-READY.sh",
               }
               for key, value in ready_updates.items():
@@ -631,13 +663,20 @@ jobs:
                       if ready_text and not ready_text.endswith("\n"):
                           ready_text += "\n"
                       ready_text += line + "\n"
-              # Remove retired long-tail metadata if present.
-              ready_text = re.sub(
-                  r"^wheel_zoom_pending_expire_ms=.*\n?",
-                  "",
-                  ready_text,
-                  flags=re.M,
-              )
+              # Remove retired short-queue metadata if present.
+              for retired_key in [
+                  "wheel_zoom_fresh_frames",
+                  "wheel_zoom_input_quiet_ms",
+                  "wheel_zoom_pending_expire_ms",
+                  "wheel_zoom_pending_hard_expire_ms",
+                  "wheel_zoom_pending_limit",
+              ]:
+                  ready_text = re.sub(
+                      r"^" + re.escape(retired_key) + r"=.*\n?",
+                      "",
+                      ready_text,
+                      flags=re.M,
+                  )
               ready.write_text(ready_text)
 
           required = [
@@ -710,13 +749,12 @@ jobs:
           strings "$HOOK" | grep -Fq 'PHASE=CLUSTER_ZOOM_SUBMIT'
           strings "$HOOK" | grep -Fq 'PHASE=CLUSTER_ZOOM_RESPONSE'
           strings "$HOOK" | grep -Fq 'OEM_STEPS_V1'
-          strings "$HOOK" | grep -Fq 'FRAME_HEALTH_ADAPTIVE'
-          strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_ACCUMULATE'
+          strings "$HOOK" | grep -Fq 'OEM_TARGET_FOLLOW_V1'
+          strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_TARGET'
           strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_FRAME_STALL'
           strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_FRAME_RECOVERED'
-          strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_QUIET_STALL_CLEAR'
-          strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_PENDING_HARD_EXPIRE'
-          strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_PACED_SEND'
+          strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_STALL_ABORT'
+          strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_PACED_SEND'          strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_PACED_SEND'
           python3 Toolbox/carplay_alt_screen/tests/test_wheel_zoom_pacing.py
 
           python3 - "$JAR" <<'PY'
@@ -775,7 +813,7 @@ jobs:
             PACKAGE_SOURCE_MAP.json \
             SHA256SUMS.txt
           if ! git diff --cached --quiet; then
-            git commit -m "build(v3.1): promote adaptive short-tail wheel control [skip ci]"
+            git commit -m "build(v3.1): promote OEM target-follow wheel control [skip ci]"
             git fetch origin "$GITHUB_REF_NAME"
             git rebase "origin/$GITHUB_REF_NAME"
             git push origin "HEAD:$GITHUB_REF_NAME"

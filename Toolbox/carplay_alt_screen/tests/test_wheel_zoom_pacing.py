@@ -1,261 +1,288 @@
 #!/usr/bin/env python3
-"""Reference contract for V3.1 OEM-style frame-health wheel pacing."""
+"""Reference contract for V3.1 OEM_TARGET_FOLLOW_V1 wheel scheduling."""
 
-PENDING_LIMIT = 4
-MIN_PACE_MS = 120
-FALLBACK_PACE_MS = 200
+TARGET_LIMIT = 12
+TICK_MS = 50
+MIN_PACE_MS = 100
+FALLBACK_PACE_MS = 150
 FRESH_FRAME_AGE_MS = 100
 STALL_AGE_MS = 150
-FRESH_FRAMES = 3
-INPUT_QUIET_MS = 350
-PENDING_HARD_EXPIRE_MS = 600
+RECOVERY_FRAMES = 3
+BURST_GAP_MS = 300
+STALL_ABORT_QUIET_MS = 350
+STALL_ABORT_MS = 1200
 
 
-def clamp_pending(value):
-    if value > PENDING_LIMIT:
-        return PENDING_LIMIT
-    if value < -PENDING_LIMIT:
-        return -PENDING_LIMIT
-    return value
+def clamp_target(value):
+    return max(-TARGET_LIMIT, min(TARGET_LIMIT, value))
 
 
 class Model:
     def __init__(self):
-        self.pending = 0
+        self.target = 0
+        self.sent_level = 0
         self.last_input_ms = None
         self.last_send_ms = None
         self.sent = []
         self.frame_count = 0
         self.last_frame_ms = None
         self.telemetry = True
-        self.baseline = None
+        self.send_frame_base = None
+        self.stall = False
+        self.stall_start_ms = None
         self.recovery_base = None
-        self.saw_stall = False
-        self.clears = []
+        self.first_step_pending = False
+        self.aborts = []
 
     def frame(self, now_ms, count=1):
         self.frame_count += count
         self.last_frame_ms = now_ms
 
     def add(self, now_ms, delta):
-        self.pending = clamp_pending(self.pending + delta)
+        new_burst = (
+            self.last_input_ms is None
+            or now_ms - self.last_input_ms >= BURST_GAP_MS
+        )
+        self.target = clamp_target(self.target + delta)
         self.last_input_ms = now_ms
+        if new_burst:
+            self.first_step_pending = True
+        if self.target == self.sent_level:
+            self.first_step_pending = False
+            self.stall = False
+            self.stall_start_ms = None
+            self.recovery_base = None
         self.drain(now_ms)
 
     def tick(self, now_ms):
         self.drain(now_ms)
 
-    def _capture_baseline(self):
-        if self.telemetry and self.last_frame_ms is not None:
-            self.baseline = self.frame_count
-            self.recovery_base = self.frame_count
-        else:
-            self.baseline = None
-            self.recovery_base = None
-        self.saw_stall = False
-
-    def _clear_pending(self, now_ms, reason):
-        self.clears.append((now_ms, reason, self.pending))
-        self.pending = 0
-        self.last_input_ms = None
-        self.baseline = None
-        self.recovery_base = None
-        self.saw_stall = False
+    def _progress(self, now_ms):
+        if not self.telemetry or self.last_frame_ms is None:
+            return None
+        return {
+            "age": now_ms - self.last_frame_ms,
+            "fresh": (
+                None
+                if self.send_frame_base is None
+                else self.frame_count - self.send_frame_base
+            ),
+        }
 
     def drain(self, now_ms):
-        if self.pending == 0:
+        if self.target == self.sent_level:
             return
 
+        first_send = self.last_send_ms is None
+        elapsed = 0 if first_send else now_ms - self.last_send_ms
         input_quiet = (
-            None
+            0
             if self.last_input_ms is None
             else now_ms - self.last_input_ms
         )
+        progress = self._progress(now_ms)
 
         if (
-            input_quiet is not None
-            and input_quiet > PENDING_HARD_EXPIRE_MS
+            not self.stall
+            and not first_send
+            and not self.first_step_pending
+            and elapsed >= STALL_AGE_MS
+            and progress is not None
+            and progress["fresh"] == 0
+            and progress["age"] >= STALL_AGE_MS
         ):
-            self._clear_pending(now_ms, "hard_expire")
+            self.stall = True
+            self.stall_start_ms = now_ms
+            self.recovery_base = self.frame_count
+
+        if self.stall:
+            if progress is not None:
+                recovered = self.frame_count - self.recovery_base
+                if (
+                    progress["age"] <= FRESH_FRAME_AGE_MS
+                    and recovered >= RECOVERY_FRAMES
+                ):
+                    self.stall = False
+                    self.stall_start_ms = None
+
+            if (
+                self.stall
+                and now_ms - self.stall_start_ms >= STALL_ABORT_MS
+                and input_quiet >= STALL_ABORT_QUIET_MS
+            ):
+                self.aborts.append(
+                    (now_ms, self.target, self.sent_level)
+                )
+                self.target = self.sent_level
+                self.stall = False
+                self.stall_start_ms = None
+                self.recovery_base = None
+                self.first_step_pending = False
+                return
+
+        if self.stall:
             return
 
-        if self.last_send_ms is None:
+        if first_send:
             ready = True
+        elif self.first_step_pending:
+            ready = elapsed >= MIN_PACE_MS
+        elif progress is not None and progress["fresh"] is not None:
+            ready = elapsed >= MIN_PACE_MS and progress["fresh"] > 0
         else:
-            elapsed = now_ms - self.last_send_ms
-            if self.telemetry and self.last_frame_ms is not None:
-                frame_age = now_ms - self.last_frame_ms
-
-                if self.baseline is None:
-                    self.baseline = self.frame_count
-                    self.recovery_base = self.frame_count
-                    self.saw_stall = False
-
-                if (
-                    not self.saw_stall
-                    and elapsed >= MIN_PACE_MS
-                    and frame_age >= STALL_AGE_MS
-                ):
-                    self.saw_stall = True
-                    self.recovery_base = self.frame_count
-
-                if (
-                    input_quiet is not None
-                    and input_quiet >= INPUT_QUIET_MS
-                    and frame_age >= STALL_AGE_MS
-                ):
-                    self._clear_pending(now_ms, "quiet_stall")
-                    return
-
-                base = (
-                    self.recovery_base
-                    if self.saw_stall
-                    else self.baseline
-                )
-                fresh = self.frame_count - base
-                ready = (
-                    elapsed >= MIN_PACE_MS
-                    and frame_age <= FRESH_FRAME_AGE_MS
-                    and fresh >= FRESH_FRAMES
-                )
-            else:
-                ready = elapsed >= FALLBACK_PACE_MS
+            ready = elapsed >= FALLBACK_PACE_MS
 
         if not ready:
             return
 
-        if self.pending < 0:
-            direction = "IN"
-            self.pending += 1
-        else:
-            direction = "OUT"
-            self.pending -= 1
-
-        self.sent.append((now_ms, direction))
+        direction = "IN" if self.target < self.sent_level else "OUT"
+        self.sent_level += -1 if direction == "IN" else 1
+        self.sent.append((now_ms, direction, self.target, self.sent_level))
         self.last_send_ms = now_ms
-        self._capture_baseline()
+        self.first_step_pending = False
+        self.send_frame_base = (
+            self.frame_count if self.telemetry else None
+        )
 
 
-def test_first_step_immediate():
+def test_first_detent_is_immediate():
     m = Model()
-    m.frame(0, 1)
+    m.frame(0)
     m.add(0, 1)
-    assert m.sent == [(0, "OUT")]
+    assert m.sent == [(0, "OUT", 1, 1)]
 
 
-def test_healthy_burst_can_finish_on_600ms_boundary():
+def test_healthy_target_follow_runs_at_100ms():
     m = Model()
-    m.frame(0, 1)
+    m.frame(0)
     m.add(0, 4)
-    for t in (100, 200, 300, 400, 500, 600):
-        m.frame(t, 3)
+    for t in (50, 100, 150, 200, 250, 300):
+        m.frame(t)
         m.tick(t)
-    assert m.sent == [
-        (0, "OUT"),
-        (200, "OUT"),
-        (400, "OUT"),
-        (600, "OUT"),
-    ]
-    assert m.pending == 0
-    assert m.clears == []
+    assert [x[0] for x in m.sent] == [0, 100, 200, 300]
+    assert m.target == 4
+    assert m.sent_level == 4
 
 
-def test_stall_plus_quiet_clears_without_recovery_replay():
+def test_reverse_retargets_instead_of_replaying_old_out_steps():
     m = Model()
-    m.frame(0, 1)
+    m.frame(0)
     m.add(0, 4)
-    m.tick(200)       # stale decoded frame => stall latch
-    m.tick(400)       # >350 ms quiet while still stale => clear tail
-    m.frame(500, 3)
-    m.tick(500)       # recovery must not replay old zoom steps
-    assert m.sent == [(0, "OUT")]
-    assert m.pending == 0
-    assert m.clears == [(400, "quiet_stall", 3)]
+    assert m.sent_level == 1
+    m.add(50, -3)
+    assert m.target == 1
+    assert m.sent_level == 1
+    m.frame(100)
+    m.tick(100)
+    assert len(m.sent) == 1
 
 
-def test_recovery_before_quiet_timeout_can_continue():
+def test_reverse_past_submitted_level_changes_direction():
     m = Model()
-    m.frame(0, 1)
+    m.frame(0)
+    m.add(0, 4)
+    m.add(50, -5)
+    assert m.target == -1
+    m.frame(100)
+    m.tick(100)
+    assert m.sent[-1][1] == "IN"
+    assert m.sent_level == 0
+
+
+def test_no_progress_latches_stall_then_three_frames_recover():
+    m = Model()
+    m.frame(0)
     m.add(0, 3)
-    m.add(100, 1)     # extend active burst; pending remains bounded
-    m.tick(200)       # no frame progress, stall latch
-    m.frame(300, 3)   # recovered before 350 ms quiet from last input
-    m.tick(300)
-    assert m.sent == [(0, "OUT"), (300, "OUT")]
-    assert m.pending == 2
-
-
-def test_opposite_steps_cancel_unsent_pending():
-    m = Model()
-    m.frame(0, 1)
-    m.add(0, 1)       # immediate
-    m.add(20, 2)
-    m.add(40, -2)     # unsent tail cancels before next adaptive slot
-    m.frame(200, 3)
+    m.tick(100)
+    assert len(m.sent) == 1
+    m.tick(150)
+    assert m.stall
+    m.frame(200, 2)
     m.tick(200)
-    assert m.sent == [(0, "OUT")]
-    assert m.pending == 0
+    assert m.stall
+    m.frame(250, 1)
+    m.tick(250)
+    assert not m.stall
+    assert len(m.sent) == 2
 
 
-def test_telemetry_unavailable_uses_200ms_fallback_but_no_long_tail():
+def test_target_can_change_while_stalled_without_old_replay():
+    m = Model()
+    m.frame(0)
+    m.add(0, 4)
+    m.tick(150)
+    assert m.stall
+    m.add(200, -4)
+    assert m.target == 0
+    assert m.sent_level == 1
+    m.frame(250, 3)
+    m.tick(250)
+    assert m.sent[-1][1] == "IN"
+    assert m.sent_level == 0
+
+
+def test_new_burst_can_wake_static_map():
+    m = Model()
+    m.frame(0)
+    m.add(0, 1)
+    m.frame(50, 2)
+    m.tick(50)
+    m.add(1000, 1)
+    assert m.sent[-1][0] == 1000
+    assert m.sent_level == 2
+
+
+def test_long_stall_rebases_to_sent_level():
+    m = Model()
+    m.frame(0)
+    m.add(0, 4)
+    m.tick(150)
+    assert m.stall
+    m.tick(1350)
+    assert m.target == m.sent_level == 1
+    assert m.aborts == [(1350, 4, 1)]
+
+
+def test_telemetry_fallback_is_150ms():
     m = Model()
     m.telemetry = False
-    m.add(0, 4)
+    m.add(0, 3)
     m.tick(100)
-    m.tick(200)
-    m.tick(400)
-    m.tick(600)
-    assert m.sent == [
-        (0, "OUT"),
-        (200, "OUT"),
-        (400, "OUT"),
-        (600, "OUT"),
-    ]
-    assert m.pending == 0
-    assert m.clears == []
+    assert len(m.sent) == 1
+    m.tick(150)
+    assert len(m.sent) == 2
 
 
-def test_hard_expiry_clears_only_older_than_600ms():
+def test_target_limit_is_safety_clamp_not_short_queue():
     m = Model()
-    m.frame(0, 1)
-    m.add(0, 4)
-    m.tick(200)       # stalled
-    m.tick(400)       # quiet+stalled clear wins before hard expiry
-    assert m.pending == 0
-    assert m.clears[-1][0:2] == (400, "quiet_stall")
-
-    n = Model()
-    n.telemetry = False
-    n.add(0, 4)
-    n.tick(200)
-    n.tick(400)
-    n.tick(600)       # exact boundary may still consume final healthy/fallback step
-    assert n.sent[-1] == (600, "OUT")
-    assert n.pending == 0
+    m.frame(0)
+    m.add(0, 50)
+    assert m.target == TARGET_LIMIT
+    assert m.sent_level == 1
+    m.add(50, -50)
+    assert m.target == -TARGET_LIMIT
 
 
-def test_pending_limit_stays_bounded():
-    m = Model()
-    m.frame(0, 1)
-    m.add(0, 20)
-    assert m.sent == [(0, "OUT")]
-    assert m.pending == 3
+def main():
+    test_first_detent_is_immediate()
+    test_healthy_target_follow_runs_at_100ms()
+    test_reverse_retargets_instead_of_replaying_old_out_steps()
+    test_reverse_past_submitted_level_changes_direction()
+    test_no_progress_latches_stall_then_three_frames_recover()
+    test_target_can_change_while_stalled_without_old_replay()
+    test_new_burst_can_wake_static_map()
+    test_long_stall_rebases_to_sent_level()
+    test_telemetry_fallback_is_150ms()
+    test_target_limit_is_safety_clamp_not_short_queue()
+    print(
+        "WHEEL_ZOOM_PACING_TEST=PASS "
+        "event_model=OEM_STEPS_V1 scheduler=OEM_TARGET_FOLLOW_V1 "
+        "tick_ms=50 min_pace_ms=100 fallback_ms=150 "
+        "recovery_frames=3 fresh_age_ms=100 stall_age_ms=150 "
+        "burst_gap_ms=300 stall_abort_quiet_ms=350 "
+        "stall_abort_ms=1200 target_limit=12"
+    )
 
 
 if __name__ == "__main__":
-    test_first_step_immediate()
-    test_healthy_burst_can_finish_on_600ms_boundary()
-    test_stall_plus_quiet_clears_without_recovery_replay()
-    test_recovery_before_quiet_timeout_can_continue()
-    test_opposite_steps_cancel_unsent_pending()
-    test_telemetry_unavailable_uses_200ms_fallback_but_no_long_tail()
-    test_hard_expiry_clears_only_older_than_600ms()
-    test_pending_limit_stays_bounded()
-    print(
-        "WHEEL_ZOOM_PACING_TEST=PASS "
-        "model=OEM_STEPS_V1 pacing=FRAME_HEALTH_ADAPTIVE "
-        "min_pace_ms=120 fallback_ms=200 fresh_frames=3 "
-        "fresh_age_ms=100 stall_age_ms=150 input_quiet_ms=350 "
-        "pending_hard_expire_ms=600 pending_limit=4 "
-        "opposite=cancel response_gate=no late_replay=blocked"
-    )
+    main()

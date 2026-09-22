@@ -127,51 +127,43 @@ delta = -3
 
 It is no longer expanded into three adjacent queue records.
 
-Native keeps a signed pending target:
+Native now keeps **two relative levels**, not a short historical command queue:
 
 ```text
-pending += signed_steps
-pending is clamped to [-4, +4]
-
-positive -> ZOOM_OUT
-negative -> ZOOM_IN
+desired_target += signed_steps
+submitted_level changes only after a CarPlay zoom command is submitted successfully
+error = desired_target - submitted_level
 ```
 
-Opposite directions cancel before transmission:
+The desired target is safety-clamped to `[-12, +12]` relative steps. This is deliberately much wider than the retired four-step pending queue; it is a safety bound, not a normal interaction limit.
+
+Opposite input retargets the desired level immediately. Example:
 
 ```text
-pending = +3
-new input = -2
--> pending = +1
+desired=+4, submitted=+1
+driver turns back by -3
+-> desired=+1, submitted=+1
+-> no old ZOOM_OUT commands remain to replay
 ```
 
-CarPlay exposes only a one-step directional `changeMapZoomLevel` command, so the pending target is drained one command at a time. V3.1 now uses decoded-frame health instead of a fixed 200 ms cadence:
+CarPlay still exposes only a one-step directional `changeMapZoomLevel` command, so native follows the latest target one command at a time. V3.1 now uses a dedicated modular 32-bit **microsecond** clock that matches the decoded-frame tap clock. The legacy `obs_now_us()` function is intentionally left unchanged because it is actually second-based and is used by existing lifecycle timeouts.
+
+Healthy scheduling is deliberately regular:
 
 ```text
-first command in a session
-  -> send immediately
-
-after each command
-  -> wait at least 120 ms
-  -> require >= 3 new decoded frames
-  -> require latest decoded frame age <= 100 ms
-  -> then allow the next pending step
+wheel scheduler quantum = 50 ms
+first detent of a new burst = immediate
+consecutive healthy step = >=100 ms after previous submit
+normal healthy path = at least one decoded frame progressed after previous submit
 ```
 
-If the decoded source becomes stale for >=150 ms, the scheduler latches a render stall, resets its recovery baseline, and waits for **three new recovery frames** before another zoom command is allowed. This directly targets the Amap behavior seen in vehicle logs where the type111 stream froze for roughly 0.4–0.47 s after rapid zoom input.
+The decoded-frame signal is now a **stall guard, not the throttle**. Normal zooming no longer waits for three fresh frames. If a submitted command produces no decoded progress and the frame is stale for >=150 ms, the scheduler latches STALL and stops sending. Only recovery from STALL requires three fresh decoded frames with latest-frame age <=100 ms.
 
-With the existing 100 ms control-monitor cadence, the 120 ms minimum means a healthy stream normally dispatches the next step on the ~200 ms poll rather than at ~100 ms; slower frame production or a stall extends that interval automatically.
+If decoded-frame telemetry is temporarily unavailable, the target follower uses a conservative 150 ms timer. If a stall persists for >=1.2 s and the roller has been quiet for >=350 ms, the unresolved target is rebased to the already submitted level. This prevents a recovered phone session from replaying old zoom movement long after the driver stopped.
 
-If process-local decoded-frame telemetry is temporarily unavailable, the scheduler falls back to the previous conservative 200 ms timer.
+A >=300 ms gap starts a new interaction burst. Its first detent may wake a static map immediately instead of being blocked merely because the last navigation frame is old.
 
-Wheel intent is treated as a short interaction burst rather than a historical command queue. After **350 ms without new roller input**, if the decoded stream is still stale, all unsent pending steps are cleared immediately so a recovered Amap session cannot replay old zoom requests. Even when the frame stream is healthy, unsent pending intent has a **600 ms hard lifetime** from the final detent; anything still queued at that point is discarded.
-
-The frame feedback is process-local and read-only; it does not change the `/carplay111_decoded` SHM ABI, the sidecar, GLES, Context80, or any display geometry.
-
-The CarPlay completion callback remains observational. A `status=0` response means the command was accepted; it does **not** prove that Apple Maps/Amap has finished its zoom animation, so the callback never unlocks an immediate next send.
-
-
-## Safety / lifecycle gates
+## Safety / lifecycle gates## Safety / lifecycle gates
 
 A zoom event may be sent only when all required conditions are true:
 
@@ -258,33 +250,38 @@ V3.1 changes only the wheel scheduling layer:
 ```text
 Java callback
   -> one OEM_STEPS_V1 signed-step record
-  -> native accumulator
-  -> +/- cancellation
-  -> clamp pending to four steps
-  -> first command immediately
-  -> decoded-frame health gate
-       minimum wait = 120 ms
-       fresh frames >= 3
-       latest frame age <= 100 ms
-       stall threshold = 150 ms
-       quiet+stalled clear = 350 ms
-       hard pending lifetime = 600 ms
-       fallback timer = 200 ms
-  -> one CarPlay zoom step
+  -> desired target accumulator
+       target safety clamp = +/-12
+       reversal retargets latest desired level
+  -> 50 ms wheel scheduler
+  -> first detent of a new burst may send immediately
+  -> healthy follow
+       minimum interval = 100 ms
+       require >=1 decoded frame of progress since prior submit
+       do NOT require three frames
+  -> stall guard
+       no post-send progress + frame stale >=150 ms -> STALL
+       STALL recovery requires >=3 fresh frames
+       latest recovery frame age <=100 ms
+       persistent stall >=1.2 s + input quiet >=350 ms
+           -> rebase desired target to submitted level
+  -> telemetry unavailable
+       150 ms conservative timer
+  -> one CarPlay zoom step toward the latest desired target
 ```
 
-The queue still carries an epoch and monotonic source sequence, and stale pre-attach records are discarded. Native still gates zoom on the current private111 generation, route readiness and verified Java80 ownership. If any gate closes, unsent pending zoom intent is cleared instead of leaking into a later session. Process-local frame progress is sampled under the existing tap lock; no SHM layout/version changes are introduced.
+The event queue still carries an epoch and monotonic source sequence, and stale pre-attach records are discarded. Native still gates zoom on the current private111 generation, route readiness and verified Java80 ownership. If any gate closes, target-follow state is reset instead of leaking into a later session. Process-local frame progress is sampled under the existing tap lock; no SHM layout/version changes are introduced.
 
 Vehicle-test logging must include:
 
 ```text
 WHEEL_ZOOM_INPUT
 WHEEL_ZOOM_QUEUE
-WHEEL_ZOOM_ACCUMULATE
+WHEEL_ZOOM_TARGET
 WHEEL_ZOOM_FRAME_STALL
 WHEEL_ZOOM_FRAME_RECOVERED
-WHEEL_ZOOM_QUIET_STALL_CLEAR
-WHEEL_ZOOM_PENDING_HARD_EXPIRE
+WHEEL_ZOOM_STALL_ABORT
+WHEEL_ZOOM_STALL_CANCELLED
 WHEEL_ZOOM_PACED_SEND
 CLUSTER_ZOOM_SUBMIT
 CLUSTER_ZOOM_RESPONSE
@@ -292,14 +289,13 @@ CLUSTER_ZOOM_RESPONSE
 
 The key acceptance checks are now:
 
-1. slow single detents still feel immediate;
-2. a multi-step magnification jump produces one signed intent, not an immediate command burst;
-3. opposite direction input cancels unsent pending intent;
-4. stable Apple Maps/type111 output can advance after the minimum frame-health gate rather than waiting an arbitrary fixed delay;
-5. while Amap/type111 is stalled, no additional zoom command is emitted;
-6. after a stall, at least three fresh decoded frames are observed before the next command while the wheel burst is still active;
-7. if the roller has been quiet for 350 ms and the decoded stream is still stalled, unsent pending steps are cleared instead of replaying after recovery;
-8. no pending wheel intent survives beyond 600 ms after the final detent, even on a healthy stream;
-9. the incoming type111 content itself changes scale; no local pixel zoom is introduced.
+1. a slow single detent is submitted on the first scheduler opportunity;
+2. healthy continuous rolling follows at a regular ~100 ms command cadence rather than a ~200 ms polling artifact;
+3. reversing the roller changes the latest desired target instead of replaying a historical pending queue;
+4. healthy zooming does not wait for three decoded frames; one post-submit progress frame is sufficient;
+5. no decoded progress plus >=150 ms stale age latches STALL and blocks additional commands;
+6. STALL recovery requires at least three fresh decoded frames before target-follow resumes;
+7. a persistent stall is abandoned after >=1.2 s once input has been quiet >=350 ms, preventing late replay;
+8. the incoming type111 content itself changes scale; no local pixel zoom is introduced.
 
 The display chain, V3.1 1440x542-to-1440x455 1:1 viewport clipping, Context80, OMX/SHM path, CPU CSC and lifecycle remain outside this wheel change.
