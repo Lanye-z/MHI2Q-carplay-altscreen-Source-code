@@ -1092,6 +1092,7 @@ static void *native_monitor_worker(void *arg) {
             int progress_ok = 0;
             int frame_ready = 0;
             int fallback_timer = 0;
+            int quiet_stall_cleared = 0;
             int first_send = zoom_last_send_at == 0;
             uint64_t elapsed_us = first_send ? 0 : now - zoom_last_send_at;
             uint64_t input_quiet_us = zoom_last_input_at ?
@@ -1180,33 +1181,36 @@ static void *native_monitor_worker(void *arg) {
                         zoom_last_input_at = 0;
                         zoom_frame_baseline_valid = 0;
                         zoom_wait_saw_stall = 0;
-                        continue;
+                        quiet_stall_cleared = 1;
                     }
 
-                    frame_base = zoom_wait_saw_stall ?
-                        zoom_recovery_frame_count :
-                        zoom_wait_frame_count;
-                    fresh_frames =
-                        zoom_progress.frame_count - frame_base;
+                    if (!quiet_stall_cleared) {
+                        frame_base = zoom_wait_saw_stall ?
+                            zoom_recovery_frame_count :
+                            zoom_wait_frame_count;
+                        fresh_frames =
+                            zoom_progress.frame_count - frame_base;
 
-                    frame_ready =
-                        elapsed_us >=
-                            (uint64_t)WHEEL_ZOOM_MIN_PACE_US &&
-                        frame_age_us <= WHEEL_ZOOM_FRESH_FRAME_AGE_US &&
-                        fresh_frames >= WHEEL_ZOOM_FRESH_FRAMES;
+                        frame_ready =
+                            elapsed_us >=
+                                (uint64_t)WHEEL_ZOOM_MIN_PACE_US &&
+                            frame_age_us <=
+                                WHEEL_ZOOM_FRESH_FRAME_AGE_US &&
+                            fresh_frames >= WHEEL_ZOOM_FRESH_FRAMES;
 
-                    if (frame_ready) {
-                        if (zoom_wait_saw_stall) {
-                            altscreen_log(
-                                "PHASE=WHEEL_ZOOM_FRAME_RECOVERED "
-                                "receiver=%p stream=%p generation=%u "
-                                "command_seq=%u fresh_frames=%u "
-                                "frame_age_ms=%u action=ALLOW_NEXT",
-                                receiver, stream, generation,
-                                zoom_command_seq, fresh_frames,
-                                frame_age_us / 1000u);
+                        if (frame_ready) {
+                            if (zoom_wait_saw_stall) {
+                                altscreen_log(
+                                    "PHASE=WHEEL_ZOOM_FRAME_RECOVERED "
+                                    "receiver=%p stream=%p generation=%u "
+                                    "command_seq=%u fresh_frames=%u "
+                                    "frame_age_ms=%u action=ALLOW_NEXT",
+                                    receiver, stream, generation,
+                                    zoom_command_seq, fresh_frames,
+                                    frame_age_us / 1000u);
+                            }
+                            send_ready = 1;
                         }
-                        send_ready = 1;
                     }
                 } else if (
                     elapsed_us >=
