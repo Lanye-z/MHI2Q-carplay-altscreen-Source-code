@@ -163,9 +163,14 @@ same_bytes(){
 }
 historical_managed_jar(){
     [ -f "$1" ] || return 1
+    # V3 wheel-enabled JARs carry this project-only ZIP member name in the
+    # archive directory, so previous CI rebuilds remain detectable even though
+    # their whole-file cksum changes with JAR timestamps.
+    grep -Fq 'com/luka/carplay/cluster/WheelZoomBridge.class' "$1" 2>/dev/null && return 0
     size=$(file_size "$1")
     sum=$(file_cksum "$1")
     [ "$sum" != unavailable ] || return 1
+    # Older pre-WheelZoomBridge project JAR identities kept for compatibility.
     case "$size:$sum" in
       149510:180684234|149979:2362627699|150026:3028143795) return 0 ;;
       *) return 1 ;;
@@ -198,7 +203,7 @@ live_managed_install_detected(){
             current_package_jar=YES
             managed=1
         fi
-        if historical_managed_jar "$JAR_TARGET"; then
+        if [ "$current_package_jar" != YES ] && historical_managed_jar "$JAR_TARGET"; then
             known_managed=YES
             known_managed_match="$target_jar_size:$target_jar_cksum"
             managed=1
@@ -210,7 +215,7 @@ live_managed_install_detected(){
     echo "SMARTPHONE_INTEGRATOR_HOOK=$si_hook_present path=/mnt/system/etc/eso/production/smartphone_integrator.json token=libcarplay_altscreen.so"
     echo "JAR_TARGET_PRESENT=$target_jar_present path=/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar size=$target_jar_size cksum=$target_jar_cksum"
     echo "CURRENT_PACKAGE_JAR_PRESENT=$current_package_jar expected_size=$EXPECTED_SIZE expected_cksum=$EXPECTED_CKSUM"
-    echo "KNOWN_MANAGED_JAR_PRESENT=$known_managed matched_identity=$known_managed_match"
+    echo "KNOWN_MANAGED_JAR_PRESENT=$known_managed matched_identity=$known_managed_match marker=WheelZoomBridge_or_legacy_identity"
     if [ "$managed" = 1 ]; then
         reasons=""
         [ "$owner_present" != YES ] || reasons="${reasons}RUNTIME_OWNER_PRESENT,"
