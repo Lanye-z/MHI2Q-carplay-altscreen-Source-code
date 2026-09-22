@@ -73,7 +73,18 @@ public final class WheelZoomBridge {
          * when the stock magnification jumps by multiple steps.  V3 expanded
          * delta=+N into N adjacent records, which the 100 ms native poll could
          * flush within 1-2 ms and overload slower CarPlay map renderers.
+         *
+         * Keep the append-only queue bounded for long CarPlay sessions.  A
+         * size rotation advances the epoch and starts a new file so the native
+         * reader can discard the retired history without permanently dropping
+         * all future wheel input once 256 KiB is reached.
          */
+        if (!rotateEventQueueIfNeeded()) {
+            diag("WHEEL_ZOOM_INPUT magnification=" + magnification
+                + " delta=" + delta
+                + " action=IGNORED reason=queue_rotate_failed");
+            return;
+        }
         if (sequence == Integer.MAX_VALUE) {
             sequence = 0;
             eventEpoch = eventEpoch == Integer.MAX_VALUE ? 1 : eventEpoch + 1;
@@ -115,6 +126,34 @@ public final class WheelZoomBridge {
             + " queue=reset");
     }
 
+    private static boolean rotateEventQueueIfNeeded() {
+        try {
+            File f = new File(EVENT_FILE);
+            if (!f.exists() || f.length() <= MAX_EVENT_BYTES) return true;
+
+            int nextEpoch =
+                eventEpoch == Integer.MAX_VALUE ? 1 : eventEpoch + 1;
+            if (!f.delete()) {
+                diag("WHEEL_ZOOM_QUEUE result=dropped"
+                    + " reason=queue_size_rotate_delete_failed"
+                    + " bytes=" + f.length()
+                    + " epoch=" + eventEpoch);
+                return false;
+            }
+
+            eventEpoch = nextEpoch;
+            sequence = 0;
+            diag("WHEEL_ZOOM_EPOCH reason=queue_size_rotate"
+                + " epoch=" + eventEpoch
+                + " queue=reset");
+            return true;
+        } catch (Throwable t) {
+            diag("WHEEL_ZOOM_QUEUE result=dropped"
+                + " reason=queue_size_rotate_failed error=" + t);
+            return false;
+        }
+    }
+
     private static boolean appendEvent(int seq, int direction,
                                        int magnification, int delta,
                                        int steps) {
@@ -122,7 +161,8 @@ public final class WheelZoomBridge {
         try {
             File f = new File(EVENT_FILE);
             if (f.exists() && f.length() > MAX_EVENT_BYTES) {
-                diag("WHEEL_ZOOM_QUEUE result=dropped reason=queue_size_limit"
+                diag("WHEEL_ZOOM_QUEUE result=dropped"
+                    + " reason=queue_size_race"
                     + " bytes=" + f.length() + " seq=" + seq);
                 return false;
             }
