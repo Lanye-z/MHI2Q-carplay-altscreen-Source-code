@@ -429,7 +429,7 @@ fi
 python3 "$WHEEL_PACING_TEST" ||
     fail "OEM target-follow wheel behavioral contract failed"
 
-# ---- CarPlay protocol-level live layout/safe-area + OEM map placement contract ----# ---- CarPlay protocol-level live layout/safe-area + OEM map placement contract ----
+# ---- CarPlay protocol-level live layout/safe-area + OEM map placement contract ----
 grep -Fq 'ALTAREA_LAYOUT_SAFE_V3' "$AIRPLAY_SRC" ||
     fail "CarPlay cluster live safeArea marker missing"
 grep -Fq '/tmp/mmi-mirror-hmi.state' "$AIRPLAY_SRC" ||

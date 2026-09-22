@@ -163,7 +163,7 @@ If decoded-frame telemetry is temporarily unavailable, the target follower uses 
 
 A >=300 ms gap starts a new interaction burst. Its first detent may wake a static map immediately instead of being blocked merely because the last navigation frame is old.
 
-## Safety / lifecycle gates## Safety / lifecycle gates
+## Safety / lifecycle gates
 
 A zoom event may be sent only when all required conditions are true:
 

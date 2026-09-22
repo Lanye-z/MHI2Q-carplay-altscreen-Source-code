@@ -1311,7 +1311,7 @@ static void *native_monitor_worker(void *arg) {
             }
         }
 
-        if (route_ready && !visible && !pending && native_route_requested()) {        if (route_ready && !visible && !pending && native_route_requested()) {
+        if (route_ready && !visible && !pending && native_route_requested()) {
             altscreen_log("PHASE=NATIVE_111_ROUTE_READY receiver=%p stream=%p generation=%u basis=dynamic_config_plus_accepted_showui_plus_first_real_type111_post video_availability_gate=real_frame",
                           receiver, stream, generation);
             (void)request_route_action(slot, NATIVE_ROUTE_ACTIVATE);

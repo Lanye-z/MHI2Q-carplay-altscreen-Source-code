@@ -561,7 +561,6 @@ jobs:
               "wheel_zoom_timebase":
                   "DEDICATED_MODULAR_US32_MATCHES_DECODED_TAP",
               "wheel_zoom_build_status":
-                  "COMPILED_READY_FOR_VEHICLE_TEST",              "wheel_zoom_build_status":
                   "COMPILED_READY_FOR_VEHICLE_TEST",
           }
 
@@ -649,7 +648,7 @@ jobs:
                   "wheel_zoom_stall_abort_quiet_ms": "350",
                   "wheel_zoom_stall_abort_ms": "1200",
                   "wheel_zoom_target_limit": "12",
-                  "install_policy": "EXTRACT_BRANCH_ZIP_CONTENTS_TO_SD_ROOT",                  "install_policy": "EXTRACT_BRANCH_ZIP_CONTENTS_TO_SD_ROOT",
+                  "install_policy": "EXTRACT_BRANCH_ZIP_CONTENTS_TO_SD_ROOT",
                   "verifier": "VERIFY-BRANCH-ZIP-READY.sh",
               }
               for key, value in ready_updates.items():
