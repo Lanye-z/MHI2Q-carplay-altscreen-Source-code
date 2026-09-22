@@ -520,10 +520,11 @@ static int alt_load_measured_k1004_safe_area(uint32_t display_w,
     memset(&r, 0, sizeof(r));
 
     /*
-     * ListModel176 describes the safe region in the map/source coordinate
-     * system.  Keep those coordinates unchanged when advertising to CarPlay.
-     * The Audi layout may translate the whole map plane afterwards; that is a
-     * separate compositor operation and must not be cancelled here.
+     * ListModel176 remains the source for the OEM horizontal bounds. V3.2
+     * intentionally preserves only X/W from that measurement and replaces the
+     * vertical Y/H with the complete visible 0..455 map-plane range. The Audi
+     * layout may translate the whole map plane afterwards; that compositor
+     * operation remains separate and must not be cancelled here.
      */
     if (!strcmp(view, "SMALL")) {
         r.x = 490u;
