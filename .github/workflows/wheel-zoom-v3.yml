@@ -1,10 +1,11 @@
-name: CarPlay Cluster Wheel Zoom V3/V3.1
+name: CarPlay Cluster Wheel Zoom V3/V3.1/V3.2
 
 on:
   push:
     branches:
       - experiment/oem-layout-second-screen_v3
       - experiment/oem-layout-second-screen_v3.1
+      - experiment/oem-layout-second-screen_v3.2
     paths:
       - '.github/workflows/wheel-zoom-v3.yml'
       - 'Toolbox/carplay_alt_screen/src/**'
@@ -31,7 +32,7 @@ concurrency:
 permissions:
   contents: write
 
-# V3.1 uses this workflow as the single hook/HMI artifact promoter to avoid
+# V3.1/V3.2 use this workflow as the single hook/HMI artifact promoter to avoid
 # manifest races with the generic authorization-marker rebuild workflow.
 
 jobs:
@@ -52,8 +53,8 @@ jobs:
             clang lld g++ libgles2-mesa-dev \
             binutils-arm-linux-gnueabihf python3-pyelftools
 
-      - name: Syntax-check V3.1 sidecar geometry sources
-        if: github.ref == 'refs/heads/experiment/oem-layout-second-screen_v3.1'
+      - name: Syntax-check V3.1/V3.2 sidecar geometry sources
+        if: github.ref == 'refs/heads/experiment/oem-layout-second-screen_v3.1' || github.ref == 'refs/heads/experiment/oem-layout-second-screen_v3.2'
         run: |
           set -euo pipefail
           g++ -std=c++98 -Wall -Wextra -Werror -fsyntax-only \
@@ -533,26 +534,62 @@ jobs:
           info = root / "Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt"
           text = info.read_text()
 
-          is_v31 = os.environ.get("GITHUB_REF_NAME") == (
-              "experiment/oem-layout-second-screen_v3.1"
-          )
+          ref_name = os.environ.get("GITHUB_REF_NAME")
+          is_v31 = ref_name == "experiment/oem-layout-second-screen_v3.1"
+          is_v32 = ref_name == "experiment/oem-layout-second-screen_v3.2"
+          is_oem_1to1 = is_v31 or is_v32
           mirror_info = (
               root
               / "Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt"
           )
           mirror_text = mirror_info.read_text()
-          mirror_ready = (
-              is_v31
+          sidecar_ready = (
+              is_oem_1to1
               and "release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2"
-                  in mirror_text
-              and "vehicle_zip_status=READY_FOR_VEHICLE_TEST"
                   in mirror_text
               and "sidecar_source_driven_rebuild_required=no"
                   in mirror_text
-              and "hook_layout_safearea_rebuild_required=no"
-                  in mirror_text
               and "geometry_policy=OEM_MAP_PLANE_1TO1_CLIP_V31"
                   in mirror_text
+          )
+
+          if is_v32 and sidecar_ready:
+              mirror_updates = {
+                  "vehicle_zip_status": "READY_FOR_VEHICLE_TEST",
+                  "hook_layout_safearea_rebuild_required": "no",
+                  "hook_safearea_policy": "V32_OEM_X_VISIBLE_Y",
+                  "oem_layout_full_safearea_reference_455":
+                      "370,0,700,455",
+                  "oem_layout_small_safearea_reference_455":
+                      "490,0,460,455",
+                  "oem_layout_safearea_canvas_yh_mapping":
+                      "vertical_full_visible_0_455",
+                  "oem_layout_classic_full_safearea_physical":
+                      "370,0,700,455",
+                  "oem_layout_classic_small_safearea_physical":
+                      "490,0,460,455",
+                  "oem_layout_sport_full_safearea_physical":
+                      "370,0,700,455",
+                  "oem_layout_sport_small_safearea_physical":
+                      "14,0,460,455",
+              }
+              for key, value in mirror_updates.items():
+                  pattern = r"^" + re.escape(key) + r"=.*$"
+                  line = key + "=" + value
+                  if re.search(pattern, mirror_text, flags=re.M):
+                      mirror_text = re.sub(
+                          pattern, line, mirror_text, flags=re.M
+                      )
+                  else:
+                      if mirror_text and not mirror_text.endswith("\n"):
+                          mirror_text += "\n"
+                      mirror_text += line + "\n"
+              mirror_info.write_text(mirror_text)
+
+          mirror_ready = (
+              sidecar_ready
+              and "vehicle_zip_status=READY_FOR_VEHICLE_TEST" in mirror_text
+              and "hook_layout_safearea_rebuild_required=no" in mirror_text
           )
 
           updates = {
@@ -562,6 +599,8 @@ jobs:
               "jar_sha256": os.environ["JAR_SHA"],
               "universal_runtime_sha256": os.environ["HOOK_SHA"],
               "direct_display_revision":
+                  "experiment-oem-layout-second-screen-v3.2-oem-x-visible-y"
+                  if is_v32 else
                   "experiment-oem-layout-second-screen-v3.1-oem-map-1to1-clip"
                   if is_v31 else
                   "experiment-oem-layout-second-screen-v3-wheel-zoom",
@@ -623,7 +662,7 @@ jobs:
                   "COMPILED_READY_FOR_VEHICLE_TEST",
           }
 
-          if is_v31:
+          if is_oem_1to1:
               updates["branch_zip_status"] = (
                   "READY_FOR_VEHICLE_TEST"
                   if mirror_ready
@@ -681,7 +720,7 @@ jobs:
               )
               path.write_text(source)
 
-          if is_v31:
+          if is_oem_1to1:
               ready = root / "BRANCH-ZIP-READY.txt"
               ready_text = ready.read_text()
               ready_updates = {
@@ -886,8 +925,8 @@ jobs:
 
           echo "V3_VEHICLE_TEST_CONTRACT=PASS gate=java80_verified_ownership installer_fail_closed=YES"
 
-      - name: Promote rebuilt V3.1 wheel JAR and package identities
-        if: github.ref == 'refs/heads/experiment/oem-layout-second-screen_v3.1'
+      - name: Promote rebuilt V3.1/V3.2 wheel JAR and package identities
+        if: github.ref == 'refs/heads/experiment/oem-layout-second-screen_v3.1' || github.ref == 'refs/heads/experiment/oem-layout-second-screen_v3.2'
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -896,6 +935,7 @@ jobs:
             BRANCH-ZIP-READY.txt \
             Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar \
             Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt \
+            Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt \
             Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so \
             Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh \
             Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh \
@@ -903,14 +943,14 @@ jobs:
             PACKAGE_SOURCE_MAP.json \
             SHA256SUMS.txt
           if ! git diff --cached --quiet; then
-            git commit -m "build(v3.1): promote OEM target-follow wheel control [skip ci]"
+            git commit -m "build(oem-layout): promote wheel/hook vehicle package [skip ci]"
             git fetch origin "$GITHUB_REF_NAME"
             git rebase "origin/$GITHUB_REF_NAME"
             git push origin "HEAD:$GITHUB_REF_NAME"
           fi
 
       - name: Stage complete vehicle-test SD package
-        if: github.ref != 'refs/heads/experiment/oem-layout-second-screen_v3.1'
+        if: github.ref != 'refs/heads/experiment/oem-layout-second-screen_v3.1' && github.ref != 'refs/heads/experiment/oem-layout-second-screen_v3.2'
         run: |
           set -euo pipefail
 
@@ -987,7 +1027,7 @@ jobs:
           )
 
       - name: Upload V3 vehicle-test package
-        if: github.ref != 'refs/heads/experiment/oem-layout-second-screen_v3.1'
+        if: github.ref != 'refs/heads/experiment/oem-layout-second-screen_v3.1' && github.ref != 'refs/heads/experiment/oem-layout-second-screen_v3.2'
         uses: actions/upload-artifact@v4
         with:
           name: carplay-wheel-zoom-v3-sd
