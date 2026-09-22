@@ -359,11 +359,33 @@ jobs:
             Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
           grep -Fq '#define WHEEL_ZOOM_EVENT_MODEL "OEM_STEPS_V1"' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
-          grep -Fq '#define WHEEL_ZOOM_PACE_US 200000u' \
-            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
           grep -Fq '#define WHEEL_ZOOM_PENDING_LIMIT 4' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq '#define WHEEL_ZOOM_MIN_PACE_US 100000u' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq '#define WHEEL_ZOOM_FALLBACK_PACE_US 200000u' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq '#define WHEEL_ZOOM_FRESH_FRAME_AGE_US 100000u' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq '#define WHEEL_ZOOM_STALL_AGE_US 150000u' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq '#define WHEEL_ZOOM_FRESH_FRAMES 3u' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq '#define WHEEL_ZOOM_PENDING_EXPIRE_US 1500000u' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'p111_frame_tap_get_progress' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'struct p111_frame_progress_snapshot' \
+            Toolbox/carplay_alt_screen/src/private111_direct_tap.h
           grep -Fq 'PHASE=WHEEL_ZOOM_ACCUMULATE' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'PHASE=WHEEL_ZOOM_FRAME_STALL' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'PHASE=WHEEL_ZOOM_FRAME_RECOVERED' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'PHASE=WHEEL_ZOOM_PENDING_EXPIRE' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'pacing=FRAME_HEALTH_ADAPTIVE' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
           grep -Fq 'PHASE=WHEEL_ZOOM_PACED_SEND' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
@@ -402,7 +424,7 @@ jobs:
           sh -n Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh
           sh -n Toolbox/scripts/status_mmi_cockpit_carplay_test.sh
 
-          echo "WHEEL_PROTOCOL_STATIC=PASS wire=changeMapZoomLevel params=uuid+zoomDirection direction=0_in_1_out model=OEM_STEPS_V1 pace_ms=200 pending_limit=4 opposite=cancel local_pixel_zoom=NO gate=java80_verified_ownership"
+          echo "WHEEL_PROTOCOL_STATIC=PASS wire=changeMapZoomLevel params=uuid+zoomDirection direction=0_in_1_out model=OEM_STEPS_V1 pacing=FRAME_HEALTH_ADAPTIVE min_pace_ms=100 fallback_ms=200 fresh_frames=3 stall_age_ms=150 pending_expire_ms=1500 pending_limit=4 opposite=cancel local_pixel_zoom=NO gate=java80_verified_ownership"
 
       - name: Refresh package identities in test artifact
         run: |
@@ -455,14 +477,26 @@ jobs:
                   "/tmp/mmi-mirror-wheel-zoom.log",
               "wheel_zoom_model": "OEM_STEPS_V1",
               "wheel_zoom_dispatch":
-                  "FIRST_IMMEDIATE_SIGNED_ACCUMULATOR_PACED_DRAIN",
+                  "SIGNED_ACCUMULATOR_FRAME_HEALTH_ADAPTIVE_DRAIN",
               "wheel_zoom_event_expansion":
                   "DISABLED_ONE_RECORD_PER_CALLBACK",
-              "wheel_zoom_pace_ms": "200",
+              "wheel_zoom_pacing": "FRAME_HEALTH_ADAPTIVE",
+              "wheel_zoom_min_pace_ms": "100",
+              "wheel_zoom_fallback_pace_ms": "200",
+              "wheel_zoom_fresh_frames": "3",
+              "wheel_zoom_fresh_frame_age_ms": "100",
+              "wheel_zoom_stall_age_ms": "150",
+              "wheel_zoom_pending_expire_ms": "1500",
               "wheel_zoom_pending_limit": "4",
               "wheel_zoom_opposite_direction": "CANCELS_PENDING",
               "wheel_zoom_response_gate":
                   "NO_ACCEPTANCE_CALLBACK_IS_OBSERVE_ONLY",
+              "wheel_zoom_frame_feedback":
+                  "PROCESS_LOCAL_DECODED_PROGRESS_NO_SHM_ABI_CHANGE",
+              "wheel_zoom_stall_policy":
+                  "BLOCK_UNTIL_3_FRESH_FRAMES",
+              "wheel_zoom_telemetry_fallback":
+                  "200MS_TIMER",
               "wheel_zoom_build_status":
                   "COMPILED_READY_FOR_VEHICLE_TEST",
           }
@@ -570,7 +604,11 @@ jobs:
           strings "$HOOK" | grep -Fq 'PHASE=CLUSTER_ZOOM_SUBMIT'
           strings "$HOOK" | grep -Fq 'PHASE=CLUSTER_ZOOM_RESPONSE'
           strings "$HOOK" | grep -Fq 'OEM_STEPS_V1'
+          strings "$HOOK" | grep -Fq 'FRAME_HEALTH_ADAPTIVE'
           strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_ACCUMULATE'
+          strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_FRAME_STALL'
+          strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_FRAME_RECOVERED'
+          strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_PENDING_EXPIRE'
           strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_PACED_SEND'
           python3 Toolbox/carplay_alt_screen/tests/test_wheel_zoom_pacing.py
 
