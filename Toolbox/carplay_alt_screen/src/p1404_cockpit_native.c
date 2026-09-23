@@ -722,18 +722,26 @@ static uint32_t wheel_now_us32(void) {
 
 /*
  * A decoded frame can be published after the monitor sampled wheel_now but
- * before p111_frame_tap_get_progress() returns its snapshot.  For these
- * sub-second wheel guards, a modular age greater than INT32_MAX cannot be a
- * real age; it means the sampled publication timestamp is a few microseconds
- * "in the future". Clamp only that race to zero. Genuine uint32 wrap with a
- * short elapsed interval still produces the normal small modular difference.
+ * before p111_frame_tap_get_progress() returns its snapshot. In that narrow
+ * race the publication timestamp is only slightly "in the future" relative to
+ * the scheduler sample. Clamp only a future skew within the existing 150 ms
+ * stall horizon to zero.
+ *
+ * A modular age above INT32_MAX is otherwise treated as definitely stale
+ * instead of fresh. This matters after very long static-map intervals: an old
+ * frame must still let the existing stall/abort path rebase pending zoom work.
+ * Genuine short uint32 wrap intervals remain normal small positive ages.
  *
  * This helper deliberately does not change wheel pacing, target-follow,
  * rebase, retry, or any timing threshold.
  */
 static uint32_t wheel_short_age_us32(uint32_t now, uint32_t before) {
     uint32_t age = (uint32_t)(now - before);
-    return age > 0x7fffffffu ? 0u : age;
+    uint32_t future_skew;
+    if (age <= 0x7fffffffu) return age;
+    future_skew = (uint32_t)(before - now);
+    if (future_skew <= WHEEL_ZOOM_STALL_AGE_US) return 0u;
+    return 0x7fffffffu;
 }
 
 static int native_wheel_zoom_target_accumulate(int target, int sent,
