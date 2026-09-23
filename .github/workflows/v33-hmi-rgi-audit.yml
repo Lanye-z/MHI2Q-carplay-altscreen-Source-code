@@ -39,7 +39,7 @@ jobs:
             echo "jar_sha256=$(sha256sum "$JAR" | awk '{print $1}')"
             echo
             echo "=== relevant archive members ==="
-            unzip -l "$JAR" | awk '{print $4}' | grep -E '^(com/luka/carplay/(rgd|routeguidance|bus|input|touch|core|cluster)/|de/audi/tghu/navi/app/cluster/)' || true
+            unzip -l "$JAR" | awk '{print $4}' | grep -E '^(com/luka/carplay/(rgd|routeguidance|framework|cursor|core|cluster)/|de/audi/tghu/navi/app/cluster/)' || true
             echo
             echo "=== string/method evidence ==="
             for token in               updateCurrentPositionInfo               updateDistanceToDestination               updateTimeToDestination               updateMapScale               updateAltitude               blockCurrentPositionInfo               blockRouteGuidance               EVT_RGD_UPDATE               touch               DPAD; do
