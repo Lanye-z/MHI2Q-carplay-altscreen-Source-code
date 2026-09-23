@@ -37,8 +37,8 @@ WHEEL_ZOOM_LOG="$DEVICE_ROOT/tmp/mmi-mirror-wheel-zoom.log"
 MIRROR="$RUNTIME/bin/mirror"
 MIRROR_PID="$DEVICE_ROOT/tmp/altscreen_mirror.pid"
 MIRROR_LOG="$DEVICE_ROOT/tmp/altscreen_mirror.log"
-EXPECTED_SIZE=151181
-EXPECTED_CKSUM=2676345616
+EXPECTED_SIZE=107873
+EXPECTED_CKSUM=2537590670
 
 file_size(){ n=$(wc -c < "$1" 2>/dev/null) || { echo 0; return; }; set -- $n; echo "${1:-0}"; }
 file_cksum(){ if command -v cksum >/dev/null 2>&1; then cksum < "$1" 2>/dev/null | awk '{print $1}'; else echo unavailable; fi; }
