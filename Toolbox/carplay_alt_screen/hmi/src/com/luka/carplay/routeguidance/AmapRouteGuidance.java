@@ -82,7 +82,13 @@ public final class AmapRouteGuidance extends RouteGuidance {
             return;
         }
 
-        boolean softInactive = isAmapSourceName(sourceName)
+        /*
+         * Some current RGI snapshots do not expose source_name.  Match the
+         * mature compatibility rule: known non-Amap sources are excluded,
+         * while an unknown source may enter the bounded behavior probe only
+         * after a real active route has already been observed.
+         */
+        boolean softInactive = sourceAllowsBehaviorProbe()
             && activeRouteSeen
             && rawRouteState == 1
             && rawManeuverCount == 0
@@ -203,6 +209,11 @@ public final class AmapRouteGuidance extends RouteGuidance {
         sourceName = null;
         activeRouteSeen = false;
         softExpired = false;
+    }
+
+    private boolean sourceAllowsBehaviorProbe() {
+        return sourceName == null || sourceName.length() == 0
+            || isAmapSourceName(sourceName);
     }
 
     private static boolean isAmapSourceName(String value) {

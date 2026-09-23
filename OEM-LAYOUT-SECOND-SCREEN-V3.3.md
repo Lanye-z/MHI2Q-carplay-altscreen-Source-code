@@ -193,7 +193,7 @@ stock navigator regains ownership
 
 缓存重放用于避免“RGI 元数据先到、导航 authority 后到”时首屏缺少路名、距离或 ETA。`source_supports_rg=0` 与经过 native debounce 后真正送到 Java 的 `route_state=0` 都会同时失效 Java 内的道路/距离/ETA/剩余时间缓存，防止下一次 re-enable 重新发布上一条路线。
 
-当 `source_name` 明确识别为高德/Amap/Gaode 且出现 `route_state=1 + maneuver_count=0 + visible_in_app=0` 时，V3.3 使用 5 秒 soft-inactive grace；真实变化的道路/距离/ETA/剩余时间会续期，持续无变化超时后释放 lower bar。未知 source 不启用这一高德专用超时，避免误伤 Apple Maps。
+当 `source_name` 明确识别为高德/Amap/Gaode，**或 source_name 缺失但已先观察到真实活跃路线**，随后出现 `route_state=1 + maneuver_count=0 + visible_in_app=0` 时，V3.3 启用 5 秒行为探测 grace；真实变化的道路/距离/ETA/剩余时间会续期，持续无变化超时后释放 lower bar。已明确识别为非高德的 source 不进入该探测。这个边界与成熟 RGI 兼容逻辑一致，解决部分 snapshot 不提供 `source_name` 时的无限 ownership 风险。
 
 ## 9. V3.3 首次实车测试目标
 

@@ -218,9 +218,10 @@ jobs:
           cp "$BUILD/jar/carplay_hook-basevideo3.jar" "$BASE"
 
           mkdir -p "$BUILD/test-classes"
-          javac -encoding UTF-8 -cp "$BUILD/classes:$BUILD/stubs:$BASE"             -d "$BUILD/test-classes"             "$TESTS/CarplayBusStickyReplayTest.java"             "$TESTS/RouteGuidanceHardClearTest.java"
+          javac -encoding UTF-8 -cp "$BUILD/classes:$BUILD/stubs:$BASE"             -d "$BUILD/test-classes"             "$TESTS/CarplayBusStickyReplayTest.java"             "$TESTS/RouteGuidanceHardClearTest.java"             "$TESTS/AmapSoftInactiveTest.java"
           java -cp "$BUILD/test-classes:$BUILD/classes:$BUILD/stubs:$BASE"             com.luka.carplay.framework.CarplayBusStickyReplayTest
           java -cp "$BUILD/test-classes:$BUILD/classes:$BUILD/stubs:$BASE"             com.luka.carplay.routeguidance.RouteGuidanceHardClearTest
+          java -cp "$BUILD/test-classes:$BUILD/classes:$BUILD/stubs:$BASE"             com.luka.carplay.routeguidance.AmapSoftInactiveTest
 
       - name: Verify CarPlayHook ABI and OEM lower-bar scope
         run: |
@@ -281,6 +282,7 @@ jobs:
           grep -Fq 'if (v == 0) hardClear = true;' "$SRC/RouteGuidance.java"
           grep -Fq 'amap_soft_inactive_timeout' "$SRC/AmapRouteGuidance.java"
           grep -Fq 'SOFT_INACTIVE_GRACE_MS = 5000L' "$SRC/AmapRouteGuidance.java"
+          grep -Fq 'sourceAllowsBehaviorProbe' "$SRC/AmapRouteGuidance.java"
           grep -Fq 'public synchronized void onFrame' "$SRC/RouteGuidance.java"
           grep -Fq 'public synchronized void stop' "$SRC/RouteGuidance.java"
           grep -Fq 'boolean routeLooksActive' "$SRC/RouteGuidance.java"
@@ -455,7 +457,7 @@ jobs:
               "dual_preload_child_isolation": "ALTSCREEN_AND_RGI_STRIPPED_BEFORE_HELPER_EXEC",
               "rgi_runtime_scope": "PINNED_FULL_RGI_HOOK_METADATA_CONSUMER_ONLY",
               "rgi_runtime_extra_modules": "COVERART_PRESENT_NOT_USED_BY_V33_LOWER_BAR",
-              "amap_soft_inactive_policy": "KNOWN_AMAP_5S_GRACE_WITH_FRESH_GUIDANCE_EXTENSION",
+              "amap_soft_inactive_policy": "AMAP_OR_UNKNOWN_SIGNATURE_5S_GRACE_WITH_FRESH_GUIDANCE_EXTENSION",
               "sidecar_observability_rebuild_required": "no",
               "wheel_zoom_observability":
                   "RAW_CALLBACK_COUNTERS_LIFECYCLE_OBSERVE_ONLY",
@@ -492,6 +494,11 @@ jobs:
               "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/AmapRouteGuidance.java",
               "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/BAPBridge.java",
               "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/GatedCombiService.java",
+              "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/framework/CarplayBus.java",
+              "Toolbox/carplay_alt_screen/hmi/tests/CarplayBusStickyReplayTest.java",
+              "Toolbox/carplay_alt_screen/hmi/tests/RouteGuidanceHardClearTest.java",
+              "Toolbox/carplay_alt_screen/hmi/tests/AmapSoftInactiveTest.java",
+              "Toolbox/carplay_alt_screen/src/altscreen_hook.c",
               "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java",
               "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java",
               "Toolbox/carplay_alt_screen/tests/test_storage_policy.sh",
@@ -556,7 +563,7 @@ jobs:
           dual_preload_static_audit=PASS_REQUIRED
           dual_preload_child_isolation=ALTSCREEN_AND_RGI_STRIPPED_BEFORE_HELPER_EXEC
           rgi_runtime_scope=PINNED_FULL_RGI_HOOK_METADATA_CONSUMER_ONLY
-          amap_soft_inactive_policy=KNOWN_AMAP_5S_GRACE_WITH_FRESH_GUIDANCE_EXTENSION
+          amap_soft_inactive_policy=AMAP_OR_UNKNOWN_SIGNATURE_5S_GRACE_WITH_FRESH_GUIDANCE_EXTENSION
           touch=RETAINED
           wheel_zoom=RETAINED
           wheel_zoom_observability=RAW_CALLBACK_COUNTERS_LIFECYCLE_OBSERVE_ONLY
