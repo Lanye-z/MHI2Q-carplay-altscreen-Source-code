@@ -21,6 +21,7 @@ INSTALL_TXN="$ROOT/Toolbox/scripts/altscreen_install_transaction.sh"
 RESTORE_TXN="$ROOT/Toolbox/scripts/altscreen_restore_transaction.sh"
 UNIVERSAL="$ROOT/Toolbox/scripts/altscreen_chain_test_universal.sh"
 ROUTER="$ROOT/Toolbox/scripts/altscreen_chain_test.sh"
+START_FIXTURE="$ROOT/Toolbox/carplay_alt_screen/tests/test_start_autostart_transaction.sh"
 INSTALL="$ROOT/Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh"
 LAUNCH="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/start_vehicle.sh"
 STOP_LAUNCH="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh"
@@ -171,4 +172,5 @@ for f in "$INSTALL" "$START" "$STOP" "$FINISH" "$INSTALL_TXN" "$RESTORE_TXN" "$U
     grep -Fq 'altscreen_sd_ensure_writable' "$f" || fail "SD writable preflight missing from $f"
 done
 grep -Fq 'altscreen_sd_writable.sh' "$ROUTER" || fail "SD writable helper not staged into runtime"
+grep -Fq 'altscreen_sd_writable.sh' "$START_FIXTURE" || fail "START transaction fixture does not stage SD writable helper"
 echo "SD_RW_POLICY_TEST=PASS policy=PROBE_REMOUNT_REPROBE"
