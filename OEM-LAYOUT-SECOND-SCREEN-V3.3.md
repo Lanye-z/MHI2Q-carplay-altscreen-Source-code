@@ -8,6 +8,21 @@ Branch: `experiment/oem-layout-second-screen_v3.3`
 
 Baseline: `experiment/oem-layout-second-screen_v3.2`
 
+
+## 上车前收口（2026-09-23）
+
+本轮收口只修正 RGI 生命周期、状态边界和诊断链，**不改 V3.2 已验证的 Type111 显示链、safeArea、滚轮缩放算法或触摸主链**。
+
+- `visible_in_app=0` 只表示 CarPlay 导航界面未处于前台；只要 `route_state` 或已缓存的有效路线数据仍表明路线活跃，就继续保持 Fct19/21/22 ownership。显式、已由 native debounce 的 `route_state=NO_ROUTE_SET` 仍然结束接管。
+- RouteGuidance listener 建立后立即发送 `CMD_SYNC_REQ`，要求 native sticky RGI snapshot 重放，避免 CarPlay 已连接/已导航时 Java 后启动导致首屏道路、距离或 ETA 为空。
+- `start()/stop()/onFrame()` 使用同一对象 monitor 串行化，并在 `bap.onStart()` 前再次检查 `running`，防止断开 teardown 后旧 frame 重新锁住 lower bar。
+- 导航结束或断开时，先清 `Fct19=""`、`Fct21=0`、`Fct22=invalid`，再解除 gate；CarPlay 明确发送空路名或 0 距离时也会立即清旧值。
+- Fct45 仍为 **Audi stock passthrough**，不是 CarPlay 地图实际比例尺同步；这一点属于 V3.3 的明确功能边界，而不是已实现能力。
+- V3.3 已继承 V3.2 后续的 wheel observability / SD diagnostics 增强；这些改动只增加可观测性，不改变 wheel target-follow 行为。
+- 两个 preload 保持 `AltScreen → RGI → libc` 的既定顺序，并由 CI 对 `write/recv/close` interposer 和转发依赖做 fail-closed 静态审计。
+- `V3.3 HMI/RGI audit` 已改为检查当前包名和真实 bytecode/source invariants；缺类或关键生命周期约束丢失会直接失败，不再以 `|| true` 掩盖。
+
+
 ## 1. V3.3 目标
 
 V3.3 不再尝试隐藏 Audi VC 原厂灰色导航栏，也不在 Type111 视频上自行绘制 ETA/文字。
