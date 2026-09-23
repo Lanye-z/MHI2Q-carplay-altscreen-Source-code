@@ -98,6 +98,7 @@ static void publish_displayable_state(const ClusterVideoDisplay &display,
             fprintf(out,
                     "schema=1\n"
                     "observer=DISPLAYABLE3_OWNERSHIP_V1\n"
+                    "display_observer_revision=V32_READABLE_STATE_V1\n"
                     "mode=OBSERVE_ONLY\n"
                     "timestamp_ms=%llu\n"
                     "phase=%s\n"
