@@ -66,9 +66,9 @@ The post-V3.2 hardening pass is intentionally constrained:
   published mode 0644 so the HMI process can read it across uid/umask boundaries
 - controller logs whether the state file is present/readable plus H.264 and
   decoded-frame counters; those fields do not gate Context80 or trigger recovery
-- wheel decoded-frame age uses a fresh post-snapshot timestamp and clamps only
+- wheel decoded-frame age keeps the original scheduler timestamp and clamps only
   the impossible "future publication" race to zero; genuine short uint32 wrap
-  intervals remain valid
+  intervals and all normal pacing thresholds remain unchanged
 - no EGL/window auto-rebuild, no authorization change, no safe-area change
 
 ## Build state
