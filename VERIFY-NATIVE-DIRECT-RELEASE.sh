@@ -258,6 +258,28 @@ elif grep -Fq 'release_binary_status=V3_BINARY_STALE_V31_SOURCE_REBUILD_REQUIRED
     if binary_strings "$BIN" | grep -Fq 'carplay-private111-direct-display-v3.1-oem-map-1to1-clip'; then
         fail "BUILD_INFO says V3.1 sidecar rebuild required but binary already contains V3.1 build id"
     fi
+elif grep -Fq 'release_binary_status=V3_1_BINARY_STALE_OBSERVABILITY_REBUILD_REQUIRED' "$INFO"; then
+    SOURCE_ONLY=1
+    NATIVE_REBUILDS=1
+    HOOK_PENDING=0
+    grep -Fq 'vehicle_zip_status=NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED' "$INFO" ||
+        fail "V3.2 observability source must remain blocked until QNX sidecar rebuild"
+    grep -Fq 'sidecar_source_driven_rebuild_required=yes' "$INFO" ||
+        fail "V3.2 observability source must declare QNX sidecar rebuild pending"
+    grep -Fq 'hook_runtime_rebuild_required=no' "$INFO" ||
+        fail "V3.2 observability-only sidecar rebuild must not re-open hook rebuild"
+    grep -Fq 'hook_layout_safearea_rebuild_required=no' "$INFO" ||
+        fail "V3.2 observability-only sidecar rebuild must preserve promoted safeArea hook"
+    grep -Fq 'displayable3_observability_revision=V32_READABLE_STATE_V1' "$INFO" ||
+        fail "V3.2 display observability revision metadata missing"
+    for marker in 'carplay-private111-direct-display-v3.1-oem-map-1to1-clip' 'PHASE=OEM_GEOMETRY_V31' 'geometry_policy=OEM_MAP_PLANE_1TO1_CLIP_V31' 'PHASE=DECODED_SHM_WAIT_SIZE' 'PHASE=SOURCE_SESSION' 'PHASE=GATE_RECOVER_CURRENT_SESSION' 'matching_identity_plus_frame_progress' 'PHASE=DISPLAYABLE3_FIRST_PRESENT' 'DISPLAYABLE3_OWNERSHIP_V1' 'PHASE=DIRECT111_ACTIVE'
+    do
+        binary_strings "$BIN" | grep -Fq "$marker" ||
+            fail "previous promoted V3.1 sidecar marker missing while awaiting V3.2 observability rebuild: $marker"
+    done
+    if binary_strings "$BIN" | grep -Fq 'display_observer_revision=V32_READABLE_STATE_V1'; then
+        fail "BUILD_INFO says V3.2 observability rebuild pending but sidecar already contains the new observer marker"
+    fi
 elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$INFO"; then
     if grep -Fq 'vehicle_zip_status=NOT_READY_HOOK_REBUILD_REQUIRED' "$INFO"; then
         HOOK_PENDING=1
@@ -409,8 +431,12 @@ if grep -Fq 'P111_LINEARIZER_TARGET_INTERVAL_US' "$TAP" ||
 fi
 grep -Fq 'static const unsigned kNoFramePollUs = 5000u;' "$MAIN_CPP" ||
     fail "source-driven sidecar must use the bounded 5ms no-new-frame poll"
-grep -Fq 'static const unsigned kDecodedStallReportUs = 120000u;' "$MAIN_CPP" ||
-    fail "source-driven sidecar must debounce normal frame gaps before stall reporting"
+grep -Fq 'static const unsigned kDecodedStallReportUs = 500000u;' "$MAIN_CPP" ||
+    fail "source-driven sidecar must keep SOURCE_STALL logging diagnostic-only at 500ms"
+grep -Fq 'static const unsigned kDecodedStallHeartbeatPolls = 1000u;' "$MAIN_CPP" ||
+    fail "source-driven sidecar must rate-limit repeated SOURCE_STALL diagnostics to about 5s"
+grep -Fq 'display_observer_revision=V32_READABLE_STATE_V1' "$MAIN_CPP" ||
+    fail "V3.2 readable display-state observer marker missing"
 grep -Fq 'present_policy=source-driven' "$MAIN_CPP" ||
     fail "source-driven presentation marker missing"
 if grep -Fq 'static const unsigned kTargetFps = 30;' "$MAIN_CPP" ||
