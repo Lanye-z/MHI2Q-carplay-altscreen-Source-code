@@ -5,12 +5,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <unistd.h>
 
 static volatile sig_atomic_t g_stop = 0;
 static const unsigned kNoFramePollUs = 5000u;
-static const unsigned kDecodedStallReportUs = 120000u;
+/* Diagnostic thresholds only: presentation/polling behavior is unchanged. */
+static const unsigned kDecodedStallReportUs = 500000u;
+static const unsigned kDecodedStallHeartbeatPolls = 1000u;
 static const char kBuildId[] =
     "carplay-private111-direct-display-v3.1-oem-map-1to1-clip";
 
@@ -131,10 +134,22 @@ static void publish_displayable_state(const ClusterVideoDisplay &display,
                     (unsigned)h264_packets,
                     (unsigned)decoded_frames);
             if (fclose(out) == 0) {
+                /*
+                 * The HMI controller may run under a different uid.  This file
+                 * is observation-only and contains no secrets, so make the
+                 * atomic snapshot explicitly world-readable instead of
+                 * inheriting a potentially restrictive sidecar umask.
+                 */
+                (void)chmod(tmp, 0644);
                 if (rename(tmp, path) != 0) {
                     unlink(path);
-                    if (rename(tmp, path) != 0)
+                    if (rename(tmp, path) != 0) {
                         unlink(tmp);
+                    } else {
+                        (void)chmod(path, 0644);
+                    }
+                } else {
+                    (void)chmod(path, 0644);
                 }
             } else {
                 unlink(tmp);
@@ -992,7 +1007,8 @@ int main(int argc, char **argv) {
                         (unsigned)source.generation(),
                         kNoFramePollUs,
                         kDecodedStallReportUs / 1000u);
-            } else if (in_stall && (failures % 250u) == 0u) {
+            } else if (in_stall &&
+                       (failures % kDecodedStallHeartbeatPolls) == 0u) {
                 fprintf(stderr,
                         "direct111: PHASE=DECODED_SOURCE_STALL "
                         "freeze_last_frame=1 duration_ms=%llu failures=%u "
