@@ -25,7 +25,7 @@ printf '%s\n' '#!/bin/sh' 'echo stock-plus-v3-startup' > "$DEV/mnt/system/etc/bo
 printf '%s\n' 'PRE_RESTORE_SI' > "$DEV/mnt/system/etc/eso/production/smartphone_integrator.json"
 printf '%s\n' 'PRE_RESTORE_DIO' > "$DEV/mnt/system/etc/eso/production/dio_manager.json"
 printf '%s\n' 'PRE_RESTORE_PF' > "$DEV/mnt/system/etc/pf.conf"
-printf '%s\n' 'PRE_RESTORE_JAR' > "$DEV/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar"
+printf '%s\n' 'PRE_RESTORE_JAR com/luka/carplay/cluster/ClusterStateController.class' > "$DEV/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar"
 printf '%s\n' 'PRE_RESTORE_RUNTIME' > "$DEV/mnt/app/root/carplay-altscreen/bin/marker"
 printf '%s\n' 'PRE_RESTORE_STATE' > "$SD/state/ACTIVE"
 
@@ -104,7 +104,7 @@ grep -Fq 'ROLLBACK_VERIFY=PASS' "$TMP/out.txt" ||
   fail "dio_manager.json was not rolled back"
 [ "$(cat "$DEV/mnt/system/etc/pf.conf")" = PRE_RESTORE_PF ] ||
   fail "pf.conf was not rolled back"
-[ "$(cat "$DEV/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar")" = PRE_RESTORE_JAR ] ||
+[ "$(cat "$DEV/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar")" = 'PRE_RESTORE_JAR com/luka/carplay/cluster/ClusterStateController.class' ] ||
   fail "carplay_hook.jar was not rolled back"
 [ "$(cat "$DEV/mnt/app/root/carplay-altscreen/bin/marker")" = PRE_RESTORE_RUNTIME ] ||
   fail "managed runtime was not rolled back"
@@ -156,7 +156,32 @@ grep -Fq 'RESTORE_HMI_BACKUP=FAIL reason=HMI_BACKUP_PROJECT_MANAGED' "$TMP/poiso
 [ "$(cksum < "$DEV/mnt/system/etc/eso/production/smartphone_integrator.json")" = "$POISON_LIVE_SI" ] ||
   fail "poisoned HMI preflight changed smartphone_integrator.json"
 
-# Restore the synthetic trusted backup for the remaining transaction tests.
+# An "original=absent" backup may delete a live JAR only when that live JAR is
+# absent already or positively identified as project-managed. Unknown/OEM-like
+# live content must be refused before PREPARED/APPLY.
+rm -f "$HMI/present" "$HMI/carplay_hook.jar" "$HMI/cksum"
+touch "$HMI/absent"
+printf '%s\n' 'UNKNOWN_LIVE_OEM_JAR' > "$DEV/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar"
+ABSENT_LIVE_JAR=$(cksum < "$DEV/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar")
+set +e
+ALTSCREEN_CHAIN_TESTING=1 \
+ALTSCREEN_CHAIN_ROOT="$DEV" \
+ALTSCREEN_CHAIN_VOLUME="$VOL" \
+/bin/sh "$WRAPPER" > "$TMP/absent-backup-live-conflict.txt" 2>&1
+ABSENT_RC=$?
+set -e
+[ "$ABSENT_RC" -ne 0 ] || fail "absent HMI backup unexpectedly accepted unknown live JAR"
+grep -Fq 'RESTORE_HMI_BACKUP=FAIL reason=ABSENT_BACKUP_LIVE_JAR_NOT_PROJECT_MANAGED' "$TMP/absent-backup-live-conflict.txt" ||
+  fail "absent-backup/live-HMI conflict refusal reason missing"
+! grep -Fq 'RESTORE_TRANSACTION=PREPARED' "$TMP/absent-backup-live-conflict.txt" ||
+  fail "absent-backup/live-HMI conflict reached PREPARED"
+[ "$(cksum < "$DEV/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar")" = "$ABSENT_LIVE_JAR" ] ||
+  fail "absent-backup preflight deleted or changed unknown live HMI JAR"
+
+# Restore the synthetic installed state + trusted backup for remaining tests.
+rm -f "$HMI/absent"
+touch "$HMI/present"
+printf '%s\n' 'PRE_RESTORE_JAR com/luka/carplay/cluster/ClusterStateController.class' > "$DEV/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar"
 printf '%s\n' 'ORIGINAL_JAR' > "$HMI/carplay_hook.jar"
 cksum < "$HMI/carplay_hook.jar" > "$HMI/cksum"
 
@@ -214,7 +239,7 @@ printf '%s\n' '#!/bin/sh' 'echo stock-startup' > "$MIX_DEV/mnt/system/etc/boot/s
 printf '%s\n' 'LIVE_INSTALLED_SI LD_PRELOAD=/mnt/app/root/carplay-altscreen/lib/libcarplay_altscreen.so' > "$MIX_DEV/mnt/system/etc/eso/production/smartphone_integrator.json"
 printf '%s\n' 'LIVE_INSTALLED_DIO' > "$MIX_DEV/mnt/system/etc/eso/production/dio_manager.json"
 printf '%s\n' 'LIVE_INSTALLED_PF' > "$MIX_DEV/mnt/system/etc/pf.conf"
-printf '%s\n' 'LIVE_INSTALLED_JAR' > "$MIX_DEV/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar"
+printf '%s\n' 'LIVE_INSTALLED_JAR com/luka/carplay/cluster/ClusterStateController.class' > "$MIX_DEV/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar"
 
 : > "$MIX_NATIVE/manifest.txt"
 : > "$MIX_NATIVE/overlay_present.txt"
@@ -299,7 +324,7 @@ grep -Fq 'RESTORE_MIXED_STATE_RECOVERY=PASS' "$TMP/mixed-unowned.txt" ||
 # Same trusted backups must also recover the even more reduced state seen after
 # rollback: preload config remains but the runtime directory is already absent.
 printf '%s\n' 'LIVE_INSTALLED_SI LD_PRELOAD=/mnt/app/root/carplay-altscreen/lib/libcarplay_altscreen.so' > "$MIX_DEV/mnt/system/etc/eso/production/smartphone_integrator.json"
-printf '%s\n' 'LIVE_INSTALLED_JAR_2' > "$MIX_DEV/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar"
+printf '%s\n' 'LIVE_INSTALLED_JAR_2 com/luka/carplay/cluster/ClusterStateController.class' > "$MIX_DEV/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar"
 rm -rf "$MIX_DEV/mnt/app/root/carplay-altscreen"
 rm -f "$MIX_SD/state/RESTORE_PENDING_REBOOT" 2>/dev/null || true
 
@@ -322,4 +347,4 @@ grep -Fq 'RESTORE_MIXED_STATE_RECOVERY=PASS' "$TMP/mixed-missing.txt" ||
 [ ! -e "$MIX_DEV/mnt/app/root/carplay-altscreen" ] ||
   fail "missing-runtime recovery recreated runtime"
 
-echo "RESTORE_TRANSACTION_TEST=PASS prepared_sync_fail_closed=1 precheck_fail_closed=1 poisoned_hmi_backup_fail_closed=1 runtime_cleanup_preflight_fail_closed=1 apply_failure_rollback=1 exact_rollback_verify=1 stale_terminal_cleanup=1 corrupt_snapshot_non_destructive=1 mixed_unowned_runtime_recovery=1 mixed_missing_runtime_recovery=1"
+echo "RESTORE_TRANSACTION_TEST=PASS prepared_sync_fail_closed=1 precheck_fail_closed=1 poisoned_hmi_backup_fail_closed=1 absent_backup_live_conflict_fail_closed=1 runtime_cleanup_preflight_fail_closed=1 apply_failure_rollback=1 exact_rollback_verify=1 stale_terminal_cleanup=1 corrupt_snapshot_non_destructive=1 mixed_unowned_runtime_recovery=1 mixed_missing_runtime_recovery=1"
