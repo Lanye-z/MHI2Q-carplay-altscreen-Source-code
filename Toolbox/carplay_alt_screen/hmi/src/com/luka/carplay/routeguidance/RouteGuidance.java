@@ -93,13 +93,8 @@ public class RouteGuidance implements CarplayBus.Listener {
          * after this listener is registered so cold-start / late-Java startup
          * cannot miss the first road, distance or ETA values.
          */
-        boolean syncRequested =
-            bus.send(CarplayBus.CMD_SYNC_REQ, 0, null, 0);
-        if (syncRequested) {
-            Log.i(TAG, "RGI sticky sync requested after listener registration");
-        } else {
-            Log.w(TAG, "RGI sticky sync request was not accepted; waiting for live update");
-        }
+        bus.send(CarplayBus.CMD_SYNC_REQ, 0, null, 0);
+        Log.i(TAG, "RGI sticky sync requested after listener registration");
         Log.i(TAG, "Started; waiting for CarPlay RGI metadata");
     }
 
