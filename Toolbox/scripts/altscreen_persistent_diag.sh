@@ -193,6 +193,22 @@ BOOT_BLOCK
     return 0
 }
 
+precheck_remove_diag(){
+    startup=$(find_startup) || { echo "DIAG_REMOVE_PRECHECK=FAIL reason=STARTUP_NOT_FOUND production_changed=NO" >&2; return 1; }
+    sh -n "$startup" >/dev/null 2>&1 || { echo "DIAG_REMOVE_PRECHECK=FAIL reason=STARTUP_SYNTAX_INVALID production_changed=NO" >&2; return 1; }
+    ensure_dirs "$TXN_ROOT" || { echo "DIAG_REMOVE_PRECHECK=FAIL reason=SD_STAGING_UNAVAILABLE production_changed=NO" >&2; return 1; }
+    clean="$TXN_ROOT/diag-remove-precheck.tmp"
+    rm -f "$clean" 2>/dev/null || true
+    if ! strip_block "$startup" > "$clean" || ! sh -n "$clean" >/dev/null 2>&1; then
+        rm -f "$clean" 2>/dev/null || true
+        echo "DIAG_REMOVE_PRECHECK=FAIL reason=DIAGNOSTICS_BLOCK_INVALID production_changed=NO" >&2
+        return 1
+    fi
+    rm -f "$clean" 2>/dev/null || true
+    echo "DIAG_REMOVE_PRECHECK=PASS production_changed=NO"
+    return 0
+}
+
 remove_diag(){
     startup=$(find_startup) || { echo "FAIL: startup.sh not found while disabling diagnostics" >&2; return 1; }
     sh -n "$startup" || return 1
@@ -226,6 +242,7 @@ remove_diag(){
 
 case "$ACTION" in
   install) install_diag ;;
+  remove-precheck) precheck_remove_diag ;;
   remove) remove_diag ;;
-  *) echo "usage: $0 {install|remove}" >&2; exit 2 ;;
+  *) echo "usage: $0 {install|remove-precheck|remove}" >&2; exit 2 ;;
 esac
