@@ -1,0 +1,295 @@
+name: V3.3 OEM Lower Bar Build
+
+on:
+  push:
+    branches:
+      - experiment/oem-layout-second-screen_v3.3
+    paths:
+      - '.github/workflows/v33-oem-lower-bar-build.yml'
+      - 'Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/**'
+      - 'Toolbox/carplay_alt_screen/hmi/stubs/**'
+      - 'Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar'
+  workflow_dispatch:
+
+concurrency:
+  group: v33-oem-lower-bar-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+
+      - name: Compile clean V3.3 lower-bar control plane
+        run: |
+          set -euo pipefail
+
+          BASE=Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar
+          SRC=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance
+          STUB=Toolbox/carplay_alt_screen/hmi/stubs
+          BUILD="$RUNNER_TEMP/v33-oem-lower-bar"
+
+          rm -rf "$BUILD"
+          mkdir -p "$BUILD/stubs" "$BUILD/classes" "$BUILD/jar"
+
+          test -s "$BASE"
+          unzip -t "$BASE" >/dev/null
+
+          find "$STUB" -name '*.java' -print | sort > "$BUILD/stubs.list"
+          javac -encoding UTF-8 -source 1.3 -target 1.2             -d "$BUILD/stubs" @"$BUILD/stubs.list"
+
+          javac -encoding UTF-8 -source 1.3 -target 1.2             -cp "$BUILD/stubs:$BASE"             -sourcepath "$SRC"             -d "$BUILD/classes"             "$SRC/RouteGuidance.java"             "$SRC/AmapRouteGuidance.java"             "$SRC/GatedCombiService.java"             "$SRC/BAPBridge.java"
+
+          python3 - "$BASE" "$BUILD/classes" "$BUILD/jar/carplay_hook-basevideo3.jar" <<'PY'
+          import collections
+          import pathlib
+          import struct
+          import sys
+          import zipfile
+
+          src = pathlib.Path(sys.argv[1])
+          classes = pathlib.Path(sys.argv[2])
+          dst = pathlib.Path(sys.argv[3])
+
+          with zipfile.ZipFile(src, "r") as zin, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
+              for info in zin.infolist():
+                  name = info.filename
+                  if name.startswith("com/luka/carplay/routeguidance/") and name.endswith(".class"):
+                      continue
+                  zout.writestr(info, zin.read(name))
+
+              root = classes / "com/luka/carplay/routeguidance"
+              for path in sorted(root.glob("*.class")):
+                  arc = "com/luka/carplay/routeguidance/" + path.name
+                  info = zipfile.ZipInfo(arc, date_time=(2026, 9, 23, 0, 0, 0))
+                  info.compress_type = zipfile.ZIP_DEFLATED
+                  info.create_system = 3
+                  info.external_attr = 0o100644 << 16
+                  zout.writestr(info, path.read_bytes())
+
+          with zipfile.ZipFile(dst, "r") as zf:
+              bad = zf.testzip()
+              if bad:
+                  raise SystemExit("corrupt JAR member: " + bad)
+              names = zf.namelist()
+              dup = [n for n, c in collections.Counter(names).items() if c != 1]
+              if dup:
+                  raise SystemExit("duplicate JAR members: " + repr(dup))
+
+              required = [
+                  "com/luka/carplay/routeguidance/RouteGuidance.class",
+                  "com/luka/carplay/routeguidance/RouteGuidance$State.class",
+                  "com/luka/carplay/routeguidance/AmapRouteGuidance.class",
+                  "com/luka/carplay/routeguidance/GatedCombiService.class",
+                  "com/luka/carplay/routeguidance/BAPBridge.class",
+                  "com/luka/carplay/routeguidance/BAPBridge$FormattedDistance.class",
+                  "com/luka/carplay/routeguidance/BAPBridge$SilentLogChannel.class",
+              ]
+              for name in required:
+                  data = zf.read(name)
+                  if data[:4] != b"\xca\xfe\xba\xbe":
+                      raise SystemExit("bad class magic: " + name)
+                  if struct.unpack(">HH", data[4:8]) != (0, 46):
+                      raise SystemExit("not Java major 46: " + name)
+
+              retired = [
+                  n for n in names
+                  if n.startswith("com/luka/carplay/routeguidance/")
+                  and (
+                      "Renderer" in n
+                      or "ManeuverMapper" in n
+                      or "SideStreets" in n
+                  )
+              ]
+              if retired:
+                  raise SystemExit("retired RGI rendering classes remain: " + repr(retired))
+
+              # Touch and wheel input are deliberately retained.
+              for name in [
+                  "com/luka/carplay/cursor/CursorController.class",
+                  "com/luka/carplay/cluster/WheelZoomBridge.class",
+                  "com/luka/carplay/cluster/ClusterStateController.class",
+              ]:
+                  if name not in names:
+                      raise SystemExit("required retained class missing: " + name)
+
+          print("V33_JAR_REBUILD=PASS old_routeguidance_removed=YES touch_retained=YES")
+          PY
+
+          cp "$BUILD/jar/carplay_hook-basevideo3.jar" "$BASE"
+
+      - name: Verify CarPlayHook ABI and OEM lower-bar scope
+        run: |
+          set -euo pipefail
+          JAR=Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar
+          BUILD="$RUNNER_TEMP/v33-oem-lower-bar"
+
+          javap -classpath "$JAR" -c -p com.luka.carplay.CarPlayHook > "$BUILD/hook.txt"
+          javap -classpath "$JAR" -c -p com.luka.carplay.routeguidance.BAPBridge > "$BUILD/bap.txt"
+          javap -classpath "$JAR" -c -p com.luka.carplay.routeguidance.GatedCombiService > "$BUILD/gate.txt"
+          javap -classpath "$JAR" -c -p com.luka.carplay.routeguidance.RouteGuidance > "$BUILD/rg.txt"
+
+          grep -Fq 'com/luka/carplay/routeguidance/AmapRouteGuidance' "$BUILD/hook.txt"
+          grep -Fq 'com/luka/carplay/routeguidance/RouteGuidance.init' "$BUILD/hook.txt"
+          grep -Fq 'com/luka/carplay/routeguidance/RouteGuidance.start' "$BUILD/hook.txt"
+          grep -Fq 'com/luka/carplay/routeguidance/RouteGuidance.stop' "$BUILD/hook.txt"
+          grep -Fq 'com/luka/carplay/routeguidance/RouteGuidance.isRunning' "$BUILD/hook.txt"
+
+          # Touch stays part of the current CarPlayHook.
+          grep -Fq 'com/luka/carplay/cursor/CursorController' "$BUILD/hook.txt"
+
+          # V3.3 only writes OEM FctID 19/21/22.
+          grep -Fq 'updateCurrentPositionInfo' "$BUILD/bap.txt"
+          grep -Fq 'updateDistanceToDestination' "$BUILD/bap.txt"
+          grep -Fq 'updateTimeToDestination' "$BUILD/bap.txt"
+          if grep -Fq 'updateMapScale' "$BUILD/bap.txt"; then
+            echo 'ERROR: V3.3 BAPBridge must not synthesize FctID45 MapScale' >&2
+            exit 1
+          fi
+          for retired in             updateManeuverDescriptor             updateLaneGuidance             updateDistanceToNextManeuver             updateExitView             updateActiveRGType
+          do
+            if grep -Fq "$retired" "$BUILD/bap.txt"; then
+              echo "ERROR: retired RGI output remains in V3.3 BAPBridge: $retired" >&2
+              exit 1
+            fi
+          done
+
+          # Stock map scale and altitude are unconditional pass-through in the gate.
+          grep -Fq 'updateMapScale' "$BUILD/gate.txt"
+          grep -Fq 'updateAltitude' "$BUILD/gate.txt"
+          grep -Fq 'setLowerBarBlocked' "$BUILD/gate.txt"
+
+          grep -Fq 'EVT_RGD_UPDATE' "$BUILD/rg.txt"
+          grep -Fq 'dist_dest_m' "$BUILD/rg.txt"
+          grep -Fq 'eta_seconds' "$BUILD/rg.txt"
+          grep -Fq 'current_road' "$BUILD/rg.txt"
+
+          echo 'V33_OEM_LOWER_BAR_ABI=PASS fct=19,21,22 fct45=STOCK touch=RETAINED'
+
+      - name: Update package identities
+        run: |
+          set -euo pipefail
+          JAR=Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar
+          INFO=Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt
+
+          SIZE="$(wc -c < "$JAR" | tr -d ' ')"
+          CKSUM="$(cksum < "$JAR" | awk '{print $1}')"
+          SHA="$(sha256sum "$JAR" | awk '{print $1}')"
+          export SIZE CKSUM SHA
+
+          python3 <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import re
+
+          root = pathlib.Path(".")
+
+          def upsert(text, key, value):
+              pat = re.compile(r"^" + re.escape(key) + r"=.*$", re.M)
+              line = key + "=" + value
+              if pat.search(text):
+                  return pat.sub(line, text, count=1)
+              if text and not text.endswith("\n"):
+                  text += "\n"
+              return text + line + "\n"
+
+          info = root / "Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt"
+          text = info.read_text()
+          updates = {
+              "mode": "PRIVATE111_DIRECT_DISPLAY_V3_3_OEM_LOWER_BAR",
+              "jar_size": os.environ["SIZE"],
+              "jar_cksum": os.environ["CKSUM"],
+              "jar_sha256": os.environ["SHA"],
+              "oem_lower_bar": "CARPLAY_RGI_FCT19_21_22_V1",
+              "oem_lower_bar_current_road": "FCT19_CARPLAY",
+              "oem_lower_bar_distance": "FCT21_CARPLAY",
+              "oem_lower_bar_arrival": "FCT22_ABSOLUTE_ETA_CARPLAY",
+              "oem_lower_bar_map_scale": "FCT45_STOCK_PASSTHROUGH",
+              "oem_lower_bar_remaining_time": "NOT_PUBLISHED",
+              "oem_lower_bar_touch_policy": "RETAIN_EXISTING_CURSOR_CONTROLLER",
+              "oem_lower_bar_build_status": "COMPILED_STATIC_VERIFIED",
+              "direct_display_revision":
+                  "experiment-oem-layout-second-screen-v3.3-oem-lower-bar",
+          }
+          for key, value in updates.items():
+              text = upsert(text, key, value)
+          info.write_text(text)
+
+          for rel in [
+              "Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh",
+              "Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh",
+              "Toolbox/scripts/status_mmi_cockpit_carplay_test.sh",
+          ]:
+              path = root / rel
+              s = path.read_text()
+              s = re.sub(r"^EXPECTED_SIZE=\d+$",
+                         "EXPECTED_SIZE=" + os.environ["SIZE"], s, flags=re.M)
+              s = re.sub(r"^EXPECTED_CKSUM=\d+$",
+                         "EXPECTED_CKSUM=" + os.environ["CKSUM"], s, flags=re.M)
+              path.write_text(s)
+
+          required = [
+              "Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar",
+              "Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt",
+              "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/RouteGuidance.java",
+              "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/AmapRouteGuidance.java",
+              "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/BAPBridge.java",
+              "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/GatedCombiService.java",
+              "Toolbox/carplay_alt_screen/rgi_meta/libcarplay_rgi_meta.so",
+              ".github/workflows/v33-oem-lower-bar-build.yml",
+          ]
+
+          p = root / "PACKAGE_SOURCE_MAP.json"
+          data = json.loads(p.read_text())
+          for rel in set(data).union(required):
+              path = root / rel
+              if path.is_file():
+                  data[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+          p.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+
+          sums = root / "SHA256SUMS.txt"
+          table = {}
+          for line in sums.read_text().splitlines():
+              parts = line.split(None, 1)
+              if len(parts) == 2:
+                  table[parts[1].strip()] = parts[0].lower()
+          for rel in set(table).union(required).union(["PACKAGE_SOURCE_MAP.json"]):
+              path = root / rel
+              if path.is_file():
+                  table[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+          sums.write_text("".join(
+              "%s %s\n" % (table[rel], rel) for rel in sorted(table)
+          ))
+          PY
+
+          echo "V33_HMI_SIZE=$SIZE"
+          echo "V33_HMI_CKSUM=$CKSUM"
+          echo "V33_HMI_SHA256=$SHA"
+
+      - name: Promote V3.3 HMI artifact
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add             Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar             Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt             Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh             Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh             Toolbox/scripts/status_mmi_cockpit_carplay_test.sh             PACKAGE_SOURCE_MAP.json             SHA256SUMS.txt
+
+          if ! git diff --cached --quiet; then
+            git commit -m "build(v3.3): promote OEM lower-bar HMI [skip ci]"
+            git fetch origin "$GITHUB_REF_NAME"
+            git rebase "origin/$GITHUB_REF_NAME"
+            git push origin "HEAD:$GITHUB_REF_NAME"
+          fi
