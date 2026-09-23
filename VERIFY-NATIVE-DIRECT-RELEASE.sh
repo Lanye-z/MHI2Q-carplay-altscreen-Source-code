@@ -146,6 +146,20 @@ grep -Fq 'restore transaction is active; START is blocked' "$CHAIN" ||
     fail "START is not blocked during an incomplete restore transaction"
 grep -Fq 'restore transaction is active; recover/finish RESTORE ORIGINAL before INSTALL' "$CHAIN" ||
     fail "INSTALL is not blocked during an incomplete restore transaction"
+grep -Fq 'RESTORE_HMI_BACKUP=FAIL reason=HMI_BACKUP_PROJECT_MANAGED' "$RESTORE_TXN" ||
+    fail "RESTORE does not reject project-managed HMI backups before APPLY"
+grep -Fq 'RESTORE_PREFLIGHT_STARTUP=PASS production_changed=NO' "$RESTORE_TXN" ||
+    fail "RESTORE startup cleanup is not preflighted before APPLY"
+grep -Fq 'RUNTIME_CLEANUP_PRECHECK=FAIL reason=UNOWNED_NONEMPTY_RUNTIME' "$CHAIN" ||
+    fail "RESTORE runtime ownership refusal is not preflighted"
+grep -Fq 'RESTORE_APPLY_PREFLIGHT=PASS hmi_backup=TRUSTED production_changed=NO' "$RESTORE_APPLY" ||
+    fail "RESTORE APPLY does not revalidate the HMI backup before first mutation"
+grep -Fq 'remove-precheck' "$PERSIST_DIAG" ||
+    fail "persistent diagnostics removal lacks a non-mutating precheck"
+grep -Fq 'poisoned_hmi_backup_fail_closed=1' "$RESTORE_TX_TEST" ||
+    fail "RESTORE poisoned-HMI regression test missing"
+grep -Fq 'runtime_cleanup_preflight_fail_closed=1' "$RESTORE_TX_TEST" ||
+    fail "RESTORE runtime preflight regression test missing"
 grep -Fq 'STAGING_ROOT/controller-txn' "$CTRL" ||
     fail "universal restore scratch still depends on fragile nested /tmp storage"
 grep -Fq 'staging/diag-txn' "$PERSIST_DIAG" ||
