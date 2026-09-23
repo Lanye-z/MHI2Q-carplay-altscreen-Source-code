@@ -35,15 +35,35 @@ public final class WheelZoomBridge {
     private static int eventEpoch = initialEpoch();
     private static boolean epochQueuePrepared;
 
+    /* Diagnostics-only counters. Never used for gating or wheel behavior. */
+    private static int callbackCount;
+    private static int seedCount;
+    private static int queuedCount;
+    private static int ignoredNotOwnedCount;
+
     private WheelZoomBridge() {}
 
     public static synchronized void onMagnificationChanged(int magnification) {
+        ++callbackCount;
+        /*
+         * Raw callback marker: this is the first business action after the
+         * proven ClusterService callback enters WheelZoomBridge. It is emitted
+         * before queue preparation, seed handling, ownership checks, delta
+         * filtering or any native scheduling decision.
+         */
+        diag("WHEEL_CALLBACK_RAW magnification=" + magnification
+            + " callback_count=" + callbackCount
+            + " have_magnification=" + (haveMagnification ? "1" : "0")
+            + " last_magnification=" + lastMagnification
+            + " sequence=" + sequence
+            + " epoch=" + eventEpoch);
         prepareEpochQueue();
         if (!haveMagnification) {
+            ++seedCount;
             haveMagnification = true;
             lastMagnification = magnification;
             diag("WHEEL_ZOOM_INPUT seed=1 magnification=" + magnification
-                + " action=NONE");
+                + " action=NONE" + counterSummary());
             return;
         }
 
@@ -52,9 +72,11 @@ public final class WheelZoomBridge {
         if (delta == 0) return;
 
         if (!ClusterStateController.isClusterOwned()) {
+            ++ignoredNotOwnedCount;
             diag("WHEEL_ZOOM_INPUT magnification=" + magnification
                 + " delta=" + delta
-                + " action=IGNORED reason=cluster_not_owned");
+                + " action=IGNORED reason=cluster_not_owned"
+                + counterSummary());
             return;
         }
 
@@ -97,6 +119,7 @@ public final class WheelZoomBridge {
         ++sequence;
         boolean ok = appendEvent(
             sequence, direction, magnification, delta, steps);
+        if (ok) ++queuedCount;
         diag("WHEEL_ZOOM_INPUT magnification=" + magnification
             + " delta=" + delta
             + " action=" + action
@@ -104,7 +127,30 @@ public final class WheelZoomBridge {
             + " seq=" + sequence
             + " steps=" + steps
             + " model=OEM_STEPS_V1"
-            + " publish=" + (ok ? "queued" : "dropped"));
+            + " publish=" + (ok ? "queued" : "dropped")
+            + counterSummary());
+    }
+
+    /*
+     * Session-transition observability only. This method intentionally does
+     * not seed, reset, arm, re-arm, delete queues, change ownership, or touch
+     * any native target-follow state.
+     */
+    public static synchronized void logCarPlayLifecycle(boolean active) {
+        diag("WHEEL_LIFECYCLE carplay_session=" + (active ? "1" : "0")
+            + " action=OBSERVE_ONLY"
+            + " have_magnification=" + (haveMagnification ? "1" : "0")
+            + " last_magnification=" + lastMagnification
+            + " sequence=" + sequence
+            + " epoch=" + eventEpoch
+            + counterSummary());
+    }
+
+    private static String counterSummary() {
+        return " callback_count=" + callbackCount
+            + " seed_count=" + seedCount
+            + " queued_count=" + queuedCount
+            + " ignored_not_owned=" + ignoredNotOwnedCount;
     }
 
     public static synchronized void reset() {
@@ -112,7 +158,8 @@ public final class WheelZoomBridge {
         lastMagnification = 0;
         try { new File(EVENT_FILE).delete(); } catch (Throwable ignored) {}
         diag("WHEEL_ZOOM_RESET queue=cleared epoch=" + eventEpoch
-            + " sequence_preserved=" + sequence);
+            + " sequence_preserved=" + sequence
+            + counterSummary());
     }
 
     private static int initialEpoch() {
