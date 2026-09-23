@@ -1,14 +1,13 @@
 /*
  * V3.3 OEM lower-bar bridge.
  *
- * Owns only:
- *   FctID 19 CurrentPositionInfo      -> current road
- *   FctID 21 DistanceToDestination   -> remaining distance
- *   FctID 22 TimeToDestination       -> absolute arrival time
+ * Partial takeover only:
+ *   FctID 19 CurrentPositionInfo      -> CarPlay only while a valid road exists
+ *   FctID 21 DistanceToDestination   -> CarPlay only while a valid distance exists
+ *   FctID 22 TimeToDestination       -> CarPlay only while a valid ETA exists
  *
- * FctID 45 MapScale is deliberately never written here.  It remains the
- * vehicle's native OEM scale readout.  Touch, wheel zoom, Type111 rendering,
- * compass and all other navigation functions are outside this class.
+ * Invalid/missing CarPlay data always fails open to the stock Audi producer.
+ * FctID 45 MapScale is never written here.
  *
  * Java 1.2 compatible.
  */
@@ -27,6 +26,9 @@ import de.audi.tghu.navi.app.cluster.ClusterService;
 
 public final class BAPBridge {
     private static final String TAG = "VCOemLowerBar";
+    private static final int FCT19 = 19;
+    private static final int FCT21 = 21;
+    private static final int FCT22 = 22;
 
     private CombiBAPServiceNavi appConnectorNavi;
     private GatedCombiService gate;
@@ -34,8 +36,10 @@ public final class BAPBridge {
         new BAPDistanceFormatter(new SilentLogChannel());
 
     private boolean initialized;
-    private boolean ownershipRequested;
-    private boolean ownershipActive;
+    private boolean sessionActive;
+    private boolean ownFct19;
+    private boolean ownFct21;
+    private boolean ownFct22;
     private long lastEtaSeconds = -1L;
     private long lastRemainingSeconds = -1L;
     private long lastRemainingSampleUtcSeconds = -1L;
@@ -49,9 +53,8 @@ public final class BAPBridge {
             }
             appConnectorNavi = (CombiBAPServiceNavi)naviService;
             initialized = true;
-            /* Install early with the gate open, so normal stock behavior is unchanged. */
-            ensureGateInstalled();
-            Log.i(TAG, "Initialized fields=19,21,22 mapScale=stock");
+            Log.i(TAG, "Initialized partial_takeover=LAZY_PER_FIELD"
+                + " fields=19,21,22 mapScale=stock");
             return true;
         } catch (Throwable t) {
             Log.e(TAG, "Init failed", t);
@@ -60,13 +63,13 @@ public final class BAPBridge {
     }
 
     public void onStart() {
-        ownershipRequested = true;
-        ownershipActive = false;
-        if (ensureLowerBarOwnership()) {
-            Log.i(TAG, "LOWER_BAR_OWNERSHIP=ACQUIRED fct=19,21,22 fct45=STOCK");
-        } else {
-            Log.w(TAG, "LOWER_BAR_OWNERSHIP=PENDING reason=gate_unavailable");
-        }
+        releaseAllFields("session_start", true);
+        sessionActive = true;
+        lastEtaSeconds = -1L;
+        lastRemainingSeconds = -1L;
+        lastRemainingSampleUtcSeconds = -1L;
+        Log.i(TAG, "LOWER_BAR_SESSION=ACTIVE takeover=LAZY_PER_FIELD"
+            + " stock_passthrough=19,21,22");
     }
 
     public void onStop() {
@@ -74,87 +77,130 @@ public final class BAPBridge {
     }
 
     public void onShutdown() {
-        /*
-         * Clear V3.3-owned fields while the stock producer is still gated.
-         * Only do this after ownership was actually acquired: clearing an
-         * never-owned lower bar could overwrite valid OEM navigation data.
-         */
-        boolean hadOwnership = ownershipActive;
-        boolean cleared = false;
-        /*
-         * Revalidate the live ClusterService listener before teardown.  The
-         * HMI may replace its listener at runtime; clearing through a detached
-         * gate would otherwise race a newly restored stock producer.
-         */
-        if (hadOwnership && ensureGateInstalled()) {
-            gate.setLowerBarBlocked(true);
-            clearLowerBar();
-            cleared = true;
-        }
-
-        ownershipRequested = false;
-        ownershipActive = false;
-        if (gate != null) gate.setLowerBarBlocked(false);
+        sessionActive = false;
+        releaseAllFields("shutdown", true);
         lastEtaSeconds = -1L;
         lastRemainingSeconds = -1L;
         lastRemainingSampleUtcSeconds = -1L;
-        Log.i(TAG, "LOWER_BAR_OWNERSHIP=RELEASED stock_restored=YES"
-            + " cleared=" + (cleared ? "YES" : "NO"));
+        Log.i(TAG, "LOWER_BAR_SESSION=INACTIVE synthetic_clear=NO"
+            + " stock_listener_restore=BEST_EFFORT");
     }
 
     public void update(RouteGuidance.State s) {
-        if (!initialized || !ownershipRequested || s == null) return;
-        if (!ensureLowerBarOwnership()) return;
+        if (!initialized || !sessionActive || s == null) return;
+        int dirty = s.dirtyMask;
 
+        if ((dirty & RouteGuidance.State.DIRTY_CURRENT_ROAD) != 0) {
+            String road = limitUtf8(s.currentRoad, 96);
+            if (road.length() > 0) publishRoad(road);
+            else releaseField(FCT19, "invalid_or_empty");
+        }
+
+        if ((dirty & RouteGuidance.State.DIRTY_DIST_DEST) != 0) {
+            if (s.distDestM > 0) publishDistance(s.distDestM);
+            else releaseField(FCT21, "invalid_or_zero");
+        }
+
+        if ((dirty & RouteGuidance.State.DIRTY_ETA) != 0)
+            lastEtaSeconds = s.etaSeconds;
+        if ((dirty & RouteGuidance.State.DIRTY_TIME_REMAINING) != 0) {
+            lastRemainingSeconds = s.timeRemainingSeconds;
+            lastRemainingSampleUtcSeconds =
+                lastRemainingSeconds >= 0L ? getUtcMillis() / 1000L : -1L;
+        }
+        if ((dirty & (RouteGuidance.State.DIRTY_ETA
+                    | RouteGuidance.State.DIRTY_TIME_REMAINING)) != 0)
+            publishArrivalOrRelease();
+    }
+
+    private void publishRoad(String road) {
+        if (!acquireField(FCT19)) return;
         try {
-            int dirty = s.dirtyMask;
-
-            if ((dirty & RouteGuidance.State.DIRTY_CURRENT_ROAD) != 0) {
-                String road = limitUtf8(s.currentRoad, 96);
-                /*
-                 * Empty is meaningful: unnamed roads must clear the previous
-                 * Fct19 value rather than leaving stale text on the VC.
-                 */
-                appConnectorNavi.updateCurrentPositionInfo(road);
-                Log.i(TAG, "OEM_FCT19 current_road="
-                    + (road.length() == 0 ? "<empty>" : road));
-            }
-
-            if ((dirty & RouteGuidance.State.DIRTY_DIST_DEST) != 0) {
-                sendDistanceToDestination(s.distDestM);
-            }
-
-            if ((dirty & RouteGuidance.State.DIRTY_ETA) != 0) {
-                lastEtaSeconds = s.etaSeconds;
-            }
-            if ((dirty & RouteGuidance.State.DIRTY_TIME_REMAINING) != 0) {
-                lastRemainingSeconds = s.timeRemainingSeconds;
-                lastRemainingSampleUtcSeconds = getUtcMillis() / 1000L;
-            }
-            if ((dirty & (RouteGuidance.State.DIRTY_ETA
-                        | RouteGuidance.State.DIRTY_TIME_REMAINING)) != 0) {
-                sendArrivalTime();
-            }
-
+            appConnectorNavi.updateCurrentPositionInfo(road);
+            Log.i(TAG, "OEM_FCT19 source=CARPLAY current_road=" + road);
         } catch (Throwable t) {
-            Log.e(TAG, "lower-bar update failed", t);
+            Log.e(TAG, "OEM_FCT19 publish failed; fail-open to stock", t);
+            releaseField(FCT19, "publish_failed");
         }
     }
 
-    private boolean ensureLowerBarOwnership() {
-        if (!ownershipRequested) return false;
-        /*
-         * Do not trust a cached gate reference. ClusterService can replace its
-         * listener during an HMI lifecycle transition; re-read the live
-         * listener before every owned publication and wrap it again if needed.
-         */
+    private void publishDistance(int meters) {
+        FormattedDistance fd = formatDistanceToDestination(meters);
+        if (fd.value < 0) {
+            releaseField(FCT21, "format_failed");
+            return;
+        }
+        if (!acquireField(FCT21)) return;
+        try {
+            appConnectorNavi.updateDistanceToDestination(fd.value, fd.unit, false);
+            Log.i(TAG, "OEM_FCT21 source=CARPLAY dist_m=" + meters
+                + " bap_value=" + fd.value + " bap_unit=" + fd.unit);
+        } catch (Throwable t) {
+            Log.e(TAG, "OEM_FCT21 publish failed; fail-open to stock", t);
+            releaseField(FCT21, "publish_failed");
+        }
+    }
+
+    private void publishArrivalOrRelease() {
+        long utcSeconds = currentArrivalSeconds();
+        if (utcSeconds < 0L) {
+            releaseField(FCT22, "invalid_eta");
+            return;
+        }
+
+        long localSeconds = convertUtcToLocalMs(utcSeconds * 1000L) / 1000L;
+        int timeFormat = getHuNavigationTimeFormat();
+        if (!acquireField(FCT22)) return;
+        try {
+            appConnectorNavi.updateTimeToDestination(1, timeFormat, localSeconds);
+            Log.i(TAG, "OEM_FCT22 source=CARPLAY eta_utc=" + utcSeconds
+                + " eta_local=" + localSeconds + " format=" + timeFormat);
+        } catch (Throwable t) {
+            Log.e(TAG, "OEM_FCT22 publish failed; fail-open to stock", t);
+            releaseField(FCT22, "publish_failed");
+        }
+    }
+
+    private boolean acquireField(int fct) {
+        if (!sessionActive) return false;
         if (!ensureGateInstalled()) {
-            ownershipActive = false;
+            Log.w(TAG, "LOWER_BAR_FIELD=FCT" + fct
+                + " action=PENDING reason=gate_unavailable");
             return false;
         }
-        gate.setLowerBarBlocked(true);
-        ownershipActive = true;
+
+        boolean wasOwned = isFieldOwned(fct);
+        setFieldOwned(fct, true);
+        syncGateBlocks();
+        if (!wasOwned)
+            Log.i(TAG, "LOWER_BAR_FIELD=FCT" + fct
+                + " action=ACQUIRE stock_blocked=YES");
         return true;
+    }
+
+    private void releaseField(int fct, String reason) {
+        boolean wasOwned = isFieldOwned(fct);
+        if (!wasOwned) return;
+
+        setFieldOwned(fct, false);
+        syncGateBlocks();
+        Log.i(TAG, "LOWER_BAR_FIELD=FCT" + fct
+            + " action=RELEASE reason=" + reason
+            + " stock_passthrough=YES synthetic_clear=NO");
+        if (!anyFieldOwned()) restoreStockListenerIfOwned("no_owned_fields");
+    }
+
+    private void releaseAllFields(String reason, boolean restoreListener) {
+        boolean hadOwnership = anyFieldOwned();
+        ownFct19 = false;
+        ownFct21 = false;
+        ownFct22 = false;
+        syncGateBlocks();
+
+        if (hadOwnership)
+            Log.i(TAG, "LOWER_BAR_FIELDS=19,21,22 action=RELEASE_ALL reason="
+                + reason + " synthetic_clear=NO");
+        if (restoreListener) restoreStockListenerIfOwned(reason);
     }
 
     private boolean ensureGateInstalled() {
@@ -167,16 +213,26 @@ public final class BAPBridge {
             CombiBAPServiceNavi current = cs.getCombiBAPListenerCombiService();
             if (current == null) return false;
 
+            if (current == gate) {
+                syncGateBlocks();
+                return true;
+            }
+
             if (current instanceof GatedCombiService) {
                 gate = (GatedCombiService)current;
-            } else {
-                boolean replacingDetachedGate = gate != null;
-                gate = new GatedCombiService(current);
-                cs.setCombiBAPListenerCombiService(gate);
-                if (replacingDetachedGate) {
-                    Log.w(TAG, "LOWER_BAR_GATE=REINSTALLED reason=cluster_listener_replaced");
-                }
+                syncGateBlocks();
+                Log.w(TAG, "LOWER_BAR_GATE=ADOPTED existing_gate=YES");
+                return true;
             }
+
+            boolean replacingDetachedGate = gate != null;
+            gate = new GatedCombiService(current);
+            syncGateBlocks();
+            cs.setCombiBAPListenerCombiService(gate);
+            if (replacingDetachedGate)
+                Log.w(TAG, "LOWER_BAR_GATE=REINSTALLED reason=cluster_listener_replaced");
+            else
+                Log.i(TAG, "LOWER_BAR_GATE=INSTALLED mode=LAZY_PER_FIELD");
             return true;
         } catch (Throwable t) {
             Log.w(TAG, "gate install failed: " + t);
@@ -184,21 +240,57 @@ public final class BAPBridge {
         }
     }
 
-    private void sendDistanceToDestination(int meters) {
-        if (meters <= 0) {
-            sendDistanceToDestinationRaw(0, false);
-            Log.i(TAG, "OEM_FCT21 dist_m=" + meters + " action=CLEAR");
-            return;
+    private void restoreStockListenerIfOwned(String reason) {
+        GatedCombiService oldGate = gate;
+        if (oldGate == null) return;
+
+        oldGate.setBlockedFields(false, false, false);
+        try {
+            Navigation nav = Navigation.getInstance();
+            ClusterService cs = nav != null ? nav.getClusterService() : null;
+            if (cs == null) {
+                gate = null;
+                Log.w(TAG, "LOWER_BAR_GATE=DETACHED reason=" + reason
+                    + " stock_restore=UNAVAILABLE");
+                return;
+            }
+
+            CombiBAPServiceNavi current = cs.getCombiBAPListenerCombiService();
+            if (current == oldGate) {
+                cs.setCombiBAPListenerCombiService(oldGate.real);
+                Log.i(TAG, "LOWER_BAR_GATE=REMOVED reason=" + reason
+                    + " stock_listener_restored=YES");
+            } else {
+                Log.i(TAG, "LOWER_BAR_GATE=DETACHED reason=" + reason
+                    + " stock_listener_restored=SKIP_CURRENT_CHANGED");
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "stock listener restore failed: " + t);
+        } finally {
+            gate = null;
         }
-        FormattedDistance fd = formatDistanceToDestination(meters);
-        if (fd.value < 0) return;
-        appConnectorNavi.updateDistanceToDestination(fd.value, fd.unit, false);
-        Log.i(TAG, "OEM_FCT21 dist_m=" + meters
-            + " bap_value=" + fd.value + " bap_unit=" + fd.unit);
     }
 
-    private void sendDistanceToDestinationRaw(int value, boolean stopover) {
-        appConnectorNavi.updateDistanceToDestination(value, 0, stopover);
+    private void syncGateBlocks() {
+        if (gate != null)
+            gate.setBlockedFields(ownFct19, ownFct21, ownFct22);
+    }
+
+    private boolean anyFieldOwned() {
+        return ownFct19 || ownFct21 || ownFct22;
+    }
+
+    private boolean isFieldOwned(int fct) {
+        if (fct == FCT19) return ownFct19;
+        if (fct == FCT21) return ownFct21;
+        if (fct == FCT22) return ownFct22;
+        return false;
+    }
+
+    private void setFieldOwned(int fct, boolean value) {
+        if (fct == FCT19) ownFct19 = value;
+        else if (fct == FCT21) ownFct21 = value;
+        else if (fct == FCT22) ownFct22 = value;
     }
 
     private FormattedDistance formatDistanceToDestination(int meters) {
@@ -218,37 +310,6 @@ public final class BAPBridge {
         }
     }
 
-    private void sendArrivalTime() {
-        long utcSeconds = currentArrivalSeconds();
-        if (utcSeconds < 0L) {
-            clearArrivalTime();
-            return;
-        }
-
-        long localSeconds = convertUtcToLocalMs(utcSeconds * 1000L) / 1000L;
-        int timeFormat = getHuNavigationTimeFormat();
-        /* Type 1 is the AU491 absolute-arrival clock widget. */
-        appConnectorNavi.updateTimeToDestination(1, timeFormat, localSeconds);
-        Log.i(TAG, "OEM_FCT22 eta_utc=" + utcSeconds
-            + " eta_local=" + localSeconds + " format=" + timeFormat);
-    }
-
-    private void clearArrivalTime() {
-        appConnectorNavi.updateTimeToDestination(0, 0, -1L);
-        Log.i(TAG, "OEM_FCT22 action=CLEAR");
-    }
-
-    private void clearLowerBar() {
-        try {
-            appConnectorNavi.updateCurrentPositionInfo("");
-            sendDistanceToDestinationRaw(0, false);
-            appConnectorNavi.updateTimeToDestination(0, 0, -1L);
-            Log.i(TAG, "OEM_LOWER_BAR_CLEAR fct=19,21,22 result=OK");
-        } catch (Throwable t) {
-            Log.w(TAG, "OEM lower-bar clear failed: " + t);
-        }
-    }
-
     private long currentArrivalSeconds() {
         if (lastEtaSeconds >= 0L) return lastEtaSeconds;
         if (lastRemainingSeconds < 0L) return -1L;
@@ -265,26 +326,19 @@ public final class BAPBridge {
         try {
             int unit = Distance.getSystemUnit();
             return unit == Distance.NONE || unit == Distance.METERS || unit == Distance.KM;
-        } catch (Throwable t) {
-            return true;
-        }
+        } catch (Throwable t) { return true; }
     }
 
     private static int getHuNavigationTimeFormat() {
-        try {
-            return DateMetric.timeFormat == 11 ? 1 : 0;
-        } catch (Throwable t) {
-            return 0;
-        }
+        try { return DateMetric.timeFormat == 11 ? 1 : 0; }
+        catch (Throwable t) { return 0; }
     }
 
     private static long getUtcMillis() {
         try {
             IFrameworkAccess fw = CarPlayHook.getFrameworkAccess();
             if (fw != null) return fw.getUTCTime();
-        } catch (Throwable t) {
-            /* fall through */
-        }
+        } catch (Throwable t) {}
         return System.currentTimeMillis();
     }
 
@@ -292,9 +346,7 @@ public final class BAPBridge {
         try {
             IFrameworkAccess fw = CarPlayHook.getFrameworkAccess();
             if (fw != null) return fw.convertUTCTimeToLocalTime(utcMs);
-        } catch (Throwable t) {
-            /* fall through */
-        }
+        } catch (Throwable t) {}
         return utcMs;
     }
 
@@ -303,8 +355,7 @@ public final class BAPBridge {
         try {
             byte[] raw = s.getBytes("UTF-8");
             if (raw.length <= maxBytes) return s;
-            int lo = 0;
-            int hi = s.length();
+            int lo = 0, hi = s.length();
             while (lo < hi) {
                 int mid = (lo + hi + 1) / 2;
                 if (s.substring(0, mid).getBytes("UTF-8").length <= maxBytes) lo = mid;
@@ -317,22 +368,14 @@ public final class BAPBridge {
     }
 
     private static final class FormattedDistance {
-        final int value;
-        final int unit;
-        FormattedDistance(int value, int unit) {
-            this.value = value;
-            this.unit = unit;
-        }
+        final int value, unit;
+        FormattedDistance(int value, int unit) { this.value = value; this.unit = unit; }
     }
 
     private static final class SilentLogChannel extends LogChannel {
-        public void log(int level, String pattern,
-                        Object a, Object b, Object c, Object d,
-                        long l1, long l2, long l3, int flags, Throwable t) {
-        }
-        public void log(int level, int messageId,
-                        Object a, Object b, Object c, Object d,
-                        long l1, long l2, long l3, int flags, Throwable t) {
-        }
+        public void log(int level, String pattern, Object a, Object b, Object c, Object d,
+                        long l1, long l2, long l3, int flags, Throwable t) {}
+        public void log(int level, int messageId, Object a, Object b, Object c, Object d,
+                        long l1, long l2, long l3, int flags, Throwable t) {}
     }
 }
