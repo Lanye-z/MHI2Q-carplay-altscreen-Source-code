@@ -74,8 +74,14 @@ if [ "$mode" = PRIVATE111_DIRECT_DISPLAY_V3_3_OEM_LOWER_BAR ]; then
     actual_rgi_sha=$(sha256_file "$RGI_META")
     [ "$actual_rgi_sha" = 87d10f67fbb3dc142642d899977bab0a6eb4009f61d3bcd873d0cce9e01511f7 ] ||
         fail "V3.3 RGI metadata hook identity mismatch"
-    grep -Fq 'oem_lower_bar=CARPLAY_RGI_FCT19_21_22_V1' "$HMI_INFO" ||
-        fail "V3.3 OEM lower-bar contract missing"
+    grep -Fq 'oem_lower_bar=CARPLAY_RGI_FCT19_21_22_PARTIAL_V2' "$HMI_INFO" ||
+        fail "V3.3 partial lower-bar contract missing"
+    grep -Fq 'oem_lower_bar_teardown=RELEASE_FIELDS_NO_SYNTHETIC_CLEAR_RESTORE_STOCK_LISTENER' "$HMI_INFO" ||
+        fail "V3.3 fail-open lower-bar teardown contract missing"
+    grep -Fq 'lower_bar_gate_policy=LAZY_PER_FIELD_REVALIDATE_UNWRAP_WHEN_IDLE' "$HMI_INFO" ||
+        fail "V3.3 per-field lazy gate policy missing"
+    grep -Fq 'carplay_hook_sd_log=streams/carplay_hook.log' "$HMI_INFO" ||
+        fail "V3.3 Java/RGI SD log contract missing"
     grep -Fq 'oem_lower_bar_map_scale=FCT45_STOCK_PASSTHROUGH' "$HMI_INFO" ||
         fail "V3.3 OEM map-scale passthrough missing"
     grep -Fq 'safearea_policy=V33_OEM_X_VERTICAL_60_450' "$HMI_INFO" ||

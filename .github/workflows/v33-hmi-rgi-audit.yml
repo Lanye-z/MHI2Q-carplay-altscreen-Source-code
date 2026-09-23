@@ -104,19 +104,19 @@ jobs:
           grep -Fq 'SOFT_INACTIVE_GRACE_MS = 5000L' "$SRC/AmapRouteGuidance.java"
           grep -Fq 'sourceAllowsBehaviorProbe' "$SRC/AmapRouteGuidance.java"
 
-          grep -Fq 'clearLowerBar()' "$BAP"
-          grep -Fq 'OEM_LOWER_BAR_CLEAR' "$BAP"
+          grep -Fq 'partial_takeover=LAZY_PER_FIELD' "$BAP"
           grep -Fq 'LOWER_BAR_GATE=REINSTALLED reason=cluster_listener_replaced' "$BAP"
-          grep -Fq 'if (!ensureGateInstalled())' "$BAP"
-          grep -Fq 'sendDistanceToDestinationRaw(0, false)' "$BAP"
-          grep -Fq 'updateTimeToDestination(0, 0, -1L)' "$BAP"
+          grep -Fq 'LOWER_BAR_GATE=REMOVED' "$BAP"
+          grep -Fq 'synthetic_clear=NO' "$BAP"
+          grep -Fq 'setBlockedFields(ownFct19, ownFct21, ownFct22)' "$BAP"
           grep -Fq 'appConnectorNavi.updateCurrentPositionInfo(road)' "$BAP"
-          if grep -Fq 'if (road.length() > 0)' "$BAP"; then
-            echo 'ERROR: stale-road guard regression returned' >&2
-            exit 1
-          fi
-          if grep -Fq 'if (meters <= 0) return;' "$BAP"; then
-            echo 'ERROR: zero-distance clear regression returned' >&2
+          grep -Fq 'if (road.length() > 0)' "$BAP"
+          grep -Fq 'if (s.distDestM > 0)' "$BAP"
+          if grep -Fq 'clearLowerBar()' "$BAP" ||
+             grep -Fq 'updateCurrentPositionInfo("")' "$BAP" ||
+             grep -Fq 'sendDistanceToDestinationRaw(0' "$BAP" ||
+             grep -Fq 'updateTimeToDestination(0, 0, -1L)' "$BAP"; then
+            echo 'ERROR: synthetic lower-bar clear returned' >&2
             exit 1
           fi
 

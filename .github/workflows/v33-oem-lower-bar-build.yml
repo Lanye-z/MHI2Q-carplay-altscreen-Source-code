@@ -287,7 +287,10 @@ jobs:
           grep -Fq 'real.updateMapScale' "$SRC/GatedCombiService.java"
           grep -Fq 'public void updateAltitude' "$SRC/GatedCombiService.java"
           grep -Fq 'real.updateAltitude' "$SRC/GatedCombiService.java"
-          grep -Fq 'setLowerBarBlocked' "$SRC/GatedCombiService.java"
+          grep -Fq 'setBlockedFields' "$SRC/GatedCombiService.java"
+          grep -Fq 'isFct19Blocked' "$SRC/GatedCombiService.java"
+          grep -Fq 'isFct21Blocked' "$SRC/GatedCombiService.java"
+          grep -Fq 'isFct22Blocked' "$SRC/GatedCombiService.java"
 
           grep -Fq 'EVT_RGD_UPDATE' "$SRC/RouteGuidance.java"
           grep -Fq '"dist_dest_m"' "$SRC/RouteGuidance.java"
@@ -309,12 +312,18 @@ jobs:
           grep -Fq 'public synchronized void stop' "$SRC/RouteGuidance.java"
           grep -Fq 'boolean routeLooksActive' "$SRC/RouteGuidance.java"
           grep -Fq 'state.visibleInApp != 0) || routeLooksActive' "$SRC/RouteGuidance.java"
-          grep -Fq 'clearLowerBar()' "$SRC/BAPBridge.java"
-          grep -Fq 'OEM_LOWER_BAR_CLEAR' "$SRC/BAPBridge.java"
+          grep -Fq 'partial_takeover=LAZY_PER_FIELD' "$SRC/BAPBridge.java"
           grep -Fq 'LOWER_BAR_GATE=REINSTALLED reason=cluster_listener_replaced' "$SRC/BAPBridge.java"
-          grep -Fq 'if (!ensureGateInstalled())' "$SRC/BAPBridge.java"
-          grep -Fq 'sendDistanceToDestinationRaw(0, false)' "$SRC/BAPBridge.java"
-          grep -Fq 'updateTimeToDestination(0, 0, -1L)' "$SRC/BAPBridge.java"
+          grep -Fq 'LOWER_BAR_GATE=REMOVED' "$SRC/BAPBridge.java"
+          grep -Fq 'synthetic_clear=NO' "$SRC/BAPBridge.java"
+          grep -Fq 'setBlockedFields(ownFct19, ownFct21, ownFct22)' "$SRC/BAPBridge.java"
+          if grep -Fq 'clearLowerBar()' "$SRC/BAPBridge.java" ||
+             grep -Fq 'updateCurrentPositionInfo("")' "$SRC/BAPBridge.java" ||
+             grep -Fq 'sendDistanceToDestinationRaw(0' "$SRC/BAPBridge.java" ||
+             grep -Fq 'updateTimeToDestination(0, 0, -1L)' "$SRC/BAPBridge.java"; then
+            echo 'ERROR: V3.3 partial takeover must never synthesize lower-bar clears' >&2
+            exit 1
+          fi
 
           grep -Fq 'WHEEL_CALLBACK_RAW' Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
           grep -Fq 'WHEEL_LIFECYCLE' Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
@@ -322,6 +331,8 @@ jobs:
           grep -Fq 'WheelZoomBridge.logCarPlayLifecycle(active);' Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java
           grep -Fq 'CURSOR_PREFIX="$ROOT/tmp/altscreen_diag_cursor"' Toolbox/scripts/altscreen_boot_diag.sh
           grep -Fq 'flat_file_signature' Toolbox/scripts/altscreen_boot_diag.sh
+          grep -Fq 'select_carplay_hook_log_source' Toolbox/scripts/altscreen_boot_diag.sh
+          grep -Fq 'streams/carplay_hook.log' Toolbox/scripts/altscreen_boot_diag.sh
           if grep -Fq '.capture-cursors' Toolbox/scripts/altscreen_boot_diag.sh; then
             echo 'ERROR: boot diagnostic cursors must remain volatile' >&2
             exit 1
@@ -462,10 +473,10 @@ jobs:
               "universal_runtime_sha256": os.environ["HOOK_SHA"],
               "universal_runtime_policy":
                   "PRIVATE111_POSTACCEPT_NONBLOCKING_PF_CHILD_PRELOAD_ALL_PROJECT_HOOKS_ISOLATED",
-              "oem_lower_bar": "CARPLAY_RGI_FCT19_21_22_V1",
-              "oem_lower_bar_current_road": "FCT19_CARPLAY",
-              "oem_lower_bar_distance": "FCT21_CARPLAY",
-              "oem_lower_bar_arrival": "FCT22_ABSOLUTE_ETA_CARPLAY",
+              "oem_lower_bar": "CARPLAY_RGI_FCT19_21_22_PARTIAL_V2",
+              "oem_lower_bar_current_road": "FCT19_CARPLAY_WHEN_VALID_ELSE_STOCK",
+              "oem_lower_bar_distance": "FCT21_CARPLAY_WHEN_VALID_ELSE_STOCK",
+              "oem_lower_bar_arrival": "FCT22_CARPLAY_WHEN_VALID_ELSE_STOCK",
               "oem_lower_bar_map_scale": "FCT45_STOCK_PASSTHROUGH",
               "oem_lower_bar_remaining_time": "NOT_PUBLISHED",
               "oem_lower_bar_touch_policy": "RETAIN_EXISTING_CURSOR_CONTROLLER",
@@ -474,15 +485,20 @@ jobs:
                   "VISIBLE_OR_ROUTE_ACTIVE_SOURCE_RG_REQUIRED",
               "oem_lower_bar_sticky_sync": "LOCAL_STICKY_REPLAY_ON_LISTENER_REGISTRATION",
               "oem_lower_bar_lifecycle": "SYNCHRONIZED_STOP_FRAME_NO_RESURRECT",
-              "oem_lower_bar_teardown": "CLEAR_19_21_22_BEFORE_RELEASE",
-              "oem_lower_bar_empty_state": "EMPTY_ROAD_AND_ZERO_DISTANCE_CLEAR",
+              "oem_lower_bar_teardown":
+                  "RELEASE_FIELDS_NO_SYNTHETIC_CLEAR_RESTORE_STOCK_LISTENER",
+              "oem_lower_bar_empty_state": "INVALID_FIELD_RELEASES_TO_STOCK",
               "dual_preload_order": "ALTSCREEN_RGI_LIBC",
               "dual_preload_static_audit": "PASS_REQUIRED",
               "dual_preload_child_isolation": "ALTSCREEN_AND_RGI_STRIPPED_BEFORE_HELPER_EXEC",
               "rgi_runtime_scope": "PINNED_FULL_RGI_HOOK_METADATA_CONSUMER_ONLY",
               "rgi_runtime_extra_modules": "COVERART_PRESENT_NOT_USED_BY_V33_LOWER_BAR",
               "amap_soft_inactive_policy": "AMAP_OR_UNKNOWN_SIGNATURE_5S_GRACE_WITH_FRESH_GUIDANCE_EXTENSION",
-              "lower_bar_gate_policy": "REVALIDATE_CLUSTER_LISTENER_BEFORE_UPDATE_AND_TEARDOWN",
+              "lower_bar_gate_policy":
+                  "LAZY_PER_FIELD_REVALIDATE_UNWRAP_WHEN_IDLE",
+              "lower_bar_context_policy":
+                  "BAP_ONLY_DO_NOT_DRIVE_RGI_PRESENTATION_ACTIVE",
+              "carplay_hook_sd_log": "streams/carplay_hook.log",
               "sidecar_observability_rebuild_required": "no",
               "wheel_zoom_observability":
                   "RAW_CALLBACK_COUNTERS_LIFECYCLE_OBSERVE_ONLY",
@@ -642,23 +658,25 @@ jobs:
           safearea_policy=V3_3_OEM_X_VERTICAL_60_450
           safearea_full=370,60,700,390
           safearea_small=490,60,460,390
-          oem_lower_bar=CARPLAY_RGI_FCT19_21_22_V1
-          current_road=FCT19_CARPLAY
-          remaining_distance=FCT21_CARPLAY
-          arrival_time=FCT22_ABSOLUTE_ETA_CARPLAY
+          oem_lower_bar=CARPLAY_RGI_FCT19_21_22_PARTIAL_V2
+          current_road=FCT19_CARPLAY_WHEN_VALID_ELSE_STOCK
+          remaining_distance=FCT21_CARPLAY_WHEN_VALID_ELSE_STOCK
+          arrival_time=FCT22_CARPLAY_WHEN_VALID_ELSE_STOCK
           map_scale=FCT45_STOCK_PASSTHROUGH
           remaining_time=NOT_PUBLISHED
           rgi_activation=VISIBLE_OR_ROUTE_ACTIVE_SOURCE_RG_REQUIRED
           rgi_sticky_sync=LOCAL_STICKY_REPLAY_ON_LISTENER_REGISTRATION
           rgi_lifecycle=SYNCHRONIZED_STOP_FRAME_NO_RESURRECT
-          lower_bar_teardown=CLEAR_19_21_22_BEFORE_RELEASE
-          lower_bar_empty_state=EMPTY_ROAD_AND_ZERO_DISTANCE_CLEAR
+          lower_bar_teardown=RELEASE_FIELDS_NO_SYNTHETIC_CLEAR_RESTORE_STOCK_LISTENER
+          lower_bar_empty_state=INVALID_FIELD_RELEASES_TO_STOCK
           dual_preload_order=ALTSCREEN_RGI_LIBC
           dual_preload_static_audit=PASS_REQUIRED
           dual_preload_child_isolation=ALTSCREEN_AND_RGI_STRIPPED_BEFORE_HELPER_EXEC
           rgi_runtime_scope=PINNED_FULL_RGI_HOOK_METADATA_CONSUMER_ONLY
           amap_soft_inactive_policy=AMAP_OR_UNKNOWN_SIGNATURE_5S_GRACE_WITH_FRESH_GUIDANCE_EXTENSION
-          lower_bar_gate_policy=REVALIDATE_CLUSTER_LISTENER_BEFORE_UPDATE_AND_TEARDOWN
+          lower_bar_gate_policy=LAZY_PER_FIELD_REVALIDATE_UNWRAP_WHEN_IDLE
+          lower_bar_context_policy=BAP_ONLY_DO_NOT_DRIVE_RGI_PRESENTATION_ACTIVE
+          carplay_hook_sd_log=streams/carplay_hook.log
           touch=RETAINED
           wheel_zoom=RETAINED_TARGET_FOLLOW_WITH_BURST_ADAPTIVE_PACING
           wheel_zoom_model=OEM_TARGET_FOLLOW_V1
