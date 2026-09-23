@@ -1,4 +1,4 @@
-BRANCH_ZIP_READY=NO
+BRANCH_ZIP_READY=YES
 branch=experiment/oem-layout-second-screen_v3.2
 validated_source_commit=84c1071b88400a5b8333cf34060dcacbae7dcc91
 mode=PRIVATE111_DIRECT_DISPLAY_V3_WHEEL_ZOOM
@@ -10,8 +10,8 @@ display_chain=V3_1_OEM_MAP_1TO1_CLIP
 safearea_policy=V3_2_OEM_X_VISIBLE_Y
 safearea_full=370,0,700,455
 safearea_small=490,0,460,455
-rebuild_required=carplay-alt111-mirror-display
-vehicle_zip_status=NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED
+rebuild_required=none
+vehicle_zip_status=READY_FOR_VEHICLE_TEST
 cluster_appearance_model=CARPLAY_SIMULATOR_QUERY_V1
 cluster_show_speed_limit=user
 cluster_show_compass=user
