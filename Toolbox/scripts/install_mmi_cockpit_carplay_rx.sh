@@ -122,8 +122,8 @@ LIVE_JSON_SI="$DEVICE_ROOT/mnt/system/etc/eso/production/smartphone_integrator.j
 MANAGED_RUNTIME_OWNER="$DEVICE_ROOT/mnt/app/root/carplay-altscreen/.mmi-cockpit-carplay-runtime-owner"
 BACKUP="$VOLUME/MMI-Cockpit-Carplay/backup/basevideo3-hmi-original"
 BACKUP_TMP="$BACKUP.new.$$"
-EXPECTED_SIZE=112640
-EXPECTED_CKSUM=2862406020
+EXPECTED_SIZE=112710
+EXPECTED_CKSUM=775325564
 
 [ -f "$CONTROLLER" ] || { echo "FAIL: chain controller missing: $CONTROLLER"; exit 127; }
 [ -s "$JAR_SOURCE" ] || { echo "FAIL: Java80 HMI JAR missing: $JAR_SOURCE"; exit 1; }
