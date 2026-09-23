@@ -531,6 +531,22 @@ jobs:
 
           root = pathlib.Path(".")
 
+          def upsert_unique_line(text, key, value):
+              prefix = key + "="
+              line = prefix + value
+              out = []
+              found = False
+              for existing in text.splitlines():
+                  if existing.startswith(prefix):
+                      if not found:
+                          out.append(line)
+                          found = True
+                      continue
+                  out.append(existing)
+              if not found:
+                  out.append(line)
+              return "\n".join(out) + "\n"
+
           info = root / "Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt"
           text = info.read_text()
 
@@ -575,16 +591,9 @@ jobs:
                       "14,0,460,455",
               }
               for key, value in mirror_updates.items():
-                  pattern = r"^" + re.escape(key) + r"=.*$"
-                  line = key + "=" + value
-                  if re.search(pattern, mirror_text, flags=re.M):
-                      mirror_text = re.sub(
-                          pattern, line, mirror_text, flags=re.M
-                      )
-                  else:
-                      if mirror_text and not mirror_text.endswith("\n"):
-                          mirror_text += "\n"
-                      mirror_text += line + "\n"
+                  mirror_text = upsert_unique_line(
+                      mirror_text, key, value
+                  )
               mirror_info.write_text(mirror_text)
 
               release_sums = mirror_info.parent / "SHA256SUMS"
@@ -697,14 +706,7 @@ jobs:
               )
 
           for key, value in updates.items():
-              pattern = r"^" + re.escape(key) + r"=.*$"
-              line = key + "=" + value
-              if re.search(pattern, text, flags=re.M):
-                  text = re.sub(pattern, line, text, flags=re.M)
-              else:
-                  if text and not text.endswith("\n"):
-                      text += "\n"
-                  text += line + "\n"
+              text = upsert_unique_line(text, key, value)
 
           for retired_key in [
               "wheel_zoom_fresh_frames",
@@ -800,16 +802,9 @@ jobs:
                   })
 
               for key, value in ready_updates.items():
-                  pattern = r"^" + re.escape(key) + r"=.*$"
-                  line = key + "=" + value
-                  if re.search(pattern, ready_text, flags=re.M):
-                      ready_text = re.sub(
-                          pattern, line, ready_text, flags=re.M
-                      )
-                  else:
-                      if ready_text and not ready_text.endswith("\n"):
-                          ready_text += "\n"
-                      ready_text += line + "\n"
+                  ready_text = upsert_unique_line(
+                      ready_text, key, value
+                  )
               # Remove retired short-queue metadata if present.
               for retired_key in [
                   "wheel_zoom_fresh_frames",
