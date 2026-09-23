@@ -94,10 +94,21 @@ verify_backup(){
         [ -s "$BACKUP/carplay_hook.jar" ] || return 1
         [ -f "$BACKUP/cksum" ] || return 1
         [ "$(cksum < "$BACKUP/carplay_hook.jar")" = "$(cat "$BACKUP/cksum")" ] || return 1
-        hmi_backup_project_managed "$BACKUP/carplay_hook.jar" && return 1
+        if hmi_backup_project_managed "$BACKUP/carplay_hook.jar"; then
+            echo "RESTORE_APPLY_PREFLIGHT=FAIL reason=HMI_BACKUP_PROJECT_MANAGED production_changed=NO"
+            return 1
+        fi
+        if [ -f "$JAR" ] && ! hmi_backup_project_managed "$JAR" && ! cmp -s "$BACKUP/carplay_hook.jar" "$JAR"; then
+            echo "RESTORE_APPLY_PREFLIGHT=FAIL reason=LIVE_HMI_CONFLICT_WITH_TRUSTED_BACKUP production_changed=NO"
+            return 1
+        fi
     else
         [ ! -e "$BACKUP/carplay_hook.jar" ] || return 1
         [ ! -e "$BACKUP/cksum" ] || return 1
+        if [ -f "$JAR" ] && ! hmi_backup_project_managed "$JAR"; then
+            echo "RESTORE_APPLY_PREFLIGHT=FAIL reason=ABSENT_BACKUP_LIVE_JAR_NOT_PROJECT_MANAGED production_changed=NO"
+            return 1
+        fi
     fi
     return 0
 }
