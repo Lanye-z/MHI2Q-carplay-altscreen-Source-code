@@ -384,6 +384,14 @@ jobs:
               "oem_lower_bar_remaining_time": "NOT_PUBLISHED",
               "oem_lower_bar_touch_policy": "RETAIN_EXISTING_CURSOR_CONTROLLER",
               "oem_lower_bar_build_status": "COMPILED_STATIC_VERIFIED",
+              "oem_lower_bar_activation":
+                  "VISIBLE_OR_ROUTE_ACTIVE_SOURCE_RG_REQUIRED",
+              "oem_lower_bar_sticky_sync": "CMD_SYNC_REQ_AFTER_LISTENER",
+              "oem_lower_bar_lifecycle": "SYNCHRONIZED_STOP_FRAME_NO_RESURRECT",
+              "oem_lower_bar_teardown": "CLEAR_19_21_22_BEFORE_RELEASE",
+              "oem_lower_bar_empty_state": "EMPTY_ROAD_AND_ZERO_DISTANCE_CLEAR",
+              "dual_preload_order": "ALTSCREEN_RGI_LIBC",
+              "dual_preload_static_audit": "PASS_REQUIRED",
               "sidecar_observability_rebuild_required": "no",
               "wheel_zoom_observability":
                   "RAW_CALLBACK_COUNTERS_LIFECYCLE_OBSERVE_ONLY",
@@ -426,6 +434,7 @@ jobs:
               "Toolbox/scripts/altscreen_boot_diag.sh",
               "Toolbox/carplay_alt_screen/rgi_meta/libcarplay_rgi_meta.so",
               ".github/workflows/v33-oem-lower-bar-build.yml",
+              ".github/workflows/v33-hmi-rgi-audit.yml",
               "BRANCH-ZIP-READY.txt",
               "OEM-LAYOUT-SECOND-SCREEN-V3.3.md",
           ]
@@ -474,8 +483,17 @@ jobs:
           arrival_time=FCT22_ABSOLUTE_ETA_CARPLAY
           map_scale=FCT45_STOCK_PASSTHROUGH
           remaining_time=NOT_PUBLISHED
+          rgi_activation=VISIBLE_OR_ROUTE_ACTIVE_SOURCE_RG_REQUIRED
+          rgi_sticky_sync=CMD_SYNC_REQ_AFTER_LISTENER
+          rgi_lifecycle=SYNCHRONIZED_STOP_FRAME_NO_RESURRECT
+          lower_bar_teardown=CLEAR_19_21_22_BEFORE_RELEASE
+          lower_bar_empty_state=EMPTY_ROAD_AND_ZERO_DISTANCE_CLEAR
+          dual_preload_order=ALTSCREEN_RGI_LIBC
+          dual_preload_static_audit=PASS_REQUIRED
           touch=RETAINED
           wheel_zoom=RETAINED
+          wheel_zoom_observability=RAW_CALLBACK_COUNTERS_LIFECYCLE_OBSERVE_ONLY
+          boot_log_capture=VOLATILE_BOOT_FLAT_CURSOR_NO_REPLAY
           rgi_metadata_sha256=87d10f67fbb3dc142642d899977bab0a6eb4009f61d3bcd873d0cce9e01511f7
           rgi_messages=0x5200,0x5201,0x5202,0x5203,0x5204
           rebuild_required=none
