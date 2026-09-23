@@ -336,6 +336,36 @@ jobs:
           install_policy=EXTRACT_BRANCH_ZIP_CONTENTS_TO_SD_ROOT
           EOF
 
+          # BRANCH-ZIP-READY.txt is generated after the main identity pass.
+          # Refresh its hash, then refresh PACKAGE_SOURCE_MAP itself in the
+          # root SHA table so the final verifier sees one self-consistent set.
+          python3 <<'PY'
+          import hashlib
+          import json
+          import pathlib
+
+          root = pathlib.Path(".")
+          def digest(path):
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+
+          package = root / "PACKAGE_SOURCE_MAP.json"
+          data = json.loads(package.read_text())
+          data["BRANCH-ZIP-READY.txt"] = digest(root / "BRANCH-ZIP-READY.txt")
+          package.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+
+          sums = root / "SHA256SUMS.txt"
+          table = {}
+          for line in sums.read_text().splitlines():
+              parts = line.split(None, 1)
+              if len(parts) == 2:
+                  table[parts[1].strip()] = parts[0].lower()
+          table["BRANCH-ZIP-READY.txt"] = digest(root / "BRANCH-ZIP-READY.txt")
+          table["PACKAGE_SOURCE_MAP.json"] = digest(package)
+          sums.write_text("".join(
+              "%s %s\n" % (table[rel], rel) for rel in sorted(table)
+          ))
+          PY
+
           echo "V33_HMI_SHA256=$SHA"
 
       - name: Verify complete V3.3 branch ZIP contract
