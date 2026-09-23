@@ -5,4 +5,6 @@ package de.audi.atip.base;
  * packaged into carplay_hook-basevideo3.jar.
  */
 public interface IFrameworkAccess {
+    long getUTCTime();
+    long convertUTCTimeToLocalTime(long value);
 }
