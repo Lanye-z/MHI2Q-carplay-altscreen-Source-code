@@ -1209,9 +1209,8 @@ static void *native_monitor_worker(void *arg) {
             progress_ok = p111_frame_tap_get_progress(
                 stream, &zoom_progress);
             if (progress_ok) {
-                const uint32_t frame_now_us = wheel_now_us32();
                 frame_age_us = wheel_short_age_us32(
-                    frame_now_us, zoom_progress.last_publish_us32);
+                    wheel_now, zoom_progress.last_publish_us32);
                 baseline_current =
                     zoom_send_frame_baseline_valid &&
                     zoom_send_frame_generation == zoom_progress.generation;
