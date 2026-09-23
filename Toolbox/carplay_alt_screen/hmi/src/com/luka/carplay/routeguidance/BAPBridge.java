@@ -80,9 +80,9 @@ public final class BAPBridge {
         Log.i(TAG, "LOWER_BAR_OWNERSHIP=RELEASED stock_restored=YES");
     }
 
-    public boolean update(RouteGuidance.State s) {
-        if (!initialized || !ownershipRequested || s == null) return false;
-        if (!ensureLowerBarOwnership()) return false;
+    public void update(RouteGuidance.State s) {
+        if (!initialized || !ownershipRequested || s == null) return;
+        if (!ensureLowerBarOwnership()) return;
 
         try {
             int dirty = s.dirtyMask;
@@ -112,10 +112,8 @@ public final class BAPBridge {
                 sendArrivalTime();
             }
 
-            return true;
         } catch (Throwable t) {
             Log.e(TAG, "lower-bar update failed", t);
-            return false;
         }
     }
 
