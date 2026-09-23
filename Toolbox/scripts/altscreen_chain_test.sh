@@ -341,16 +341,80 @@ cleanup_volatile_runtime(){
     return 0
 }
 
-remove_empty_unowned_runtime_residue(){
+runtime_owned_by_project(){
     root=$1
-    # Recovery-only escape hatch for partial RESTORE states: allow removal only
-    # when the project runtime is nothing more than known empty directories.
-    # Never recurse through a symlink and never delete unknown files.
     [ -d "$root" ] || return 1
     [ ! -L "$root" ] || return 1
+    marker="$root/$RUNTIME_OWNER"
+    [ -f "$marker" ] || return 1
+    grep -Fxq 'owner=MMI-Cockpit-Carplay' "$marker" 2>/dev/null &&
+        grep -Fxq 'runtime=carplay-altscreen' "$marker" 2>/dev/null
+}
+
+runtime_empty_unowned_removable(){
+    root=$1
+    # Non-mutating mirror of the only unowned-runtime recovery we permit.
+    # The directory must contain no files/symlinks and no directories except
+    # the known empty project skeleton.
+    [ -d "$root" ] || return 1
+    [ ! -L "$root" ] || return 1
+    (
+        cd "$root" || exit 1
+        find . -print 2>/dev/null | sort | while IFS= read -r rel; do
+            case "$rel" in
+              .|./bin|./bin/mirror|./lib|./state) ;;
+              *) exit 7 ;;
+            esac
+        done
+    )
+}
+
+runtime_cleanup_precheck(){
+    # Every logical reason that could make persistent runtime cleanup refuse
+    # must be decided before RESTORE APPLY touches startup/JAR/native files.
+    [ ! -e "$RUNTIME_STAGE" ] || {
+        echo "RUNTIME_CLEANUP_PRECHECK=FAIL reason=STAGING_PATH_PRESENT production_changed=NO" >&2
+        return 1
+    }
+
+    if [ -e "$RUNTIME_PREV" ]; then
+        runtime_owned_by_project "$RUNTIME_PREV" || {
+            echo "RUNTIME_CLEANUP_PRECHECK=FAIL reason=PREVIOUS_RUNTIME_UNOWNED production_changed=NO" >&2
+            return 1
+        }
+    fi
+
+    if [ ! -e "$RUNTIME_ROOT" ]; then
+        echo "RUNTIME_CLEANUP_PRECHECK=PASS root=ABSENT previous=$([ -e "$RUNTIME_PREV" ] && echo OWNED || echo ABSENT) production_changed=NO"
+        return 0
+    fi
+
+    [ -d "$RUNTIME_ROOT" ] && [ ! -L "$RUNTIME_ROOT" ] || {
+        echo "RUNTIME_CLEANUP_PRECHECK=FAIL reason=RUNTIME_NOT_SAFE_DIRECTORY production_changed=NO" >&2
+        return 1
+    }
+
+    if runtime_owned_by_project "$RUNTIME_ROOT"; then
+        echo "RUNTIME_CLEANUP_PRECHECK=PASS root=OWNED previous=$([ -e "$RUNTIME_PREV" ] && echo OWNED || echo ABSENT) production_changed=NO"
+        return 0
+    fi
+
+    if runtime_empty_unowned_removable "$RUNTIME_ROOT"; then
+        echo "RUNTIME_CLEANUP_PRECHECK=PASS root=EMPTY_UNOWNED_RECOVERY previous=$([ -e "$RUNTIME_PREV" ] && echo OWNED || echo ABSENT) production_changed=NO"
+        return 0
+    fi
+
+    echo "RUNTIME_CLEANUP_PRECHECK=FAIL reason=UNOWNED_NONEMPTY_RUNTIME path=/mnt/app/root/carplay-altscreen production_changed=NO" >&2
+    return 1
+}
+
+remove_empty_unowned_runtime_residue(){
+    root=$1
+    # Re-run the exact non-mutating policy immediately before removal so a
+    # changed/foreign runtime can never be recursively deleted.
+    runtime_empty_unowned_removable "$root" || return 1
     for dir in "$root/bin/mirror" "$root/bin" "$root/lib" "$root/state"; do
         [ ! -e "$dir" ] && continue
-        [ -d "$dir" ] || return 1
         rmdir "$dir" 2>/dev/null || return 1
     done
     rmdir "$root" 2>/dev/null || return 1
@@ -359,14 +423,21 @@ remove_empty_unowned_runtime_residue(){
 
 remove_runtime_scripts(){
     runtime_unowned=0
-    if [ -e "$RUNTIME_ROOT" ] && [ ! -f "$RUNTIME_ROOT/$RUNTIME_OWNER" ]; then
+    if [ -e "$RUNTIME_ROOT" ] && ! runtime_owned_by_project "$RUNTIME_ROOT"; then
         runtime_unowned=1
     fi
-    [ ! -e "$RUNTIME_PREV" ] || [ -f "$RUNTIME_PREV/$RUNTIME_OWNER" ] || {
-        echo "FAIL: refusing to remove unowned previous runtime" >&2
+    if [ -e "$RUNTIME_PREV" ]; then
+        runtime_owned_by_project "$RUNTIME_PREV" || {
+            echo "FAIL: refusing to remove unowned previous runtime" >&2
+            return 1
+        }
+    fi
+    [ ! -e "$RUNTIME_STAGE" ] || {
+        echo "FAIL: refusing to remove unexpected runtime staging path" >&2
         return 1
     }
-    if [ -e "$RUNTIME_ROOT" ] || [ -e "$RUNTIME_PREV" ] || [ -e "$RUNTIME_STAGE" ]; then
+
+    if [ -e "$RUNTIME_ROOT" ] || [ -e "$RUNTIME_PREV" ]; then
         mount_app_rw || return 1
         if [ -e "$RUNTIME_ROOT" ]; then
             if [ "$runtime_unowned" = 1 ]; then
@@ -382,7 +453,6 @@ remove_runtime_scripts(){
             fi
         fi
         [ ! -e "$RUNTIME_PREV" ] || rm -rf "$RUNTIME_PREV" || { mount_app_ro >/dev/null 2>&1 || true; return 1; }
-        rm -rf "$RUNTIME_STAGE" 2>/dev/null || true
         sync >/dev/null 2>&1 || true
         mount_app_ro || return 1
     fi
@@ -545,16 +615,24 @@ case "$CMD" in
     route=$(route_for_restore) || fail "no trusted restore route/recovery set is available"
     echo "ROUTER_PROFILE=$route"
     [ "$route" = UNIVERSAL ] || fail "transactional restore precheck currently requires UNIVERSAL recovery data"
-    delegate "$route" restore-precheck
+    delegate "$route" restore-precheck || exit $?
+    runtime_cleanup_precheck || fail "runtime cleanup precheck failed; production files unchanged"
+    diag=$(persistent_diag_helper || true)
+    [ -n "$diag" ] && [ -f "$diag" ] ||
+        fail "universal persistent diagnostics helper is missing; production files unchanged"
+    echo "RESTORE_ROUTER_PRECHECK=PASS runtime_cleanup=SAFE persistent_diag=PRESENT production_changed=NO"
     ;;
   restore)
     route=$(route_for_restore) || fail "no trusted restore route/recovery set is available"
     echo "ROUTER_PROFILE=$route"
     if [ "$route" = UNIVERSAL ]; then
-        # Verify every native recovery source before touching startup/runtime.
+        # Recheck backup/runtime safety immediately before mutation. The outer
+        # transaction wrapper already ran this path before RESTORE APPLY.
         delegate "$route" restore-precheck || fail "universal restore precheck failed; production files unchanged"
+        runtime_cleanup_precheck || fail "runtime cleanup changed after preflight; refusing partial restore"
         diag=$(persistent_diag_helper || true)
-        [ -n "$diag" ] || fail "universal persistent diagnostics helper is missing; refusing partial restore"
+        [ -n "$diag" ] && [ -f "$diag" ] ||
+            fail "universal persistent diagnostics helper is missing; refusing partial restore"
         /bin/sh "$diag" remove || fail "could not disable universal persistent diagnostics"
     fi
     delegate "$route" restore || exit $?
