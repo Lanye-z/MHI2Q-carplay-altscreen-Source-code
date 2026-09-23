@@ -7,6 +7,8 @@ JAR="$ROOT/Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar"
 HOOK="$ROOT/Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so"
 RGI_META="$ROOT/Toolbox/carplay_alt_screen/rgi_meta/libcarplay_rgi_meta.so"
 SUMS="$ROOT/SHA256SUMS.txt"
+MAP="$ROOT/PACKAGE_SOURCE_MAP.json"
+SD_RW="$ROOT/Toolbox/scripts/altscreen_sd_writable.sh"
 
 fail(){ echo "BRANCH_ZIP_VERIFY=FAIL: $*" >&2; exit 1; }
 check_unique_keys(){
@@ -33,6 +35,12 @@ file_cksum(){ cksum < "$1" | awk '{print $1}'; }
 [ -s "$JAR" ] || fail "V3 HMI JAR missing"
 [ -s "$HOOK" ] || fail "universal hook missing"
 [ -s "$SUMS" ] || fail "SHA256SUMS.txt missing"
+[ -s "$MAP" ] || fail "PACKAGE_SOURCE_MAP.json missing"
+[ -s "$SD_RW" ] || fail "shared SD writable helper missing"
+grep -Fq 'altscreen_sd_ensure_writable()' "$SD_RW" || fail "SD writable helper contract missing"
+grep -Fq 'AFTER_REMOUNT' "$SD_RW" || fail "SD remount re-probe contract missing"
+grep -Fq 'Toolbox/scripts/altscreen_sd_writable.sh' "$MAP" || fail "SD writable helper missing from PACKAGE_SOURCE_MAP"
+grep -Fq 'Toolbox/scripts/altscreen_sd_writable.sh' "$SUMS" || fail "SD writable helper missing from SHA256SUMS"
 
 check_unique_keys "$READY"
 check_unique_keys "$HMI_INFO"

@@ -17,6 +17,7 @@ on:
       - 'Toolbox/carplay_alt_screen/tests/test_storage_policy.sh'
       - 'Toolbox/carplay_alt_screen/tests/test_restore_transaction.sh'
       - 'Toolbox/scripts/altscreen_chain_test.sh'
+      - 'Toolbox/scripts/altscreen_sd_writable.sh'
       - 'Toolbox/scripts/altscreen_restore_transaction.sh'
       - 'Toolbox/carplay_alt_screen/tests/test_wheel_zoom_pacing.py'
       - 'Toolbox/scripts/altscreen_boot_diag.sh'
@@ -617,6 +618,7 @@ jobs:
               "Toolbox/carplay_alt_screen/tests/test_restore_transaction.sh",
               "Toolbox/carplay_alt_screen/tests/test_wheel_zoom_pacing.py",
               "Toolbox/scripts/altscreen_boot_diag.sh",
+              "Toolbox/scripts/altscreen_sd_writable.sh",
               "Toolbox/carplay_alt_screen/rgi_meta/libcarplay_rgi_meta.so",
               ".github/workflows/v33-oem-lower-bar-build.yml",
               ".github/workflows/v33-hmi-rgi-audit.yml",
