@@ -7,6 +7,12 @@ on:
     paths:
       - '.github/workflows/v33-hmi-rgi-audit.yml'
       - 'Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar'
+      - 'Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/**'
+      - 'Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java'
+      - 'Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java'
+      - 'Toolbox/carplay_alt_screen/rgi_meta/libcarplay_rgi_meta.so'
+      - 'Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so'
+      - 'Toolbox/scripts/altscreen_chain_test_universal.sh'
   workflow_dispatch:
 
 permissions:
@@ -18,7 +24,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: experiment/oem-layout-second-screen_v3.3
           fetch-depth: 1
 
       - uses: actions/setup-java@v4
@@ -26,45 +31,166 @@ jobs:
           distribution: temurin
           java-version: '8'
 
-      - name: Inventory historical HMI classes and lower-bar methods
+      - name: Audit current V3.3 HMI classes and lifecycle invariants
+        shell: bash
         run: |
           set -euo pipefail
           JAR=Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar
+          RG=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/RouteGuidance.java
+          BAP=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/BAPBridge.java
+          WHEEL=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          CTRL=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java
           OUT="$RUNNER_TEMP/v33-hmi-audit.txt"
-          test -s "$JAR"
 
-          {
-            echo "V33_HMI_AUDIT=BEGIN"
-            echo "jar_size=$(wc -c < "$JAR" | tr -d ' ')"
-            echo "jar_sha256=$(sha256sum "$JAR" | awk '{print $1}')"
+          exec > >(tee "$OUT") 2>&1
+          test -s "$JAR"
+          unzip -t "$JAR" >/dev/null
+          unzip -Z1 "$JAR" > "$RUNNER_TEMP/v33-jar.list"
+
+          echo "V33_HMI_AUDIT=BEGIN"
+          echo "jar_size=$(wc -c < "$JAR" | tr -d ' ')"
+          echo "jar_sha256=$(sha256sum "$JAR" | awk '{print $1}')"
+
+          required_classes="
+          com.luka.carplay.routeguidance.RouteGuidance
+          com.luka.carplay.routeguidance.BAPBridge
+          com.luka.carplay.routeguidance.GatedCombiService
+          com.luka.carplay.framework.CarplayBus
+          com.luka.carplay.cursor.CursorController
+          com.luka.carplay.cluster.ClusterStateController
+          com.luka.carplay.cluster.WheelZoomBridge
+          "
+          for cls in $required_classes; do
+            member="$(echo "$cls" | tr . /).class"
+            grep -Fxq "$member" "$RUNNER_TEMP/v33-jar.list" || {
+              echo "ERROR: required V3.3 class missing: $cls" >&2
+              exit 1
+            }
             echo
-            echo "=== relevant archive members ==="
-            unzip -l "$JAR" | awk '{print $4}' | grep -E '^(com/luka/carplay/(rgd|routeguidance|framework|cursor|core|cluster)/|de/audi/tghu/navi/app/cluster/)' || true
-            echo
-            echo "=== string/method evidence ==="
-            for token in               updateCurrentPositionInfo               updateDistanceToDestination               updateTimeToDestination               updateMapScale               updateAltitude               blockCurrentPositionInfo               blockRouteGuidance               EVT_RGD_UPDATE               touch               DPAD; do
-              printf '%s=' "$token"
-              if grep -aFq "$token" "$JAR"; then echo YES; else echo NO; fi
-            done
-            echo
-            echo "=== selected javap surfaces ==="
-            for cls in               com.luka.carplay.rgd.RouteGuidance               com.luka.carplay.rgd.BAPBridge               com.luka.carplay.rgd.GatedCombiService               com.luka.carplay.core.ScreenNavStatusGate               com.luka.carplay.bus.CarplayBus               com.luka.carplay.cluster.ClusterStateController               com.luka.carplay.cluster.WheelZoomBridge; do
-              if unzip -l "$JAR" | awk '{print $4}' | grep -Fqx "$(echo "$cls" | tr . /).class"; then
-                echo
-                echo "--- $cls ---"
-                javap -classpath "$JAR" -p -s -c "$cls" || true
-              else
-                echo
-                echo "--- $cls MISSING ---"
-              fi
-            done
-            echo
-            echo "V33_HMI_AUDIT=END"
-          } | tee "$OUT"
+            echo "--- $cls ---"
+            javap -classpath "$JAR" -p -s -c "$cls"
+          done
+
+          if grep -Fxq 'com/luka/carplay/rgd/RouteGuidance.class' "$RUNNER_TEMP/v33-jar.list"; then
+            echo 'ERROR: retired com.luka.carplay.rgd.RouteGuidance still present' >&2
+            exit 1
+          fi
+
+          grep -Fq 'bus.send(CarplayBus.CMD_SYNC_REQ, 0, null, 0)' "$RG"
+          grep -Fq 'public synchronized void onFrame' "$RG"
+          grep -Fq 'public synchronized void stop' "$RG"
+          grep -Fq 'boolean routeLooksActive' "$RG"
+          grep -Fq 'state.visibleInApp != 0) || routeLooksActive' "$RG"
+          grep -Fq 'if (!running)' "$RG"
+          grep -Fq 'markCachedLowerBarDirty' "$RG"
+
+          grep -Fq 'clearLowerBar()' "$BAP"
+          grep -Fq 'OEM_LOWER_BAR_CLEAR' "$BAP"
+          grep -Fq 'sendDistanceToDestinationRaw(0, false)' "$BAP"
+          grep -Fq 'updateTimeToDestination(0, 0, -1L)' "$BAP"
+          grep -Fq 'appConnectorNavi.updateCurrentPositionInfo(road)' "$BAP"
+          if grep -Fq 'if (road.length() > 0)' "$BAP"; then
+            echo 'ERROR: stale-road guard regression returned' >&2
+            exit 1
+          fi
+          if grep -Fq 'if (meters <= 0) return;' "$BAP"; then
+            echo 'ERROR: zero-distance clear regression returned' >&2
+            exit 1
+          fi
+
+          grep -Fq 'WHEEL_CALLBACK_RAW' "$WHEEL"
+          grep -Fq 'WHEEL_LIFECYCLE' "$WHEEL"
+          grep -Fq 'action=OBSERVE_ONLY' "$WHEEL"
+          grep -Fq 'WheelZoomBridge.logCarPlayLifecycle(active);' "$CTRL"
+
+          python3 - "$JAR" <<'PY'
+          import sys
+          import zipfile
+
+          with zipfile.ZipFile(sys.argv[1]) as zf:
+              wheel = zf.read("com/luka/carplay/cluster/WheelZoomBridge.class")
+              for marker in (
+                  b"WHEEL_CALLBACK_RAW",
+                  b"WHEEL_LIFECYCLE",
+                  b"callback_count",
+                  b"ignored_not_owned",
+                  b"action=OBSERVE_ONLY",
+              ):
+                  if marker not in wheel:
+                      raise SystemExit(
+                          "compiled wheel observability marker missing: %r" % (marker,)
+                      )
+          print("V33_WHEEL_OBSERVABILITY=PASS source=V3.2_latest")
+          PY
+
+          echo "V33_HMI_AUDIT=PASS packages=current lifecycle=guarded lower_bar_clear=YES"
+          echo "V33_HMI_AUDIT=END"
+
+      - name: Audit dual interposer chain
+        shell: bash
+        run: |
+          set -euo pipefail
+          ALT=Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so
+          META=Toolbox/carplay_alt_screen/rgi_meta/libcarplay_rgi_meta.so
+          CHAIN=Toolbox/scripts/altscreen_chain_test_universal.sh
+
+          test -s "$ALT"
+          test -s "$META"
+
+          python3 - "$ALT" "$META" "$CHAIN" <<'PY'
+          import pathlib
+          import subprocess
+          import sys
+
+          def symbols(path):
+              out = subprocess.check_output(
+                  ["readelf", "-Ws", str(path)],
+                  text=True,
+                  errors="replace",
+              )
+              rows = []
+              for line in out.splitlines():
+                  parts = line.split()
+                  if len(parts) >= 8 and parts[0].endswith(":"):
+                      rows.append((parts[6], parts[7].split("@", 1)[0]))
+              return rows
+
+          for path in map(pathlib.Path, sys.argv[1:3]):
+              rows = symbols(path)
+              for name in ("write", "recv", "close"):
+                  if not any(ndx != "UND" and sym == name for ndx, sym in rows):
+                      raise SystemExit(
+                          "missing interposer %s in %s" % (name, path)
+                      )
+              if not any(ndx == "UND" and sym == "dlsym" for ndx, sym in rows):
+                  raise SystemExit("dlsym forwarding dependency missing in %s" % path)
+
+          chain = pathlib.Path(sys.argv[3]).read_text()
+          rgi = chain.find('awk -v hook="$RGI_META_REL"')
+          alt = chain.find('awk -v hook="$UNIVERSAL_REL"', rgi + 1)
+          if rgi < 0 or alt <= rgi:
+              raise SystemExit("preload construction order is no longer RGI-then-Alt insertion")
+          if "final stable order is AltScreen:RGI:other-stock" not in chain:
+              raise SystemExit("stable preload-order invariant marker missing")
+
+          print(
+              "V33_DUAL_INTERPOSER_CHAIN=PASS "
+              "effective_order=AltScreen:RGI:libc "
+              "symbols=write,recv,close dlsym=present"
+          )
+          PY
+
+          for sym in write recv close; do
+            grep -R -Fq "dlsym(RTLD_NEXT, \"$sym\")" \
+              Toolbox/carplay_alt_screen/src || {
+                echo "ERROR: AltScreen RTLD_NEXT forwarding missing for $sym" >&2
+                exit 1
+              }
+          done
 
       - name: Upload audit
         uses: actions/upload-artifact@v4
         with:
           name: v33-hmi-rgi-audit
-          path: ${{ runner.temp }}/v33-hmi-audit.txt
+          path: $RUNNER_TEMP/v33-hmi-audit.txt
           if-no-files-found: error
