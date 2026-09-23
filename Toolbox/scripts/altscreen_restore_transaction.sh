@@ -69,7 +69,7 @@ emit_sd_diagnostics(){
 }
 
 TESTING=${ALTSCREEN_CHAIN_TESTING:-0}
-ROOT=""; VOLUME=""; TXN_READY=0; ROLLING_BACK=0; APP_RW=0; SYS_RW=0; MIXED_RECOVERY=0
+ROOT=""; VOLUME=""; TXN_READY=0; ROLLING_BACK=0; APP_RW=0; SYS_RW=0; MIXED_RECOVERY=0; PRE_RECOVERY_CHANGED=0
 if [ "$TESTING" = 1 ]; then
   ROOT=${ALTSCREEN_CHAIN_ROOT:-}; VOLUME=${ALTSCREEN_CHAIN_VOLUME:-}
   case "$ROOT" in /tmp/*|/var/tmp/*) ;; *) echo "FAIL: invalid ALTSCREEN_CHAIN_ROOT" >&2; exit 2;; esac
@@ -507,7 +507,16 @@ rollback(){
 recover_stale(){
   [ -d "$TXN" ] || return 0
   if [ -f "$TXN/COMMITTED" ] || [ -f "$TXN/ROLLED_BACK" ]; then rm -rf "$TXN"; return $?; fi
-  if [ -f "$TXN/PREPARED" ]; then log "STALE_RESTORE_TRANSACTION=DETECTED action=ROLLBACK_FIRST"; TXN_READY=1; rollback || return 1; rm -rf "$TXN" || return 1; TXN_READY=0; log "STALE_RESTORE_TRANSACTION=RECOVERED"; return 0; fi
+  if [ -f "$TXN/PREPARED" ]; then
+    log "STALE_RESTORE_TRANSACTION=DETECTED action=ROLLBACK_FIRST"
+    TXN_READY=1
+    rollback || return 1
+    PRE_RECOVERY_CHANGED=1
+    rm -rf "$TXN" || return 1
+    TXN_READY=0
+    log "STALE_RESTORE_TRANSACTION=RECOVERED production_changed=RECOVERY_TO_PRE_RESTORE"
+    return 0
+  fi
   # No PREPARED marker means the previous run never reached the first production
   # mutation. It is safe to discard this incomplete SD-only snapshot.
   log "STALE_RESTORE_TRANSACTION=INCOMPLETE_PREPARE action=CLEANUP production_changed=NO"
@@ -515,7 +524,20 @@ recover_stale(){
   return 0
 }
 
-fail(){ msg=$1; log "ERROR: $msg"; finish_mounts >/dev/null 2>&1 || true; if [ "$ROLLING_BACK" = 0 ] && [ "$TXN_READY" = 1 ]; then rollback && log "RESTORE=ABORTED rollback=PASS" || log "RESTORE=FAILED rollback=INCOMPLETE recovery_required=YES"; else log "RESTORE=REFUSED production_changed=NO"; fi; exit 1; }
+fail(){
+  msg=$1
+  log "ERROR: $msg"
+  finish_mounts >/dev/null 2>&1 || true
+  if [ "$ROLLING_BACK" = 0 ] && [ "$TXN_READY" = 1 ]; then
+    rollback && log "RESTORE=ABORTED rollback=PASS" ||
+      log "RESTORE=FAILED rollback=INCOMPLETE recovery_required=YES"
+  elif [ "$PRE_RECOVERY_CHANGED" = 1 ]; then
+    log "RESTORE=REFUSED production_changed=RECOVERY_ONLY current_restore_mutation=NO"
+  else
+    log "RESTORE=REFUSED production_changed=NO"
+  fi
+  exit 1
+}
 trap 'fail "restore interrupted by signal"' 1 2 15
 
 log "===== V3 transactional RESTORE ORIGINAL started ====="
@@ -523,6 +545,8 @@ if [ -d "$INSTALL_TXN" ]; then
   [ -f "$INSTALL_TXN_HELPER" ] || fail "active install transaction exists but recovery helper is missing"
   log "ACTIVE_INSTALL_TRANSACTION=DETECTED action=ROLLBACK_PRE_INSTALL_BEFORE_RESTORE"
   /bin/sh "$INSTALL_TXN_HELPER" recover || fail "active install transaction could not be recovered before restore"
+  PRE_RECOVERY_CHANGED=1
+  log "PRE_RESTORE_RECOVERY=PASS kind=INSTALL_TRANSACTION production_changed=RECOVERY_TO_PRE_INSTALL"
 fi
 recover_stale || fail "previous restore transaction could not be recovered"
 [ -f "$CONTROLLER" ] && [ -f "$APPLY" ] || fail "restore controller/apply helper missing"
