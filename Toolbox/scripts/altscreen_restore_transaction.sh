@@ -179,7 +179,7 @@ preflight_startup(){
     log "RESTORE_PREFLIGHT_STARTUP=FAIL reason=STARTUP_NOT_FOUND production_changed=NO"
     return 1
   }
-  tmp="$SD/restore-transaction/.startup-preflight.$"
+  tmp="$SD/restore-transaction/.startup-preflight.tmp"
   rm -f "$tmp" 2>/dev/null || true
   if ! strip_startup_blocks_preflight "$startup" > "$tmp"; then
     rm -f "$tmp" 2>/dev/null || true
