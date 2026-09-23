@@ -303,6 +303,10 @@ elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$INFO"; then
             binary_strings "$BIN" | grep -Fq "$marker" ||
                 fail "V3.1 sidecar marker missing: $marker"
         done
+        if grep -Fq 'displayable3_observability_revision=V32_READABLE_STATE_V1' "$INFO"; then
+            binary_strings "$BIN" | grep -Fq 'display_observer_revision=V32_READABLE_STATE_V1' ||
+                fail "V3.2 BUILD_INFO declares readable display telemetry but promoted sidecar is stale"
+        fi
         if [ "$HOOK_PENDING" = 0 ]; then
             if [ "$SAFEAREA_V32" = 1 ]; then
                 binary_strings "$HOOK" | grep -Fq 'safe_yh_mapping=vertical_full_visible_0_455' ||
