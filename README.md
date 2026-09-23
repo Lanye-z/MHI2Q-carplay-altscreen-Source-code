@@ -1,4 +1,11 @@
-**实车状态：已完成实车验证。** 在保持 V2 第二屏正常点亮的同时，已成功采集 Classic/Sport × Full/Small 四种 OEM 布局参数，observer 未破坏主显示链路。
+<!-- BRANCH_STATUS_BEGIN -->
+> [!IMPORTANT]
+> **分支用途：** 在 V2 正常显示链上加入只读 OEM layout observer，采集 Classic/Sport × Full/Small 四种原厂布局的几何、safe visible area 和布局差异；observer 不把采集结果应用到 CarPlay。
+>
+> **上车测试结论：** 2026-09-20 已实车完成。四种 OEM 布局均成功采集，同时 V2 第二屏持续正常工作，observer 未破坏 private111、displayable3 或 Context80。当前项目实际使用的第一批四态 OEM 数据来自这个分支。
+>
+> **当前定位：** OEM 布局实车证据基线；后续布局实现应优先回看本分支日志和结论。
+<!-- BRANCH_STATUS_END -->
 
 > [!IMPORTANT]
 > **当前状态与安全提示**
