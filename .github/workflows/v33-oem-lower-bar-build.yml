@@ -12,6 +12,10 @@ on:
       - 'Toolbox/carplay_alt_screen/rgi_meta/**'
       - 'Toolbox/scripts/altscreen_v33_rgi_config.sh'
       - 'Toolbox/scripts/altscreen_chain_test_universal.sh'
+      - 'Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh'
+      - 'Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh'
+      - 'Toolbox/scripts/status_mmi_cockpit_carplay_test.sh'
+      - 'VERIFY-BRANCH-ZIP-READY.sh'
       - 'BRANCH-ZIP-READY.txt'
       - 'OEM-LAYOUT-SECOND-SCREEN-V3.3.md'
   workflow_dispatch:
