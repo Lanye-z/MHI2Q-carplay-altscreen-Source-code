@@ -130,6 +130,36 @@ set -e
 [ "$(cat "$DEV/mnt/system/etc/eso/production/smartphone_integrator.json")" = PRE_RESTORE_SI ] ||
   fail "precheck failure changed production state"
 
+# A checksum-valid backup can still be unsafe if it is one of our own historical
+# project JARs. Reproduce log-41 style contamination and prove RESTORE refuses
+# before PREPARED/APPLY or any production mutation.
+printf '%s\n' 'com/luka/carplay/cluster/ClusterStateController.class' > "$HMI/carplay_hook.jar"
+cksum < "$HMI/carplay_hook.jar" > "$HMI/cksum"
+rm -f "$TMP/APPLY_RAN"
+POISON_LIVE_JAR=$(cksum < "$DEV/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar")
+POISON_LIVE_SI=$(cksum < "$DEV/mnt/system/etc/eso/production/smartphone_integrator.json")
+set +e
+ALTSCREEN_CHAIN_TESTING=1 \
+ALTSCREEN_CHAIN_ROOT="$DEV" \
+ALTSCREEN_CHAIN_VOLUME="$VOL" \
+/bin/sh "$WRAPPER" > "$TMP/poisoned-hmi.txt" 2>&1
+POISON_RC=$?
+set -e
+[ "$POISON_RC" -ne 0 ] || fail "project-managed HMI backup unexpectedly accepted"
+grep -Fq 'RESTORE_HMI_BACKUP=FAIL reason=HMI_BACKUP_PROJECT_MANAGED' "$TMP/poisoned-hmi.txt" ||
+  fail "project-managed HMI backup refusal reason missing"
+! grep -Fq 'RESTORE_TRANSACTION=PREPARED' "$TMP/poisoned-hmi.txt" ||
+  fail "poisoned HMI backup reached PREPARED"
+[ ! -e "$TMP/APPLY_RAN" ] || fail "poisoned HMI backup reached RESTORE APPLY"
+[ "$(cksum < "$DEV/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar")" = "$POISON_LIVE_JAR" ] ||
+  fail "poisoned HMI preflight changed live carplay_hook.jar"
+[ "$(cksum < "$DEV/mnt/system/etc/eso/production/smartphone_integrator.json")" = "$POISON_LIVE_SI" ] ||
+  fail "poisoned HMI preflight changed smartphone_integrator.json"
+
+# Restore the synthetic trusted backup for the remaining transaction tests.
+printf '%s\n' 'ORIGINAL_JAR' > "$HMI/carplay_hook.jar"
+cksum < "$HMI/carplay_hook.jar" > "$HMI/cksum"
+
 # A corrupt FORMAT=2 PREPARED snapshot must not be trusted for rollback. Keep
 # the evidence and leave production untouched instead of deleting live state.
 mkdir -p "$SD/restore-transaction/active/files" "$SD/restore-transaction/active/dirs" "$SD/restore-transaction/active/meta"
@@ -222,6 +252,29 @@ cksum < "$MIX_FW/pf.conf" > "$MIX_FW/pf.conf.cksum"
 printf '%s\n' '/mnt/system/etc/pf.conf' > "$MIX_FW/path"
 touch "$MIX_FW/COMPLETE"
 
+# A non-empty unowned runtime is not safe to delete. This must now fail during
+# restore-precheck, before the outer transaction reaches PREPARED/APPLY.
+printf '%s\n' 'FOREIGN_RUNTIME_FILE' > "$MIX_DEV/mnt/app/root/carplay-altscreen/foreign.bin"
+MIX_PRE_SI=$(cksum < "$MIX_DEV/mnt/system/etc/eso/production/smartphone_integrator.json")
+MIX_PRE_JAR=$(cksum < "$MIX_DEV/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar")
+set +e
+ALTSCREEN_CHAIN_TESTING=1 \
+ALTSCREEN_CHAIN_ROOT="$MIX_DEV" \
+ALTSCREEN_CHAIN_VOLUME="$MIX_VOL" \
+/bin/sh "$WRAPPER" > "$TMP/mixed-unowned-nonempty.txt" 2>&1
+MIX_PRE_RC=$?
+set -e
+[ "$MIX_PRE_RC" -ne 0 ] || fail "non-empty unowned runtime unexpectedly accepted"
+grep -Fq 'RUNTIME_CLEANUP_PRECHECK=FAIL reason=UNOWNED_NONEMPTY_RUNTIME' "$TMP/mixed-unowned-nonempty.txt" ||
+  fail "non-empty unowned runtime preflight reason missing"
+! grep -Fq 'RESTORE_TRANSACTION=PREPARED' "$TMP/mixed-unowned-nonempty.txt" ||
+  fail "non-empty unowned runtime reached PREPARED"
+[ "$(cksum < "$MIX_DEV/mnt/system/etc/eso/production/smartphone_integrator.json")" = "$MIX_PRE_SI" ] ||
+  fail "runtime cleanup preflight changed smartphone_integrator.json"
+[ "$(cksum < "$MIX_DEV/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar")" = "$MIX_PRE_JAR" ] ||
+  fail "runtime cleanup preflight changed live HMI JAR"
+rm -f "$MIX_DEV/mnt/app/root/carplay-altscreen/foreign.bin"
+
 set +e
 ALTSCREEN_CHAIN_TESTING=1 \
 ALTSCREEN_CHAIN_ROOT="$MIX_DEV" \
@@ -269,4 +322,4 @@ grep -Fq 'RESTORE_MIXED_STATE_RECOVERY=PASS' "$TMP/mixed-missing.txt" ||
 [ ! -e "$MIX_DEV/mnt/app/root/carplay-altscreen" ] ||
   fail "missing-runtime recovery recreated runtime"
 
-echo "RESTORE_TRANSACTION_TEST=PASS prepared_sync_fail_closed=1 precheck_fail_closed=1 apply_failure_rollback=1 exact_rollback_verify=1 stale_terminal_cleanup=1 corrupt_snapshot_non_destructive=1 mixed_unowned_runtime_recovery=1 mixed_missing_runtime_recovery=1"
+echo "RESTORE_TRANSACTION_TEST=PASS prepared_sync_fail_closed=1 precheck_fail_closed=1 poisoned_hmi_backup_fail_closed=1 runtime_cleanup_preflight_fail_closed=1 apply_failure_rollback=1 exact_rollback_verify=1 stale_terminal_cleanup=1 corrupt_snapshot_non_destructive=1 mixed_unowned_runtime_recovery=1 mixed_missing_runtime_recovery=1"
