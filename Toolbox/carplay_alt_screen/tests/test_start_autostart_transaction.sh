@@ -12,8 +12,10 @@ make_fixture(){
     live="$base/live"
     vol="$base/vol"
     app="$live/mnt/app/root/carplay-altscreen"
-    mkdir -p "$app/bin/mirror" "$app/state" "$live/mnt/app/eso/hmi/lsd/jars"              "$live/mnt/system/etc/boot" "$live/tmp" "$vol/Toolbox"
+    mkdir -p "$app/bin/mirror" "$app/state" "$live/mnt/app/eso/hmi/lsd/jars"              "$live/mnt/system/etc/boot" "$live/tmp" "$vol/Toolbox/scripts"
     cp "$START" "$app/bin/start_mmi_cockpit_carplay_rx_test.sh"
+    cp "$ROOT/Toolbox/scripts/altscreen_sd_writable.sh" "$vol/Toolbox/scripts/altscreen_sd_writable.sh"
+    chmod 755 "$vol/Toolbox/scripts/altscreen_sd_writable.sh"
     cp "$JAR" "$live/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar"
 
     cat > "$app/bin/altscreen_chain_test.sh" <<'MOCK_CTRL'
