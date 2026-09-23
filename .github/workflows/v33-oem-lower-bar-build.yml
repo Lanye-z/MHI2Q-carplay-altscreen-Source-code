@@ -9,6 +9,11 @@ on:
       - 'Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/**'
       - 'Toolbox/carplay_alt_screen/hmi/stubs/**'
       - 'Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar'
+      - 'Toolbox/carplay_alt_screen/rgi_meta/**'
+      - 'Toolbox/scripts/altscreen_v33_rgi_config.sh'
+      - 'Toolbox/scripts/altscreen_chain_test_universal.sh'
+      - 'BRANCH-ZIP-READY.txt'
+      - 'OEM-LAYOUT-SECOND-SCREEN-V3.3.md'
   workflow_dispatch:
 
 concurrency:
@@ -133,49 +138,69 @@ jobs:
         run: |
           set -euo pipefail
           JAR=Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar
+          SRC=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance
           BUILD="$RUNNER_TEMP/v33-oem-lower-bar"
 
-          javap -classpath "$JAR" -c -p com.luka.carplay.CarPlayHook > "$BUILD/hook.txt"
-          javap -classpath "$JAR" -c -p com.luka.carplay.routeguidance.BAPBridge > "$BUILD/bap.txt"
-          javap -classpath "$JAR" -c -p com.luka.carplay.routeguidance.GatedCombiService > "$BUILD/gate.txt"
-          javap -classpath "$JAR" -c -p com.luka.carplay.routeguidance.RouteGuidance > "$BUILD/rg.txt"
+          javap -classpath "$JAR" -p -s com.luka.carplay.CarPlayHook > "$BUILD/hook.sig"
+          javap -classpath "$JAR" -p -s com.luka.carplay.routeguidance.BAPBridge > "$BUILD/bap.sig"
+          javap -classpath "$JAR" -p -s com.luka.carplay.routeguidance.GatedCombiService > "$BUILD/gate.sig"
+          javap -classpath "$JAR" -p -s com.luka.carplay.routeguidance.RouteGuidance > "$BUILD/rg.sig"
+          unzip -Z1 "$JAR" > "$BUILD/jar.list"
 
-          grep -Fq 'com/luka/carplay/routeguidance/AmapRouteGuidance' "$BUILD/hook.txt"
-          grep -Fq 'com/luka/carplay/routeguidance/RouteGuidance.init' "$BUILD/hook.txt"
-          grep -Fq 'com/luka/carplay/routeguidance/RouteGuidance.start' "$BUILD/hook.txt"
-          grep -Fq 'com/luka/carplay/routeguidance/RouteGuidance.stop' "$BUILD/hook.txt"
-          grep -Fq 'com/luka/carplay/routeguidance/RouteGuidance.isRunning' "$BUILD/hook.txt"
+          grep -Fq 'com.luka.carplay.routeguidance.RouteGuidance' "$BUILD/hook.sig"
+          grep -Fq 'public boolean init(java.lang.Object);' "$BUILD/rg.sig"
+          grep -Fq 'public void start();' "$BUILD/rg.sig"
+          grep -Fq 'public void stop();' "$BUILD/rg.sig"
+          grep -Fq 'public boolean isRunning();' "$BUILD/rg.sig"
+          grep -Fq 'public void update(com.luka.carplay.routeguidance.RouteGuidance$State);' "$BUILD/bap.sig"
 
-          # Touch stays part of the current CarPlayHook.
-          grep -Fq 'com/luka/carplay/cursor/CursorController' "$BUILD/hook.txt"
+          grep -Fxq 'com/luka/carplay/cursor/CursorController.class' "$BUILD/jar.list"
+          grep -Fxq 'com/luka/carplay/cluster/WheelZoomBridge.class' "$BUILD/jar.list"
+          grep -Fxq 'com/luka/carplay/cluster/ClusterStateController.class' "$BUILD/jar.list"
 
-          # V3.3 only writes OEM FctID 19/21/22.
-          grep -Fq 'updateCurrentPositionInfo' "$BUILD/bap.txt"
-          grep -Fq 'updateDistanceToDestination' "$BUILD/bap.txt"
-          grep -Fq 'updateTimeToDestination' "$BUILD/bap.txt"
-          if grep -Fq 'updateMapScale' "$BUILD/bap.txt"; then
+          grep -Fq 'updateCurrentPositionInfo' "$SRC/BAPBridge.java"
+          grep -Fq 'updateDistanceToDestination' "$SRC/BAPBridge.java"
+          grep -Fq 'updateTimeToDestination' "$SRC/BAPBridge.java"
+          if grep -Fq 'updateMapScale(' "$SRC/BAPBridge.java"; then
             echo 'ERROR: V3.3 BAPBridge must not synthesize FctID45 MapScale' >&2
             exit 1
           fi
-          for retired in             updateManeuverDescriptor             updateLaneGuidance             updateDistanceToNextManeuver             updateExitView             updateActiveRGType
-          do
-            if grep -Fq "$retired" "$BUILD/bap.txt"; then
+          for retired in updateManeuverDescriptor updateLaneGuidance updateDistanceToNextManeuver updateExitView updateActiveRGType; do
+            if grep -Fq "$retired" "$SRC/BAPBridge.java"; then
               echo "ERROR: retired RGI output remains in V3.3 BAPBridge: $retired" >&2
               exit 1
             fi
           done
 
-          # Stock map scale and altitude are unconditional pass-through in the gate.
-          grep -Fq 'updateMapScale' "$BUILD/gate.txt"
-          grep -Fq 'updateAltitude' "$BUILD/gate.txt"
-          grep -Fq 'setLowerBarBlocked' "$BUILD/gate.txt"
+          grep -Fq 'public void updateMapScale' "$SRC/GatedCombiService.java"
+          grep -Fq 'real.updateMapScale' "$SRC/GatedCombiService.java"
+          grep -Fq 'public void updateAltitude' "$SRC/GatedCombiService.java"
+          grep -Fq 'real.updateAltitude' "$SRC/GatedCombiService.java"
+          grep -Fq 'setLowerBarBlocked' "$SRC/GatedCombiService.java"
 
-          grep -Fq 'EVT_RGD_UPDATE' "$BUILD/rg.txt"
-          grep -Fq 'dist_dest_m' "$BUILD/rg.txt"
-          grep -Fq 'eta_seconds' "$BUILD/rg.txt"
-          grep -Fq 'current_road' "$BUILD/rg.txt"
+          grep -Fq 'EVT_RGD_UPDATE' "$SRC/RouteGuidance.java"
+          grep -Fq '"dist_dest_m"' "$SRC/RouteGuidance.java"
+          grep -Fq '"eta_seconds"' "$SRC/RouteGuidance.java"
+          grep -Fq '"current_road"' "$SRC/RouteGuidance.java"
+          grep -Fq 'markCachedLowerBarDirty' "$SRC/RouteGuidance.java"
 
           echo 'V33_OEM_LOWER_BAR_ABI=PASS fct=19,21,22 fct45=STOCK touch=RETAINED'
+
+      - name: Verify pinned RGI metadata transport
+        run: |
+          set -euo pipefail
+          META=Toolbox/carplay_alt_screen/rgi_meta/libcarplay_rgi_meta.so
+          test -s "$META"
+          ACTUAL="$(sha256sum "$META" | awk '{print $1}')"
+          EXPECTED='87d10f67fbb3dc142642d899977bab0a6eb4009f61d3bcd873d0cce9e01511f7'
+          [ "$ACTUAL" = "$EXPECTED" ] || {
+            echo "ERROR: V3.3 RGI metadata binary drift: $ACTUAL" >&2
+            exit 1
+          }
+          for id in 0x5200 0x5201 0x5202 0x5203 0x5204; do
+            grep -Fq "$id" Toolbox/scripts/altscreen_v33_rgi_config.sh
+          done
+          echo "V33_RGI_METADATA=PASS sha256=$ACTUAL messages=0x5200-0x5204"
 
       - name: Update package identities
         run: |
@@ -250,6 +275,8 @@ jobs:
               "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/GatedCombiService.java",
               "Toolbox/carplay_alt_screen/rgi_meta/libcarplay_rgi_meta.so",
               ".github/workflows/v33-oem-lower-bar-build.yml",
+              "BRANCH-ZIP-READY.txt",
+              "OEM-LAYOUT-SECOND-SCREEN-V3.3.md",
           ]
 
           p = root / "PACKAGE_SOURCE_MAP.json"
@@ -277,6 +304,33 @@ jobs:
 
           echo "V33_HMI_SIZE=$SIZE"
           echo "V33_HMI_CKSUM=$CKSUM"
+          cat > BRANCH-ZIP-READY.txt <<EOF
+          BRANCH_ZIP_READY=YES
+          branch=experiment/oem-layout-second-screen_v3.3
+          validated_source_commit=${GITHUB_SHA}
+          mode=PRIVATE111_DIRECT_DISPLAY_V3_3_OEM_LOWER_BAR
+          jar_size=$SIZE
+          jar_cksum=$CKSUM
+          jar_sha256=$SHA
+          display_chain=V3_1_OEM_MAP_1TO1_CLIP
+          safearea_policy=V3_2_OEM_X_VISIBLE_Y
+          safearea_full=370,0,700,455
+          safearea_small=490,0,460,455
+          oem_lower_bar=CARPLAY_RGI_FCT19_21_22_V1
+          current_road=FCT19_CARPLAY
+          remaining_distance=FCT21_CARPLAY
+          arrival_time=FCT22_ABSOLUTE_ETA_CARPLAY
+          map_scale=FCT45_STOCK_PASSTHROUGH
+          remaining_time=NOT_PUBLISHED
+          touch=RETAINED
+          wheel_zoom=RETAINED
+          rgi_metadata_sha256=87d10f67fbb3dc142642d899977bab0a6eb4009f61d3bcd873d0cce9e01511f7
+          rgi_messages=0x5200,0x5201,0x5202,0x5203,0x5204
+          rebuild_required=none
+          vehicle_zip_status=READY_FOR_V3_3_VEHICLE_TEST
+          install_policy=EXTRACT_BRANCH_ZIP_CONTENTS_TO_SD_ROOT
+          EOF
+
           echo "V33_HMI_SHA256=$SHA"
 
       - name: Promote V3.3 HMI artifact
@@ -285,7 +339,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add             Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar             Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt             Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh             Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh             Toolbox/scripts/status_mmi_cockpit_carplay_test.sh             PACKAGE_SOURCE_MAP.json             SHA256SUMS.txt
+          git add             Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar             Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt             Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh             Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh             Toolbox/scripts/status_mmi_cockpit_carplay_test.sh             BRANCH-ZIP-READY.txt             PACKAGE_SOURCE_MAP.json             SHA256SUMS.txt
 
           if ! git diff --cached --quiet; then
             git commit -m "build(v3.3): promote OEM lower-bar HMI [skip ci]"
