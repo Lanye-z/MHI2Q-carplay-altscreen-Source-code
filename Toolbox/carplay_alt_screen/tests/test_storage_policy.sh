@@ -86,6 +86,10 @@ if grep -Fq '.capture-cursors' "$BOOT"; then
 fi
 grep -Fq 'flat_file_signature' "$BOOT" ||
     fail "wheel event snapshot lacks change detection"
+grep -Fq 'select_carplay_hook_log_source' "$BOOT" ||
+    fail "CarPlay Java/RGI log selector missing"
+grep -Fq 'streams/carplay_hook.log' "$BOOT" ||
+    fail "CarPlay Java/RGI log is not persisted to SD"
 
 # Legacy namespace references are allowed only for read/cleanup compatibility.
 for f in "$START" "$STOP" "$CHAIN" "$CTRL" "$DIAG" "$ADAPT" "$BOOT" "$LAUNCH" "$STOP_LAUNCH"; do

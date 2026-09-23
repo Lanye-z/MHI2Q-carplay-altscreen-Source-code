@@ -89,6 +89,9 @@ select_wheel_log_source() {
 select_wheel_events_source() {
     printf '%s\n' "$ROOT/tmp/mmi-mirror-wheel-zoom.events"
 }
+select_carplay_hook_log_source() {
+    printf '%s\n' "$ROOT/tmp/carplay_hook.log"
+}
 select_oem_geometry_history_source() {
     printf '%s\n' "$ROOT/tmp/carplay-oem-geometry.log"
 }
@@ -202,6 +205,7 @@ run_flat_plaintext() {
     flat_mirror_autostart_offset=$(flat_read_cursor "${CURSOR_PREFIX}_mirror-autostart.offset")
     flat_controller_offset=$(flat_read_cursor "${CURSOR_PREFIX}_controller.offset")
     flat_wheel_log_offset=$(flat_read_cursor "${CURSOR_PREFIX}_wheel-log.offset")
+    flat_carplay_hook_offset=$(flat_read_cursor "${CURSOR_PREFIX}_carplay-hook.offset")
     flat_oem_geometry_offset=$(flat_read_cursor "${CURSOR_PREFIX}_oem-geometry.offset")
     flat_oem_api_offset=$(flat_read_cursor "${CURSOR_PREFIX}_oem-api.offset")
     flat_wheel_events_sig=absent
@@ -215,6 +219,7 @@ run_flat_plaintext() {
         flat_mirror_autostart_offset=$(flat_capture_delta "$(select_mirror_autostart_source)" "$flat_mirror_autostart_offset" "$FLAT_DEST/streams/mirror_autostart.log" "${FLAT_PREFIX}_mirror_autostart.chunk" "${CURSOR_PREFIX}_mirror-autostart.offset")
         flat_controller_offset=$(flat_capture_delta "$(select_controller_log_source)" "$flat_controller_offset" "$FLAT_DEST/streams/mmi-mirror-controller.log" "${FLAT_PREFIX}_controller.chunk" "${CURSOR_PREFIX}_controller.offset")
         flat_wheel_log_offset=$(flat_capture_delta "$(select_wheel_log_source)" "$flat_wheel_log_offset" "$FLAT_DEST/streams/mmi-mirror-wheel-zoom.log" "${FLAT_PREFIX}_wheel_log.chunk" "${CURSOR_PREFIX}_wheel-log.offset")
+        flat_carplay_hook_offset=$(flat_capture_delta "$(select_carplay_hook_log_source)" "$flat_carplay_hook_offset" "$FLAT_DEST/streams/carplay_hook.log" "${FLAT_PREFIX}_carplay_hook.chunk" "${CURSOR_PREFIX}_carplay-hook.offset")
         flat_oem_geometry_offset=$(flat_capture_delta "$(select_oem_geometry_history_source)" "$flat_oem_geometry_offset" "$FLAT_DEST/streams/carplay-oem-geometry.log" "${FLAT_PREFIX}_oem_geometry.chunk" "${CURSOR_PREFIX}_oem-geometry.offset")
         flat_oem_api_offset=$(flat_capture_delta "$(select_oem_displaymanager_api_source)" "$flat_oem_api_offset" "$FLAT_DEST/streams/carplay-oem-displaymanager-read-api.log" "${FLAT_PREFIX}_oem_api.chunk" "${CURSOR_PREFIX}_oem-api.offset")
         wheel_events_source=$(select_wheel_events_source)

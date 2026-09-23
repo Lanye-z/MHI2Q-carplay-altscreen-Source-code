@@ -16,7 +16,9 @@ Baseline: `experiment/oem-layout-second-screen_v3.2`
 - `visible_in_app=0` 只表示 CarPlay 导航界面未处于前台；只要 `route_state` 或已缓存的有效路线数据仍表明路线活跃，就继续保持 Fct19/21/22 ownership。显式、已由 native debounce 的 `route_state=NO_ROUTE_SET` 仍然结束接管。
 - `CarplayBus` 在 Java 侧缓存 native sticky frame；RouteGuidance listener 晚注册时由 `on()` 在同一 bus lock 下本地重放最新 `EVT_RGD_UPDATE`。bus 保持 native→Java 单向，不再发送无效 `CMD_SYNC_REQ`。
 - `start()/stop()/onFrame()` 使用同一对象 monitor 串行化，并在 `bap.onStart()` 前再次检查 `running`，防止断开 teardown 后旧 frame 重新锁住 lower bar。
-- 导航结束或断开时，先清 `Fct19=""`、`Fct21=0`、`Fct22=invalid`，再解除 gate；CarPlay 明确发送空路名或 0 距离时也会立即清旧值。每次 owned update 与 teardown 前都会重新核对 `ClusterService` 当前 listener；若 HMI 生命周期中替换了 listener，会重新包一层 `GatedCombiService`，避免 detached gate 让 stock 与 CarPlay 同时写 Fct19/21/22。
+- lower bar 改为 **按字段、延迟接管、fail-open**：`BAPBridge.init()/onStart()` 不再提前替换 OEM listener；只有 Fct19/21/22 中某个字段收到有效 CarPlay 值时才安装 gate 并只 block 该字段。空路名、0/负距离、无有效 ETA 都不再向 VC 写 synthetic clear，而是立即释放对应字段给 stock；最后一个字段释放或导航结束时，在确认当前 listener 仍为本项目 gate 的前提下恢复其保存的原 stock listener。
+- lower-bar activity 不驱动 `ClusterStateController.rgiPresentationActive`。该状态继续只代表真正的 RGI 图形 presentation/displayable98；V3.3 当前 lower bar 是纯 BAP metadata，不应因此额外持有 Context80。
+- boot diagnostics 现在额外把 `/tmp/carplay_hook.log` 增量保存为 SD `streams/carplay_hook.log`，用于直接观察 RGI RX、RouteGuidance authority、Fct19/21/22 acquisition/release 与 publish。
 - Fct45 仍为 **Audi stock passthrough**，不是 CarPlay 地图实际比例尺同步；这一点属于 V3.3 的明确功能边界，而不是已实现能力。
 - V3.3 已继承 V3.2 后续的 wheel observability / SD diagnostics 增强；这些诊断改动只增加可观测性，不改变 wheel target-follow 行为。
 - V3.3 后续实车表明固定 200 ms 会在快速滚轮时积累 5–7 档 backlog，并产生约 1.1–1.5 s 的停手后追赶尾巴；Apple Maps 还观察到新尺度外围延迟补绘。现改为 `BURST_ADAPTIVE_100_150_200_V2`：首格立即；输入活跃时第 1–2 档 100 ms、第 3–6 档 150 ms、第 7 档起 200 ms；300 ms 无新物理输入后，剩余 backlog ≤2 档用 100 ms 收尾，≥3 档用 150 ms 收尾；真实反向在目标跨入新方向后优先 100 ms 响应。telemetry 不可用仍走 250 ms fallback，send retry 仍为 150 ms。decoded frame 只作为 liveness，不解释为 camera animation 已完成。
@@ -37,6 +39,8 @@ V3.3 不再尝试隐藏 Audi VC 原厂灰色导航栏，也不在 Type111 视频
 | 剩余距离 | FctID 21 DistanceToDestination | CarPlay RGI |
 | 比例尺 | FctID 45 MapScale | **原厂 stock passthrough** |
 
+实车回查表明 V2/V3.1 在未启用 0x5200..0x5204 metadata transport 时，灰栏仍可出现当前道路；因此 V3.3 必须允许 Audi stock navigation/BAP 在 CarPlay 字段无效时继续作为 fallback，而不能把“CarPlay session active”本身当成 lower-bar ownership。
+
 目标视觉效果保持 Audi OEM 结构，例如：
 
 ```text
@@ -47,13 +51,13 @@ V3.3 **不发布剩余时间文本**，不把 `12 min` 拼入 FctID 19，也不�
 
 ## 2. 所有权边界
 
-新增 `GatedCombiService` 只在 CarPlay Route Guidance 活跃期间阻止 stock navigator 写入：
+`GatedCombiService` 默认完全 fail-open，不再用一个总开关同时接管 Fct19/21/22。三个字段独立拥有：
 
-- FctID 19
-- FctID 21
-- FctID 22
+- FctID 19：仅在非空 CarPlay `current_road` 有效时 block stock；
+- FctID 21：仅在 CarPlay `dist_dest_m > 0` 且可格式化时 block stock；
+- FctID 22：仅在 CarPlay absolute ETA 或 remaining-time 可形成有效到达时间时 block stock。
 
-CarPlay 停止导航或断开时立即释放这三个字段，恢复 stock navigator。
+任何字段失效都只释放该字段；其余字段不受影响。没有任何 CarPlay lower-bar 字段有效时恢复原 stock listener。CarPlay 停止导航或断开时只释放 ownership，不向 Fct19/21/22 注入空值/0/invalid。
 
 下列功能始终保持原厂所有权：
 
@@ -175,24 +179,27 @@ CarPlay HMI
 
 ## 8. 启动/恢复原则
 
-CarPlay RGI 激活：
+CarPlay RGI 激活后并不立即抢占 lower bar：
 
 ```text
 metadata authority active
         ↓
-acquire Fct19/21/22
+等待每个字段的有效 CarPlay 值
         ↓
-replay cached current road / distance / ETA
+Fct19 / Fct21 / Fct22 分别 acquire
         ↓
-continue delta updates
+仅对应字段 block stock 并发布 CarPlay 值
 ```
 
-CarPlay 导航停止或断开：
+字段失效、导航停止或断开：
 
 ```text
-release Fct19/21/22 gate
+release 对应字段（不写 synthetic clear）
         ↓
-stock navigator regains ownership
+stock 立即重新获得该字段 passthrough
+        ↓
+最后一个字段释放后，如 listener 仍是本项目 gate
+恢复保存的原 stock listener
 ```
 
 缓存重放用于避免“RGI 元数据先到、导航 authority 后到”时首屏缺少路名、距离或 ETA。`source_supports_rg=0` 与经过 native debounce 后真正送到 Java 的 `route_state=0` 都会同时失效 Java 内的道路/距离/ETA/剩余时间缓存，防止下一次 re-enable 重新发布上一条路线。
