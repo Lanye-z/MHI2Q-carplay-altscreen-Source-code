@@ -25,7 +25,10 @@ def elapsed_u32(now, before):
 
 def short_age_u32(now, before):
     age = elapsed_u32(now, before)
-    return 0 if age > 0x7FFFFFFF else age
+    if age <= 0x7FFFFFFF:
+        return age
+    future_skew = elapsed_u32(before, now)
+    return 0 if future_skew <= STALL_AGE_MS else 0x7FFFFFFF
 
 
 def accumulate_target(target, sent_level, delta):
@@ -363,6 +366,10 @@ def test_fast_backlog_is_bounded_without_permanent_ceiling():
 def test_frame_age_future_sample_race_is_clamped_without_breaking_wrap():
     # Producer publication may land just after the monitor's earlier sample.
     assert short_age_u32(1000, 1010) == 0
+    assert short_age_u32(1000, 1000 + STALL_AGE_MS) == 0
+    # A larger reverse modular distance is not a plausible snapshot race and
+    # must remain stale so the existing stall/abort path can make progress.
+    assert short_age_u32(1000, 1000 + STALL_AGE_MS + 1) == 0x7FFFFFFF
     # A genuine short interval crossing uint32 wrap must remain intact.
     assert short_age_u32(0x20, U32 - 0x10) == 0x30
 
