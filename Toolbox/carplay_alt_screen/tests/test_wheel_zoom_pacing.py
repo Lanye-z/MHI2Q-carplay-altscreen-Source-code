@@ -23,6 +23,11 @@ def elapsed_u32(now, before):
     return u32(now - before)
 
 
+def short_age_u32(now, before):
+    age = elapsed_u32(now, before)
+    return 0 if age > 0x7FFFFFFF else age
+
+
 def accumulate_target(target, sent_level, delta):
     error = target - sent_level
     next_error = max(-TARGET_LIMIT, min(TARGET_LIMIT, error + delta))
@@ -108,7 +113,7 @@ class Model:
         if not self.telemetry or self.last_frame_ms is None:
             return None
         return {
-            "age": elapsed_u32(now_ms, self.last_frame_ms),
+            "age": short_age_u32(now_ms, self.last_frame_ms),
             "fresh": (
                 None
                 if self.send_frame_base is None
@@ -355,6 +360,13 @@ def test_fast_backlog_is_bounded_without_permanent_ceiling():
     assert m.sent[-1][1] == "OUT"
 
 
+def test_frame_age_future_sample_race_is_clamped_without_breaking_wrap():
+    # Producer publication may land just after the monitor's earlier sample.
+    assert short_age_u32(1000, 1010) == 0
+    # A genuine short interval crossing uint32 wrap must remain intact.
+    assert short_age_u32(0x20, U32 - 0x10) == 0x30
+
+
 def test_u32_wrap_zero_is_not_a_sentinel():
     m = Model()
     m.telemetry = False
@@ -429,6 +441,7 @@ def main():
     test_telemetry_fallback_is_150ms()
     test_limit_applies_to_outstanding_error_not_session_total()
     test_fast_backlog_is_bounded_without_permanent_ceiling()
+    test_frame_age_future_sample_race_is_clamped_without_breaking_wrap()
     test_u32_wrap_zero_is_not_a_sentinel()
     test_send_failure_does_not_advance_success_state()
     test_successful_catchup_rebases_before_next_event()
@@ -441,7 +454,8 @@ def main():
         "burst_gap_ms=300 stall_abort_quiet_ms=350 "
         "stall_abort_ms=1200 outstanding_limit=12 "
         "settled_rebase=IMMEDIATE send_retry_ms=150 "
-        "submit_failure_advances_state=NO u32_zero_sentinel=NO"
+        "submit_failure_advances_state=NO u32_zero_sentinel=NO "
+        "future_frame_timestamp_clamp=YES"
     )
 
 
