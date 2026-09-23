@@ -1,4 +1,11 @@
-**实车状态：已成功点亮。** 2026-09-19 实车已确认 CarPlay private type111 第二屏可正确显示到 Virtual Cockpit，并随导航实时更新；这是当前首次成功基线。
+<!-- BRANCH_STATUS_BEGIN -->
+> [!IMPORTANT]
+> **分支用途：** 修复 V1 decoded buffer 布局问题，通过原车 private renderer / QNX Screen 读取并线性化为标准 NV12，形成第一条正确显示的 CarPlay 第二屏路线。
+>
+> **上车测试结论：** 2026-09-19 已实车成功。CarPlay 第二屏能够正确物理点亮 Virtual Cockpit，并随手机导航实时变化；private111 → stock OMX → Screen linearizer → decoded SHM → GLES/displayable3 → Context80 全链路成立。
+>
+> **当前定位：** 首次正确点亮的黄金基线，建议永久保留用于回归和故障恢复。
+<!-- BRANCH_STATUS_END -->
 
 > [!IMPORTANT]
 > **实车点亮备份分支**
