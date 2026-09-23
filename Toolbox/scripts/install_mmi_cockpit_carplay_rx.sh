@@ -123,7 +123,7 @@ MANAGED_RUNTIME_OWNER="$DEVICE_ROOT/mnt/app/root/carplay-altscreen/.mmi-cockpit-
 BACKUP="$VOLUME/MMI-Cockpit-Carplay/backup/basevideo3-hmi-original"
 BACKUP_TMP="$BACKUP.new.$$"
 EXPECTED_SIZE=151181
-EXPECTED_CKSUM=2858699006
+EXPECTED_CKSUM=2536301854
 
 [ -f "$CONTROLLER" ] || { echo "FAIL: chain controller missing: $CONTROLLER"; exit 127; }
 [ -s "$JAR_SOURCE" ] || { echo "FAIL: Java80 HMI JAR missing: $JAR_SOURCE"; exit 1; }
