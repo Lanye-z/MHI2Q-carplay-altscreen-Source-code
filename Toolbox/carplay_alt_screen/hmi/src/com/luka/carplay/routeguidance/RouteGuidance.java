@@ -78,7 +78,7 @@ public class RouteGuidance implements CarplayBus.Listener {
         return true;
     }
 
-    public void start() {
+    public synchronized void start() {
         if (running) return;
         running = true;
         rgActive = false;
@@ -87,10 +87,23 @@ public class RouteGuidance implements CarplayBus.Listener {
         CarplayBus bus = CarplayBus.getInstance();
         bus.on(CarplayBus.EVT_RGD_UPDATE, this);
         bus.start();
+
+        /*
+         * The native RGI hook keeps a sticky snapshot.  Request a replay only
+         * after this listener is registered so cold-start / late-Java startup
+         * cannot miss the first road, distance or ETA values.
+         */
+        boolean syncRequested =
+            bus.send(CarplayBus.CMD_SYNC_REQ, 0, null, 0);
+        if (syncRequested) {
+            Log.i(TAG, "RGI sticky sync requested after listener registration");
+        } else {
+            Log.w(TAG, "RGI sticky sync request was not accepted; waiting for live update");
+        }
         Log.i(TAG, "Started; waiting for CarPlay RGI metadata");
     }
 
-    public void stop() {
+    public synchronized void stop() {
         if (!running) return;
         running = false;
         CarplayBus.getInstance().off(CarplayBus.EVT_RGD_UPDATE);
@@ -105,7 +118,7 @@ public class RouteGuidance implements CarplayBus.Listener {
 
     public boolean isRunning() { return running; }
 
-    public void onFrame(int type, int flags, byte[] payload, int len) {
+    public synchronized void onFrame(int type, int flags, byte[] payload, int len) {
         if (!running || type != CarplayBus.EVT_RGD_UPDATE) return;
 
         CarplayBus.Data data = CarplayBus.parseText(payload, len);
@@ -124,9 +137,19 @@ public class RouteGuidance implements CarplayBus.Listener {
             | State.DIRTY_SOURCE_SUPPORTS_RG;
 
         if ((state.dirtyMask & activationMask) != 0 || !rgActive) {
+            /*
+             * visible_in_app is presentation state, not route authority.
+             * A third-party map may report visible=0 while route guidance is
+             * still active.  Keep authority whenever the route itself still
+             * looks live; an explicit debounced NO_ROUTE_SET remains final.
+             */
+            boolean routeLooksActive =
+                state.routeState >= ROUTE_STATE_ROUTE_SET
+                || state.hasUsefulLowerBarData();
+
             boolean wantActive;
             if (state.visibleInApp >= 0) {
-                wantActive = state.visibleInApp != 0;
+                wantActive = (state.visibleInApp != 0) || routeLooksActive;
             } else if (state.routeState >= 0) {
                 wantActive = state.routeState >= ROUTE_STATE_ROUTE_SET;
             } else {
@@ -139,6 +162,15 @@ public class RouteGuidance implements CarplayBus.Listener {
             if (state.routeState == ROUTE_STATE_NO_ROUTE_SET) wantActive = false;
 
             if (wantActive && !rgActive) {
+                /*
+                 * stop() uses the same monitor, but keep this explicit fence as
+                 * a lifecycle invariant: a stale dispatcher frame must never
+                 * resurrect lower-bar ownership after teardown.
+                 */
+                if (!running) {
+                    state.clearDirty();
+                    return;
+                }
                 if (bap != null) bap.onStart();
                 /* Ownership can become authoritative after metadata was cached.
                  * Re-publish every useful OEM lower-bar field once so an earlier
@@ -158,9 +190,9 @@ public class RouteGuidance implements CarplayBus.Listener {
     }
 
     private void markCachedLowerBarDirty() {
-        if (state.currentRoad != null && state.currentRoad.length() > 0)
+        if (state.currentRoad != null)
             state.markDirty(State.DIRTY_CURRENT_ROAD);
-        if (state.distDestM > 0)
+        if (state.distDestM >= 0)
             state.markDirty(State.DIRTY_DIST_DEST);
         if (state.etaSeconds >= 0)
             state.markDirty(State.DIRTY_ETA);
