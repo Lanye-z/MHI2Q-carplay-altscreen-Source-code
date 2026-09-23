@@ -1,3 +1,10 @@
+> [!WARNING]
+> **⚠️ SD 卡读写权限警告（2026-09-24）**
+>
+> 本分支为历史/实验/工具分支，**尚未同步当前统一的 SD 可写 preflight**（真实 write probe → 必要时 `mount -uw` → 再次 write probe）。如果 Toolbox/QNX 此时把 `/net/mmx/fs/sda*` 以只读方式挂载，旧版 INSTALL / START / RESTORE / 日志或备份流程可能出现 `sd_write_failed`、`SD_NOT_WRITABLE`，并中止操作。
+>
+> **不建议直接使用本分支进行新的实车安装、启动、卸载/恢复或写入型维护。** 需要上车请优先使用已完成统一 SD RW 修复并通过 CI 的 `experiment/oem-layout-second-screen_v3.3`；需要公开基础版则使用 `opensource/v1-basic-wheel`。
+>
 <!-- BRANCH_STATUS_BEGIN -->
 > [!IMPORTANT]
 > **分支用途：** 在 V3 基础上重做滚轮手感与节奏，演进到 `OEM_TARGET_FOLLOW_V1`；同时采用 1:1 viewport/clip 几何，并继续完善安装、卸载、存储和日志事务。
