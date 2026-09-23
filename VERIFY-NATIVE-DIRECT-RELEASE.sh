@@ -560,10 +560,26 @@ if grep -Fq 'zoom_stall_latched && zoom_stall_started_at &&' "$NATIVE"; then
 fi
 grep -Fq '#define WHEEL_ZOOM_MONITOR_TICK_US 50000u' "$NATIVE" ||
     fail "wheel scheduler quantum must remain 50 ms"
-grep -Fq '#define WHEEL_ZOOM_PACING_MODEL "CAMERA_SETTLE_GUARD_200MS_V1"' "$NATIVE" ||
-    fail "V3.3 camera-settle pacing marker missing"
-grep -Fq '#define WHEEL_ZOOM_MIN_PACE_US 200000u' "$NATIVE" ||
-    fail "V3.3 healthy target-follow minimum pacing must remain 200 ms"
+grep -Fq '#define WHEEL_ZOOM_PACING_MODEL "BURST_ADAPTIVE_100_150_200_V2"' "$NATIVE" ||
+    fail "V3.3 adaptive pacing marker missing"
+grep -Fq '#define WHEEL_ZOOM_ACTIVE_SHORT_PACE_US 100000u' "$NATIVE" ||
+    fail "adaptive short-burst pacing must remain 100 ms"
+grep -Fq '#define WHEEL_ZOOM_ACTIVE_NORMAL_PACE_US 150000u' "$NATIVE" ||
+    fail "adaptive normal-burst pacing must remain 150 ms"
+grep -Fq '#define WHEEL_ZOOM_ACTIVE_LONG_PACE_US 200000u' "$NATIVE" ||
+    fail "adaptive long-burst pacing must remain 200 ms"
+grep -Fq '#define WHEEL_ZOOM_QUIET_SMALL_BACKLOG_PACE_US 100000u' "$NATIVE" ||
+    fail "quiet small-backlog drain must remain 100 ms"
+grep -Fq '#define WHEEL_ZOOM_QUIET_BACKLOG_PACE_US 150000u' "$NATIVE" ||
+    fail "quiet backlog drain must remain 150 ms"
+grep -Fq '#define WHEEL_ZOOM_INPUT_ACTIVE_US 300000u' "$NATIVE" ||
+    fail "adaptive input-active window must remain 300 ms"
+grep -Fq '#define WHEEL_ZOOM_SHORT_BURST_MAX_STEPS 2u' "$NATIVE" ||
+    fail "adaptive short-burst threshold mismatch"
+grep -Fq '#define WHEEL_ZOOM_NORMAL_BURST_MAX_STEPS 6u' "$NATIVE" ||
+    fail "adaptive normal-burst threshold mismatch"
+grep -Fq '#define WHEEL_ZOOM_SMALL_BACKLOG_MAX_STEPS 2u' "$NATIVE" ||
+    fail "adaptive small-backlog threshold mismatch"
 grep -Fq '#define WHEEL_ZOOM_SEND_RETRY_US 150000u' "$NATIVE" ||
     fail "failed zoom submissions must use a 150 ms retry backoff"
 grep -Fq 'zoom_have_failed_send_time' "$NATIVE" ||

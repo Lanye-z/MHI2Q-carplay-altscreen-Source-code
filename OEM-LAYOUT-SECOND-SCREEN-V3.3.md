@@ -19,7 +19,7 @@ Baseline: `experiment/oem-layout-second-screen_v3.2`
 - 导航结束或断开时，先清 `Fct19=""`、`Fct21=0`、`Fct22=invalid`，再解除 gate；CarPlay 明确发送空路名或 0 距离时也会立即清旧值。每次 owned update 与 teardown 前都会重新核对 `ClusterService` 当前 listener；若 HMI 生命周期中替换了 listener，会重新包一层 `GatedCombiService`，避免 detached gate 让 stock 与 CarPlay 同时写 Fct19/21/22。
 - Fct45 仍为 **Audi stock passthrough**，不是 CarPlay 地图实际比例尺同步；这一点属于 V3.3 的明确功能边界，而不是已实现能力。
 - V3.3 已继承 V3.2 后续的 wheel observability / SD diagnostics 增强；这些诊断改动只增加可观测性，不改变 wheel target-follow 行为。
-- V3.3 针对 Apple Maps 实车出现的“比例尺 UI 继续变化但底图 camera 冻结”增加 `CAMERA_SETTLE_GUARD_200MS_V1`：首格仍立即发送，连续 healthy step 最小间隔由 100 ms 调整为 200 ms，telemetry 不可用时 fallback 由 150 ms 调整为 250 ms；send retry 仍为 150 ms。decoded frame 只作为视频链 liveness，不解释为 camera animation 已完成。
+- V3.3 后续实车表明固定 200 ms 会在快速滚轮时积累 5–7 档 backlog，并产生约 1.1–1.5 s 的停手后追赶尾巴；Apple Maps 还观察到新尺度外围延迟补绘。现改为 `BURST_ADAPTIVE_100_150_200_V2`：首格立即；输入活跃时第 1–2 档 100 ms、第 3–6 档 150 ms、第 7 档起 200 ms；300 ms 无新物理输入后，剩余 backlog ≤2 档用 100 ms 收尾，≥3 档用 150 ms 收尾；真实反向在目标跨入新方向后优先 100 ms 响应。telemetry 不可用仍走 250 ms fallback，send retry 仍为 150 ms。decoded frame 只作为 liveness，不解释为 camera animation 已完成。
 - 两个 preload 保持 `AltScreen → RGI → libc`。父 CarPlay 进程完成装载后，供 `/bin/sh`、`pfctl` 等 helper `exec()` 继承的 `LD_PRELOAD` 会同时剔除 AltScreen 与 RGI 两个项目 hook；CI 同时审计共享 interposer 与 RGI 的额外 `read/open/writev/MsgSend/MsgSendv` 表面。
 - `V3.3 HMI/RGI audit` 已改为检查当前包名和真实 bytecode/source invariants；缺类或关键生命周期约束丢失会直接失败，不再以 `|| true` 掩盖。
 
@@ -140,7 +140,7 @@ libcarplay_altscreen.so : libcarplay_rgi_meta.so : other stock/third-party entri
   - 横向仍完全继承 V3.1/V3.2：FULL `370/700`、SMALL `490/460`
 - Classic / Sport 与 FULL / SMALL 观察及布局逻辑
 - 方向盘滚轮 `changeMapZoomLevel` 协议、target-follow / retarget / stall / rebase 架构
-- V3.3 仅将连续命令节奏更新为：首格立即、healthy 最小 200 ms、telemetry fallback 250 ms
+- V3.3 滚轮 pacing 更新为 burst-aware adaptive：首格立即；active 100/150/200 ms；停手后小 backlog 100 ms、大 backlog 150 ms；telemetry fallback 250 ms
 - 安装、卸载事务与 SD 日志框架
 
 ## 6. 触摸功能
@@ -201,17 +201,19 @@ stock navigator regains ownership
 
 ## 9. V3.3 滚轮 pacing 修正
 
-V3.2 实车中，Apple Maps 曾出现连续缩放后“比例尺数值继续变化，但底图 camera 基本冻结”的现象；高德在相同控制链下正常。日志同时显示 `changeMapZoomLevel` 提交/响应成功且 Type111 decoded frame 持续前进，因此 V3.3 不把协议响应或任意新视频帧当作 camera animation completion。
+V3.2/V3.3 实车已经给出两类相反约束：固定 100 ms 的连续缩放主观最顺，但 Apple Maps 曾出现比例尺继续变化而底图 camera 冻结；固定 200 ms 虽降低瞬时命令密度，却在快速滚轮时形成明显 target backlog，用户停手后仍可能继续追档约 1.1–1.5 秒，并观察到 Apple Maps 新尺度外围延迟补绘。
 
-V3.3 保留 `OEM_TARGET_FOLLOW_V1`，只增加保守的连续命令 settle guard：
+因此 V3.3 保留 `OEM_TARGET_FOLLOW_V1`，只把 pacing 改成 `BURST_ADAPTIVE_100_150_200_V2`：
 
 - 第一格：立即发送；
-- 连续 healthy step：最少间隔 200 ms；
-- decoded progress：只作为 liveness evidence，仍要求上一命令后至少出现新帧；
-- telemetry 不可用：250 ms fallback；
-- send failure retry：仍为 150 ms；
-- `target limit ±12`、方向反转立即 retarget、stall/recovery、settled rebase 均不变；
-- 不做 Apple Maps/高德应用特判，不做图像识别，不把 `status=0` 当作动画完成信号。
+- 输入仍活跃（距最近物理滚轮事件 <300 ms）时：第 1–2 档 100 ms，第 3–6 档 150 ms，第 7 档起 200 ms；
+- 输入停止 ≥300 ms 后：剩余 backlog ≤2 档用 100 ms 收尾，backlog ≥3 档用 150 ms 收尾；
+- 物理方向反转后保留 reverse-response pending；当 desired target 真正跨入新物理方向时，下一条命令优先使用 100 ms；
+- decoded progress 只作为 liveness evidence；不把任意新 frame 或 `status=0` 当作 camera animation completion；
+- telemetry 不可用时仍使用 250 ms fallback；
+- send failure retry 仍为 150 ms；
+- `target limit ±12`、stall/recovery、settled rebase、50 ms scheduler tick 均不变；
+- 不做 Apple Maps/高德应用特判，也不做地图像素识别。
 
 ## 10. V3.3 首次实车测试目标
 
@@ -224,7 +226,7 @@ V3.3 保留 `OEM_TARGET_FOLLOW_V1`，只增加保守的连续命令 settle guard
 5. CarPlay 导航结束/断开后 stock lower bar 是否正常恢复；
 6. Apple Maps 连续同方向滚动 6–10 格时，比例尺与底图 camera 是否始终同步变化；
 7. Apple Maps 到缩放边界后立即反向滚动 4–6 格，底图是否能正常反向恢复；
-8. 高德重复相同测试，确认 200 ms pacing 仅轻微降低连续追赶速度，不引入功能回归；
+8. 高德重复相同测试，确认短 burst 100 ms 恢复接近原 100 ms 版本的连续感，同时长 burst 能平滑过渡到 150/200 ms；
 9. Type111、V3.2 布局、target-follow 方向反转、触摸是否无回归。
 
 在以上项目通过前，V3.3 只标记为 **READY_FOR_V3_3_VEHICLE_TEST**，不标记为实车验证完成。

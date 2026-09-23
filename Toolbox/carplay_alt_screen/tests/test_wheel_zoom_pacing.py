@@ -1,15 +1,23 @@
 #!/usr/bin/env python3
-"""V3.3 contract for OEM_TARGET_FOLLOW_V1 with the 200 ms camera-settle guard."""
+"""V3.3 adaptive wheel contract for OEM_TARGET_FOLLOW_V1."""
 
 TARGET_LIMIT = 12
 MAX_EVENT_STEPS = 16
-MIN_PACE_MS = 200
+ACTIVE_SHORT_PACE_MS = 100
+ACTIVE_NORMAL_PACE_MS = 150
+ACTIVE_LONG_PACE_MS = 200
+QUIET_SMALL_BACKLOG_PACE_MS = 100
+QUIET_BACKLOG_PACE_MS = 150
 SEND_RETRY_MS = 150
 FALLBACK_PACE_MS = 250
 FRESH_FRAME_AGE_MS = 100
 STALL_AGE_MS = 150
 RECOVERY_FRAMES = 3
 BURST_GAP_MS = 300
+INPUT_ACTIVE_MS = 300
+SHORT_BURST_MAX_STEPS = 2
+NORMAL_BURST_MAX_STEPS = 6
+SMALL_BACKLOG_MAX_STEPS = 2
 STALL_ABORT_QUIET_MS = 350
 STALL_ABORT_MS = 1200
 U32 = 1 << 32
@@ -58,6 +66,10 @@ class Model:
         self.stall_start_ms = None
         self.recovery_base = None
         self.first_step_pending = False
+        self.have_input_direction = False
+        self.last_input_direction = None
+        self.reverse_response_pending = False
+        self.burst_input_steps = 0
         self.aborts = []
         self.rebases = 0
 
@@ -81,10 +93,23 @@ class Model:
 
     def add(self, now_ms, delta):
         assert 0 < abs(delta) <= MAX_EVENT_STEPS
+        direction = "IN" if delta < 0 else "OUT"
         new_burst = (
             not self.have_input_time
             or elapsed_u32(now_ms, self.last_input_ms) >= BURST_GAP_MS
         )
+        direction_changed = (
+            self.have_input_direction and direction != self.last_input_direction
+        )
+        if new_burst or direction_changed:
+            self.burst_input_steps = 0
+            if new_burst:
+                self.reverse_response_pending = False
+        self.burst_input_steps += abs(delta)
+        if direction_changed:
+            self.reverse_response_pending = True
+        self.last_input_direction = direction
+        self.have_input_direction = True
         self.target = accumulate_target(self.target, self.sent_level, delta)
         self.last_input_ms = u32(now_ms)
         self.have_input_time = True
@@ -106,6 +131,10 @@ class Model:
         self.have_send_time = False
         self.have_failed_send_time = False
         self.last_failed_send_ms = 0
+        self.have_input_direction = False
+        self.last_input_direction = None
+        self.reverse_response_pending = False
+        self.burst_input_steps = 0
         self.stall = False
         self.stall_start_ms = None
         self.first_step_pending = False
@@ -124,6 +153,24 @@ class Model:
             ),
         }
 
+    def _selected_pace(self, input_quiet, error):
+        backlog = abs(error)
+        next_direction = "IN" if error < 0 else "OUT"
+        if (
+            self.reverse_response_pending
+            and next_direction == self.last_input_direction
+        ):
+            return ACTIVE_SHORT_PACE_MS, "REVERSE_RESPONSE"
+        if input_quiet >= INPUT_ACTIVE_MS:
+            if backlog <= SMALL_BACKLOG_MAX_STEPS:
+                return QUIET_SMALL_BACKLOG_PACE_MS, "QUIET_SMALL_BACKLOG"
+            return QUIET_BACKLOG_PACE_MS, "QUIET_BACKLOG"
+        if self.burst_input_steps <= SHORT_BURST_MAX_STEPS:
+            return ACTIVE_SHORT_PACE_MS, "ACTIVE_SHORT"
+        if self.burst_input_steps <= NORMAL_BURST_MAX_STEPS:
+            return ACTIVE_NORMAL_PACE_MS, "ACTIVE_NORMAL"
+        return ACTIVE_LONG_PACE_MS, "ACTIVE_LONG"
+
     def drain(self, now_ms):
         if self.target == self.sent_level:
             return
@@ -136,6 +183,9 @@ class Model:
             else elapsed_u32(now_ms, self.last_input_ms)
         )
         progress = self._progress(now_ms)
+        selected_pace, pace_mode = (0, "FIRST_SEND") if first_send else (
+            self._selected_pace(input_quiet, self.target - self.sent_level)
+        )
 
         if (
             not self.stall
@@ -172,6 +222,7 @@ class Model:
                 self.stall_start_ms = None
                 self.recovery_base = None
                 self.first_step_pending = False
+                self.reverse_response_pending = False
                 return
 
         if self.stall:
@@ -180,11 +231,12 @@ class Model:
         if first_send:
             ready = True
         elif self.first_step_pending:
-            ready = elapsed >= MIN_PACE_MS
+            ready = elapsed >= selected_pace
         elif progress is not None and progress["fresh"] is not None:
-            ready = elapsed >= MIN_PACE_MS and progress["fresh"] > 0
+            ready = elapsed >= selected_pace and progress["fresh"] > 0
         else:
-            ready = elapsed >= FALLBACK_PACE_MS
+            selected_pace, pace_mode = FALLBACK_PACE_MS, "NO_TELEMETRY_FALLBACK"
+            ready = elapsed >= selected_pace
 
         if (
             ready
@@ -205,11 +257,16 @@ class Model:
             return
 
         self.sent_level += -1 if direction == "IN" else 1
-        self.sent.append((u32(now_ms), direction, self.target, self.sent_level))
+        self.sent.append((
+            u32(now_ms), direction, self.target, self.sent_level,
+            pace_mode, selected_pace
+        ))
         self.last_send_ms = u32(now_ms)
         self.have_send_time = True
         self.have_failed_send_time = False
         self.first_step_pending = False
+        if self.reverse_response_pending and direction == self.last_input_direction:
+            self.reverse_response_pending = False
         self.send_frame_base = self.frame_count if self.telemetry else None
         if self.target == self.sent_level and self.target != 0:
             self.target = 0
@@ -221,24 +278,99 @@ def test_first_detent_is_immediate():
     m = Model()
     m.frame(0)
     m.add(0, 1)
-    assert m.sent == [(0, "OUT", 1, 1)]
+    assert m.sent[0][:4] == (0, "OUT", 1, 1)
 
 
-def test_healthy_target_follow_uses_200ms_camera_settle_guard():
+def test_active_short_burst_uses_100ms():
+    m = Model()
+    m.frame(0)
+    m.add(0, 1)
+    m.frame(50)
+    m.add(50, 1)
+    m.frame(99)
+    m.tick(99)
+    assert len(m.sent) == 1
+    m.frame(100)
+    m.tick(100)
+    assert m.sent[-1][0] == 100
+    assert m.sent[-1][4:] == ("ACTIVE_SHORT", 100)
+
+
+def test_active_normal_burst_uses_150ms():
+    m = Model()
+    m.frame(0)
+    m.add(0, 1)
+    m.frame(20)
+    m.add(20, 1)
+    m.frame(40)
+    m.add(40, 1)
+    m.frame(100)
+    m.tick(100)
+    assert len(m.sent) == 1
+    m.frame(149)
+    m.tick(149)
+    assert len(m.sent) == 1
+    m.frame(150)
+    m.tick(150)
+    assert m.sent[-1][4:] == ("ACTIVE_NORMAL", 150)
+
+
+def test_active_long_burst_uses_200ms():
+    m = Model()
+    m.frame(0)
+    m.add(0, 1)
+    for t in (20, 40, 60, 80, 100, 120):
+        m.frame(t)
+        m.add(t, 1)
+    m.frame(150)
+    m.tick(150)
+    assert len(m.sent) == 1
+    m.frame(200)
+    m.tick(200)
+    assert m.sent[-1][4:] == ("ACTIVE_LONG", 200)
+
+
+def test_quiet_large_backlog_drains_at_150ms():
+    m = Model()
+    m.frame(0)
+    m.add(0, 7)
+    m.frame(200)
+    m.tick(200)
+    assert m.sent[-1][4:] == ("ACTIVE_LONG", 200)
+    m.frame(300)
+    m.tick(300)
+    assert len(m.sent) == 2
+    m.frame(350)
+    m.tick(350)
+    assert m.sent[-1][4:] == ("QUIET_BACKLOG", 150)
+
+
+def test_quiet_small_backlog_drains_at_100ms():
+    m = Model()
+    m.frame(0)
+    m.add(0, 3)
+    m.frame(300)
+    m.tick(300)
+    assert m.sent[-1][4:] == ("QUIET_SMALL_BACKLOG", 100)
+    m.frame(400)
+    m.tick(400)
+    assert m.sent[-1][4:] == ("QUIET_SMALL_BACKLOG", 100)
+
+
+def test_reverse_crossing_gets_100ms_response():
     m = Model()
     m.frame(0)
     m.add(0, 4)
-    for t in (50, 100, 150):
-        m.frame(t)
-        m.tick(t)
-    assert [x[0] for x in m.sent] == [0]
-    for t in (200, 250, 300, 350, 400, 450, 500, 550, 600):
-        m.frame(t)
-        m.tick(t)
-    assert [x[0] for x in m.sent] == [0, 200, 400, 600]
-    m.tick(650)
-    assert m.target == m.sent_level == 0
-    assert m.rebases == 1
+    m.frame(50)
+    m.add(50, -5)
+    assert m.target < m.sent_level
+    m.frame(99)
+    m.tick(99)
+    assert len(m.sent) == 1
+    m.frame(100)
+    m.tick(100)
+    assert m.sent[-1][1] == "IN"
+    assert m.sent[-1][4:] == ("REVERSE_RESPONSE", 100)
 
 
 def test_reverse_retargets_instead_of_replaying_old_out_steps():
@@ -251,25 +383,6 @@ def test_reverse_retargets_instead_of_replaying_old_out_steps():
     m.frame(100)
     m.tick(100)
     assert len(m.sent) == 1
-
-
-def test_reverse_past_submitted_level_changes_direction():
-    m = Model()
-    m.frame(0)
-    m.add(0, 4)
-    m.add(50, -5)
-    assert m.target == -1
-    m.frame(150)
-    m.tick(150)
-    assert len(m.sent) == 1
-    m.frame(200)
-    m.tick(200)
-    assert m.sent[-1][1] == "IN"
-    m.frame(400)
-    m.tick(400)
-    assert m.sent[-1][1] == "IN"
-    m.tick(450)
-    assert m.target == m.sent_level == 0
 
 
 def test_no_progress_latches_stall_then_three_frames_recover():
@@ -365,7 +478,7 @@ def test_fast_backlog_is_bounded_without_permanent_ceiling():
     now = 250
     while m.target != m.sent_level:
         m.tick(now)
-        now += 250
+        now += 150
     m.tick(now)
     assert m.target == m.sent_level == 0
     m.add(now + 500, 1)
@@ -392,9 +505,9 @@ def test_u32_wrap_zero_is_not_a_sentinel():
     assert m.have_input_time
     m.tick(0)
     assert len(m.sent) == 1
-    m.tick(150)
+    m.tick(99)
     assert len(m.sent) == 1
-    m.tick(200)
+    m.tick(100)
     assert len(m.sent) == 2
 
 
@@ -427,11 +540,9 @@ def test_successful_catchup_rebases_before_next_event():
     assert m.target == m.sent_level == 0
     m.add(50, 1)
     assert len(m.sent) == 1
-    m.tick(200)
+    m.tick(99)
     assert len(m.sent) == 1
-    m.tick(249)
-    assert len(m.sent) == 1
-    m.tick(250)
+    m.tick(100)
     assert len(m.sent) == 2
     assert m.target == m.sent_level == 0
 
@@ -451,9 +562,13 @@ def test_gate_close_clears_valid_zero_timestamp_state():
 
 def main():
     test_first_detent_is_immediate()
-    test_healthy_target_follow_uses_200ms_camera_settle_guard()
+    test_active_short_burst_uses_100ms()
+    test_active_normal_burst_uses_150ms()
+    test_active_long_burst_uses_200ms()
+    test_quiet_large_backlog_drains_at_150ms()
+    test_quiet_small_backlog_drains_at_100ms()
+    test_reverse_crossing_gets_100ms_response()
     test_reverse_retargets_instead_of_replaying_old_out_steps()
-    test_reverse_past_submitted_level_changes_direction()
     test_no_progress_latches_stall_then_three_frames_recover()
     test_target_can_change_while_stalled_without_old_replay()
     test_new_burst_can_wake_static_map()
@@ -469,13 +584,17 @@ def main():
     print(
         "WHEEL_ZOOM_PACING_TEST=PASS "
         "event_model=OEM_STEPS_V1 scheduler=OEM_TARGET_FOLLOW_V1 "
-        "tick_ms=50 min_pace_ms=200 fallback_ms=250 "
+        "pacing=BURST_ADAPTIVE_100_150_200_V2 tick_ms=50 "
+        "active_short_ms=100 active_normal_ms=150 active_long_ms=200 "
+        "quiet_small_backlog_ms=100 quiet_backlog_ms=150 "
+        "input_active_ms=300 short_burst_max=2 normal_burst_max=6 "
+        "small_backlog_max=2 fallback_ms=250 send_retry_ms=150 "
         "recovery_frames=3 fresh_age_ms=100 stall_age_ms=150 "
-        "burst_gap_ms=300 stall_abort_quiet_ms=350 "
-        "stall_abort_ms=1200 outstanding_limit=12 "
-        "settled_rebase=IMMEDIATE send_retry_ms=150 "
+        "burst_gap_ms=300 stall_abort_quiet_ms=350 stall_abort_ms=1200 "
+        "outstanding_limit=12 settled_rebase=IMMEDIATE "
         "submit_failure_advances_state=NO u32_zero_sentinel=NO "
-        "future_frame_timestamp_clamp=YES decoded_feedback=LIVENESS_ONLY "        "camera_completion_signal=UNAVAILABLE pacing=CAMERA_SETTLE_GUARD_200MS_V1"
+        "future_frame_timestamp_clamp=YES decoded_feedback=LIVENESS_ONLY "
+        "camera_completion_signal=UNAVAILABLE"
     )
 
 

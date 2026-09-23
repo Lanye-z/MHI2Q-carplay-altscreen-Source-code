@@ -698,18 +698,26 @@ static int native_read_cluster_owned_for_zoom(void) {
  */
 #define WHEEL_ZOOM_EVENT_MODEL "OEM_STEPS_V1"
 #define WHEEL_ZOOM_SCHEDULER_MODEL "OEM_TARGET_FOLLOW_V1"
-#define WHEEL_ZOOM_PACING_MODEL "CAMERA_SETTLE_GUARD_200MS_V1"
+#define WHEEL_ZOOM_PACING_MODEL "BURST_ADAPTIVE_100_150_200_V2"
 #define WHEEL_ZOOM_TARGET_LIMIT 12
 #define WHEEL_ZOOM_MAX_EVENT_STEPS 16
 #define WHEEL_ZOOM_MONITOR_TICK_US 50000u
 #define ALT111_VIEW_AREA_POLL_US 100000u
-#define WHEEL_ZOOM_MIN_PACE_US 200000u
+#define WHEEL_ZOOM_ACTIVE_SHORT_PACE_US 100000u
+#define WHEEL_ZOOM_ACTIVE_NORMAL_PACE_US 150000u
+#define WHEEL_ZOOM_ACTIVE_LONG_PACE_US 200000u
+#define WHEEL_ZOOM_QUIET_SMALL_BACKLOG_PACE_US 100000u
+#define WHEEL_ZOOM_QUIET_BACKLOG_PACE_US 150000u
 #define WHEEL_ZOOM_SEND_RETRY_US 150000u
 #define WHEEL_ZOOM_FALLBACK_PACE_US 250000u
 #define WHEEL_ZOOM_FRESH_FRAME_AGE_US 100000u
 #define WHEEL_ZOOM_STALL_AGE_US 150000u
 #define WHEEL_ZOOM_RECOVERY_FRAMES 3u
 #define WHEEL_ZOOM_BURST_GAP_US 300000u
+#define WHEEL_ZOOM_INPUT_ACTIVE_US 300000u
+#define WHEEL_ZOOM_SHORT_BURST_MAX_STEPS 2u
+#define WHEEL_ZOOM_NORMAL_BURST_MAX_STEPS 6u
+#define WHEEL_ZOOM_SMALL_BACKLOG_MAX_STEPS 2u
 #define WHEEL_ZOOM_STALL_ABORT_QUIET_US 350000u
 #define WHEEL_ZOOM_STALL_ABORT_US 1200000u
 
@@ -743,6 +751,41 @@ static uint32_t wheel_short_age_us32(uint32_t now, uint32_t before) {
     future_skew = (uint32_t)(before - now);
     if (future_skew <= WHEEL_ZOOM_STALL_AGE_US) return 0u;
     return 0x7fffffffu;
+}
+
+static uint32_t native_wheel_zoom_dynamic_pace_us(
+        unsigned burst_input_steps, int error_steps,
+        uint32_t input_quiet_us, int reverse_response_pending,
+        int next_direction, int last_input_direction,
+        const char **mode) {
+    unsigned backlog = (unsigned)(error_steps < 0 ? -error_steps : error_steps);
+
+    if (reverse_response_pending &&
+        (next_direction == 0 || next_direction == 1) &&
+        next_direction == last_input_direction) {
+        if (mode) *mode = "REVERSE_RESPONSE";
+        return WHEEL_ZOOM_ACTIVE_SHORT_PACE_US;
+    }
+
+    if (input_quiet_us >= WHEEL_ZOOM_INPUT_ACTIVE_US) {
+        if (backlog <= WHEEL_ZOOM_SMALL_BACKLOG_MAX_STEPS) {
+            if (mode) *mode = "QUIET_SMALL_BACKLOG";
+            return WHEEL_ZOOM_QUIET_SMALL_BACKLOG_PACE_US;
+        }
+        if (mode) *mode = "QUIET_BACKLOG";
+        return WHEEL_ZOOM_QUIET_BACKLOG_PACE_US;
+    }
+
+    if (burst_input_steps <= WHEEL_ZOOM_SHORT_BURST_MAX_STEPS) {
+        if (mode) *mode = "ACTIVE_SHORT";
+        return WHEEL_ZOOM_ACTIVE_SHORT_PACE_US;
+    }
+    if (burst_input_steps <= WHEEL_ZOOM_NORMAL_BURST_MAX_STEPS) {
+        if (mode) *mode = "ACTIVE_NORMAL";
+        return WHEEL_ZOOM_ACTIVE_NORMAL_PACE_US;
+    }
+    if (mode) *mode = "ACTIVE_LONG";
+    return WHEEL_ZOOM_ACTIVE_LONG_PACE_US;
 }
 
 static int native_wheel_zoom_target_accumulate(int target, int sent,
@@ -879,6 +922,10 @@ static void *native_monitor_worker(void *arg) {
     int zoom_have_send_time = 0;
     int zoom_have_input_time = 0;
     int zoom_have_failed_send_time = 0;
+    int zoom_have_input_direction = 0;
+    int zoom_last_input_direction = -1;
+    int zoom_reverse_response_pending = 0;
+    unsigned zoom_burst_input_steps = 0;
     struct wheel_zoom_event zoom_events[WHEEL_ZOOM_BATCH_MAX];
     struct p111_frame_progress_snapshot zoom_progress;
     unsigned zoom_count, zoom_i;
@@ -900,16 +947,27 @@ static void *native_monitor_worker(void *arg) {
     altscreen_log(
         "PHASE=WHEEL_ZOOM_QUEUE_RESET receiver=%p stream=%p generation=%u "
         "baseline_epoch=%u baseline_seq=%u stale_events_before_attach=discarded "
-        "event_model=%s scheduler=%s pacing=%s tick_ms=%u min_pace_ms=%u "
-        "fallback_pace_ms=%u recovery_frames=%u fresh_age_ms=%u "
+        "event_model=%s scheduler=%s pacing=%s tick_ms=%u "
+        "active_short_ms=%u active_normal_ms=%u active_long_ms=%u "
+        "quiet_small_backlog_ms=%u quiet_backlog_ms=%u fallback_pace_ms=%u "
+        "input_active_ms=%u short_burst_max=%u normal_burst_max=%u "
+        "small_backlog_max=%u recovery_frames=%u fresh_age_ms=%u "
         "stall_age_ms=%u burst_gap_ms=%u stall_abort_quiet_ms=%u "
         "stall_abort_ms=%u target_limit=%d timebase=wheel_us32",
         receiver, stream, generation, zoom_last_epoch, zoom_last_seq,
         WHEEL_ZOOM_EVENT_MODEL, WHEEL_ZOOM_SCHEDULER_MODEL,
         WHEEL_ZOOM_PACING_MODEL,
         WHEEL_ZOOM_MONITOR_TICK_US / 1000u,
-        WHEEL_ZOOM_MIN_PACE_US / 1000u,
+        WHEEL_ZOOM_ACTIVE_SHORT_PACE_US / 1000u,
+        WHEEL_ZOOM_ACTIVE_NORMAL_PACE_US / 1000u,
+        WHEEL_ZOOM_ACTIVE_LONG_PACE_US / 1000u,
+        WHEEL_ZOOM_QUIET_SMALL_BACKLOG_PACE_US / 1000u,
+        WHEEL_ZOOM_QUIET_BACKLOG_PACE_US / 1000u,
         WHEEL_ZOOM_FALLBACK_PACE_US / 1000u,
+        WHEEL_ZOOM_INPUT_ACTIVE_US / 1000u,
+        WHEEL_ZOOM_SHORT_BURST_MAX_STEPS,
+        WHEEL_ZOOM_NORMAL_BURST_MAX_STEPS,
+        WHEEL_ZOOM_SMALL_BACKLOG_MAX_STEPS,
         WHEEL_ZOOM_RECOVERY_FRAMES,
         WHEEL_ZOOM_FRESH_FRAME_AGE_US / 1000u,
         WHEEL_ZOOM_STALL_AGE_US / 1000u,
@@ -920,8 +978,8 @@ static void *native_monitor_worker(void *arg) {
 
     for (;;) {
         /*
-         * Wheel target-follow needs a 50 ms scheduler quantum so the 100 ms
-         * healthy pacing is not quantized to 200 ms. The existing lifecycle
+         * Wheel target-follow uses a 50 ms scheduler quantum so the adaptive
+         * 100/150/200 ms pacing states remain exactly representable. The existing lifecycle
          * clock remains obs_now_us() seconds; only wheel timing uses us32.
          */
         usleep(WHEEL_ZOOM_MONITOR_TICK_US);
@@ -1068,6 +1126,10 @@ static void *native_monitor_worker(void *arg) {
             zoom_have_send_time = 0;
             zoom_have_failed_send_time = 0;
             zoom_last_failed_send_at = 0;
+            zoom_have_input_direction = 0;
+            zoom_last_input_direction = -1;
+            zoom_reverse_response_pending = 0;
+            zoom_burst_input_steps = 0;
             zoom_stall_started_at = 0;
             zoom_stall_latched = 0;
             zoom_first_step_pending = 0;
@@ -1081,7 +1143,7 @@ static void *native_monitor_worker(void *arg) {
         for (zoom_i = 0; zoom_i < zoom_count; ++zoom_i) {
             struct wheel_zoom_event *ze = &zoom_events[zoom_i];
             int target_before, error_before, error_after;
-            int saturated, retarget, new_burst;
+            int saturated, retarget, new_burst, input_direction_changed;
 
             if (ze->epoch != zoom_last_epoch) {
                 altscreen_log(
@@ -1100,6 +1162,10 @@ static void *native_monitor_worker(void *arg) {
                 zoom_have_input_time = 0;
                 zoom_have_failed_send_time = 0;
                 zoom_last_failed_send_at = 0;
+                zoom_have_input_direction = 0;
+                zoom_last_input_direction = -1;
+                zoom_reverse_response_pending = 0;
+                zoom_burst_input_steps = 0;
                 zoom_stall_started_at = 0;
                 zoom_stall_latched = 0;
                 zoom_first_step_pending = 0;
@@ -1135,6 +1201,21 @@ static void *native_monitor_worker(void *arg) {
             new_burst = !zoom_have_input_time ||
                 (uint32_t)(wheel_now - zoom_last_input_at) >=
                     WHEEL_ZOOM_BURST_GAP_US;
+            input_direction_changed = zoom_have_input_direction &&
+                ze->direction != zoom_last_input_direction;
+            if (new_burst || input_direction_changed) {
+                zoom_burst_input_steps = 0;
+                if (new_burst) zoom_reverse_response_pending = 0;
+            }
+            if (zoom_burst_input_steps <= 1000000u - (unsigned)ze->steps)
+                zoom_burst_input_steps += (unsigned)ze->steps;
+            else
+                zoom_burst_input_steps = 1000000u;
+            if (input_direction_changed)
+                zoom_reverse_response_pending = 1;
+            zoom_last_input_direction = ze->direction;
+            zoom_have_input_direction = 1;
+
             target_before = zoom_target_steps;
             error_before = target_before - zoom_sent_steps;
             retarget =
@@ -1153,11 +1234,14 @@ static void *native_monitor_worker(void *arg) {
                 "PHASE=WHEEL_ZOOM_TARGET receiver=%p stream=%p generation=%u "
                 "source_seq=%u signed_steps=%d target_before=%d "
                 "target_after=%d sent=%d error_before=%d error_after=%d "
-                "retarget=%d new_burst=%d saturated=%d target_limit=%d "
-                "scheduler=%s",
+                "retarget=%d new_burst=%d input_direction_changed=%d "
+                "burst_input_steps=%u reverse_response_pending=%d "
+                "saturated=%d target_limit=%d scheduler=%s",
                 receiver, stream, generation, ze->seq, ze->delta,
                 target_before, zoom_target_steps, zoom_sent_steps,
-                error_before, error_after, retarget, new_burst, saturated,
+                error_before, error_after, retarget, new_burst,
+                input_direction_changed, zoom_burst_input_steps,
+                zoom_reverse_response_pending, saturated,
                 WHEEL_ZOOM_TARGET_LIMIT, WHEEL_ZOOM_SCHEDULER_MODEL);
         }
 
@@ -1189,12 +1273,16 @@ static void *native_monitor_worker(void *arg) {
         }
 
         /*
-         * OEM_TARGET_FOLLOW_V1:
+         * OEM_TARGET_FOLLOW_V1 + BURST_ADAPTIVE_100_150_200_V2:
          *   - first detent of a new burst may submit immediately;
-         *   - consecutive healthy steps use a 200 ms camera-settle guard;
+         *   - while input is active: first 2 detents use 100 ms, detents 3..6
+         *     use 150 ms, and detent 7+ uses 200 ms;
+         *   - after 300 ms input quiet: backlog <=2 drains at 100 ms, larger
+         *     backlog drains at 150 ms so the map does not trail the driver;
+         *   - a real direction reversal gets a 100 ms response once the
+         *     desired target has crossed into the new physical direction;
          *   - decoded-frame progress is liveness evidence only. It does not
-         *     prove that the map camera animation completed, because Apple
-         *     Maps can update scale/UI frames while its map camera is static;
+         *     prove that the map camera animation completed;
          *   - no post-send progress for >=150 ms latches STALL;
          *   - only STALL recovery requires three fresh frames;
          *   - telemetry loss uses a conservative 250 ms timer;
@@ -1207,10 +1295,17 @@ static void *native_monitor_worker(void *arg) {
             int fallback_timer = 0;
             int first_send = !zoom_have_send_time;
             int error_steps = zoom_target_steps - zoom_sent_steps;
+            int next_direction = error_steps < 0 ? 0 : 1;
+            const char *pace_mode = "FIRST_SEND";
             uint32_t elapsed_us = first_send ? 0u :
                 (uint32_t)(wheel_now - zoom_last_send_at);
             uint32_t input_quiet_us = zoom_have_input_time ?
                 (uint32_t)(wheel_now - zoom_last_input_at) : 0u;
+            uint32_t selected_pace_us = first_send ? 0u :
+                native_wheel_zoom_dynamic_pace_us(
+                    zoom_burst_input_steps, error_steps, input_quiet_us,
+                    zoom_reverse_response_pending, next_direction,
+                    zoom_last_input_direction, &pace_mode);
             uint32_t frame_age_us = 0;
             uint32_t fresh_since_send = 0;
             uint32_t recovery_fresh = 0;
@@ -1293,6 +1388,7 @@ static void *native_monitor_worker(void *arg) {
                     zoom_stall_latched = 0;
                     zoom_stall_started_at = 0;
                     zoom_first_step_pending = 0;
+                    zoom_reverse_response_pending = 0;
                     zoom_recovery_generation = 0;
                     zoom_recovery_frame_count = 0;
                 }
@@ -1303,14 +1399,14 @@ static void *native_monitor_worker(void *arg) {
                 if (first_send) {
                     send_ready = 1;
                 } else if (zoom_first_step_pending) {
-                    send_ready =
-                        elapsed_us >= WHEEL_ZOOM_MIN_PACE_US;
+                    send_ready = elapsed_us >= selected_pace_us;
                 } else if (progress_ok && baseline_current) {
-                    send_ready =
-                        elapsed_us >= WHEEL_ZOOM_MIN_PACE_US &&
+                    send_ready = elapsed_us >= selected_pace_us &&
                         fresh_since_send > 0u;
                 } else if (elapsed_us >= WHEEL_ZOOM_FALLBACK_PACE_US) {
                     fallback_timer = 1;
+                    pace_mode = "NO_TELEMETRY_FALLBACK";
+                    selected_pace_us = WHEEL_ZOOM_FALLBACK_PACE_US;
                     send_ready = 1;
                 }
             }
@@ -1347,6 +1443,10 @@ static void *native_monitor_worker(void *arg) {
                     zoom_have_failed_send_time = 0;
                     zoom_sent_steps = attempted_sent;
                     zoom_first_step_pending = 0;
+                    if (zoom_reverse_response_pending &&
+                        zoom_have_input_direction &&
+                        direction == zoom_last_input_direction)
+                        zoom_reverse_response_pending = 0;
 
                     after_send_progress_ok = p111_frame_tap_get_progress(
                         stream, &after_send_progress);
@@ -1373,8 +1473,9 @@ static void *native_monitor_worker(void *arg) {
                     "sent_after=%d error_after=%d scheduler=%s pacing=%s "
                     "first_send=%d first_step_pending=%d telemetry=%s "
                     "fallback_timer=%d elapsed_us=%u fresh_since_send=%u "
-                    "frame_age_ms=%u min_pace_ms=%u "
-                    "response_gates_next=0 rc=%d",
+                    "frame_age_ms=%u pace_mode=%s selected_pace_ms=%u "
+                    "input_quiet_ms=%u burst_input_steps=%u backlog_abs=%d "
+                    "reverse_response_pending=%d response_gates_next=0 rc=%d",
                     receiver, stream, generation, zoom_command_seq,
                     zoom_last_seq,
                     direction == 0 ? "ZOOM_IN" : "ZOOM_OUT",
@@ -1386,9 +1487,11 @@ static void *native_monitor_worker(void *arg) {
                     first_send, zoom_first_step_pending,
                     progress_ok ? "decoded_progress" : "unavailable",
                     fallback_timer, elapsed_us, fresh_since_send,
-                    frame_age_us / 1000u,
-                    WHEEL_ZOOM_MIN_PACE_US / 1000u,
-                    send_rc);
+                    frame_age_us / 1000u, pace_mode,
+                    selected_pace_us / 1000u, input_quiet_us / 1000u,
+                    zoom_burst_input_steps,
+                    error_steps < 0 ? -error_steps : error_steps,
+                    zoom_reverse_response_pending, send_rc);
 
                 if (send_rc != 0) {
                     p1404_cockpit_native_zoom_result(

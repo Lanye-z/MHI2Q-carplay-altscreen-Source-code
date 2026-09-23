@@ -74,13 +74,18 @@ jobs:
           NATIVE=Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
           HOOK=Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so
           grep -Fq '#define WHEEL_ZOOM_SCHEDULER_MODEL "OEM_TARGET_FOLLOW_V1"' "$NATIVE"
-          grep -Fq '#define WHEEL_ZOOM_PACING_MODEL "CAMERA_SETTLE_GUARD_200MS_V1"' "$NATIVE"
-          grep -Fq '#define WHEEL_ZOOM_MIN_PACE_US 200000u' "$NATIVE"
+          grep -Fq '#define WHEEL_ZOOM_PACING_MODEL "BURST_ADAPTIVE_100_150_200_V2"' "$NATIVE"
+          grep -Fq '#define WHEEL_ZOOM_ACTIVE_SHORT_PACE_US 100000u' "$NATIVE"
+          grep -Fq '#define WHEEL_ZOOM_ACTIVE_NORMAL_PACE_US 150000u' "$NATIVE"
+          grep -Fq '#define WHEEL_ZOOM_ACTIVE_LONG_PACE_US 200000u' "$NATIVE"
+          grep -Fq '#define WHEEL_ZOOM_QUIET_SMALL_BACKLOG_PACE_US 100000u' "$NATIVE"
+          grep -Fq '#define WHEEL_ZOOM_QUIET_BACKLOG_PACE_US 150000u' "$NATIVE"
+          grep -Fq '#define WHEEL_ZOOM_INPUT_ACTIVE_US 300000u' "$NATIVE"
           grep -Fq '#define WHEEL_ZOOM_FALLBACK_PACE_US 250000u' "$NATIVE"
           grep -Fq '#define WHEEL_ZOOM_SEND_RETRY_US 150000u' "$NATIVE"
-          strings "$HOOK" | grep -Fq 'CAMERA_SETTLE_GUARD_200MS_V1'
+          strings "$HOOK" | grep -Fq 'BURST_ADAPTIVE_100_150_200_V2'
           python3 Toolbox/carplay_alt_screen/tests/test_wheel_zoom_pacing.py
-          echo 'V33_WHEEL_PACING=PASS scheduler=OEM_TARGET_FOLLOW_V1 pacing=CAMERA_SETTLE_GUARD_200MS_V1 min_pace_ms=200 fallback_ms=250 first_send=IMMEDIATE decoded_feedback=LIVENESS_ONLY'
+          echo 'V33_WHEEL_PACING=PASS scheduler=OEM_TARGET_FOLLOW_V1 pacing=BURST_ADAPTIVE_100_150_200_V2 active=100/150/200 quiet=100/150 fallback=250 first_send=IMMEDIATE decoded_feedback=LIVENESS_ONLY'
 
       - name: Compile clean V3.3 lower-bar control plane
         run: |
@@ -483,9 +488,14 @@ jobs:
                   "RAW_CALLBACK_COUNTERS_LIFECYCLE_OBSERVE_ONLY",
               "wheel_zoom_lifecycle_change": "NONE",
               "wheel_zoom_model": "OEM_TARGET_FOLLOW_V1",
-              "wheel_zoom_pacing": "TARGET_FOLLOW_CAMERA_SETTLE_GUARD",
-              "wheel_zoom_pacing_revision": "CAMERA_SETTLE_GUARD_200MS_V1",
-              "wheel_zoom_min_pace_ms": "200",
+              "wheel_zoom_pacing": "TARGET_FOLLOW_BURST_ADAPTIVE",
+              "wheel_zoom_pacing_revision": "BURST_ADAPTIVE_100_150_200_V2",
+              "wheel_zoom_active_pace_ms": "100,150,200",
+              "wheel_zoom_active_threshold_steps": "2,6",
+              "wheel_zoom_input_active_ms": "300",
+              "wheel_zoom_quiet_small_backlog_max_steps": "2",
+              "wheel_zoom_quiet_small_backlog_pace_ms": "100",
+              "wheel_zoom_quiet_backlog_pace_ms": "150",
               "wheel_zoom_fallback_pace_ms": "250",
               "wheel_zoom_send_retry_ms": "150",
               "wheel_zoom_frame_feedback":
@@ -626,11 +636,16 @@ jobs:
           amap_soft_inactive_policy=AMAP_OR_UNKNOWN_SIGNATURE_5S_GRACE_WITH_FRESH_GUIDANCE_EXTENSION
           lower_bar_gate_policy=REVALIDATE_CLUSTER_LISTENER_BEFORE_UPDATE_AND_TEARDOWN
           touch=RETAINED
-          wheel_zoom=RETAINED_TARGET_FOLLOW_WITH_CAMERA_SETTLE_GUARD
+          wheel_zoom=RETAINED_TARGET_FOLLOW_WITH_BURST_ADAPTIVE_PACING
           wheel_zoom_model=OEM_TARGET_FOLLOW_V1
-          wheel_zoom_pacing=TARGET_FOLLOW_CAMERA_SETTLE_GUARD
-          wheel_zoom_pacing_revision=CAMERA_SETTLE_GUARD_200MS_V1
-          wheel_zoom_min_pace_ms=200
+          wheel_zoom_pacing=TARGET_FOLLOW_BURST_ADAPTIVE
+          wheel_zoom_pacing_revision=BURST_ADAPTIVE_100_150_200_V2
+          wheel_zoom_active_pace_ms=100,150,200
+          wheel_zoom_active_threshold_steps=2,6
+          wheel_zoom_input_active_ms=300
+          wheel_zoom_quiet_small_backlog_max_steps=2
+          wheel_zoom_quiet_small_backlog_pace_ms=100
+          wheel_zoom_quiet_backlog_pace_ms=150
           wheel_zoom_fallback_pace_ms=250
           wheel_zoom_send_retry_ms=150
           wheel_zoom_frame_feedback=PROCESS_LOCAL_DECODED_PROGRESS_LIVENESS_ONLY_NOT_CAMERA_COMPLETION
@@ -686,8 +701,10 @@ jobs:
           grep -Fq 'safearea_policy=V3_3_OEM_X_VERTICAL_60_450' BRANCH-ZIP-READY.txt
           grep -Fq 'safearea_full=370,60,700,390' BRANCH-ZIP-READY.txt
           grep -Fq 'safearea_small=490,60,460,390' BRANCH-ZIP-READY.txt
-          grep -Fq 'wheel_zoom_pacing_revision=CAMERA_SETTLE_GUARD_200MS_V1' BRANCH-ZIP-READY.txt
-          grep -Fq 'wheel_zoom_min_pace_ms=200' BRANCH-ZIP-READY.txt
+          grep -Fq 'wheel_zoom_pacing_revision=BURST_ADAPTIVE_100_150_200_V2' BRANCH-ZIP-READY.txt
+          grep -Fq 'wheel_zoom_active_pace_ms=100,150,200' BRANCH-ZIP-READY.txt
+          grep -Fq 'wheel_zoom_quiet_small_backlog_pace_ms=100' BRANCH-ZIP-READY.txt
+          grep -Fq 'wheel_zoom_quiet_backlog_pace_ms=150' BRANCH-ZIP-READY.txt
           grep -Fq 'wheel_zoom_fallback_pace_ms=250' BRANCH-ZIP-READY.txt
           grep -Fq 'wheel_zoom_frame_feedback=PROCESS_LOCAL_DECODED_PROGRESS_LIVENESS_ONLY_NOT_CAMERA_COMPLETION' BRANCH-ZIP-READY.txt
           echo 'V33_BRANCH_ZIP_CONTRACT=PASS'
