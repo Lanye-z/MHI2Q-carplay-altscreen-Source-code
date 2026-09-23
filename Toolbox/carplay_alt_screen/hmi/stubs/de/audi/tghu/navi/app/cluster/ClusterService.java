@@ -2,8 +2,13 @@ package de.audi.tghu.navi.app.cluster;
 
 import de.audi.atip.interapp.combi.bap.navi.CombiBAPServiceNavi;
 
-/* Compile-time descriptor stub only; vehicle class is supplied by lsd.jxe/JAR patch. */
+/* Compile/test descriptor stub only; vehicle class is supplied by lsd.jxe/JAR patch. */
 public class ClusterService {
-    public CombiBAPServiceNavi getCombiBAPListenerCombiService() { return null; }
-    public void setCombiBAPListenerCombiService(CombiBAPServiceNavi service) {}
+    private CombiBAPServiceNavi service;
+
+    public ClusterService() {}
+    public ClusterService(CombiBAPServiceNavi value) { service = value; }
+
+    public CombiBAPServiceNavi getCombiBAPListenerCombiService() { return service; }
+    public void setCombiBAPListenerCombiService(CombiBAPServiceNavi value) { service = value; }
 }

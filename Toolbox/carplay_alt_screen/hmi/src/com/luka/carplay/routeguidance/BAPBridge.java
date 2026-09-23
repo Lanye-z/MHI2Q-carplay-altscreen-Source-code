@@ -80,7 +80,17 @@ public final class BAPBridge {
          * never-owned lower bar could overwrite valid OEM navigation data.
          */
         boolean hadOwnership = ownershipActive;
-        if (hadOwnership) clearLowerBar();
+        boolean cleared = false;
+        /*
+         * Revalidate the live ClusterService listener before teardown.  The
+         * HMI may replace its listener at runtime; clearing through a detached
+         * gate would otherwise race a newly restored stock producer.
+         */
+        if (hadOwnership && ensureGateInstalled()) {
+            gate.setLowerBarBlocked(true);
+            clearLowerBar();
+            cleared = true;
+        }
 
         ownershipRequested = false;
         ownershipActive = false;
@@ -89,7 +99,7 @@ public final class BAPBridge {
         lastRemainingSeconds = -1L;
         lastRemainingSampleUtcSeconds = -1L;
         Log.i(TAG, "LOWER_BAR_OWNERSHIP=RELEASED stock_restored=YES"
-            + " cleared=" + (hadOwnership ? "YES" : "NO"));
+            + " cleared=" + (cleared ? "YES" : "NO"));
     }
 
     public void update(RouteGuidance.State s) {
@@ -133,7 +143,15 @@ public final class BAPBridge {
 
     private boolean ensureLowerBarOwnership() {
         if (!ownershipRequested) return false;
-        if (gate == null && !ensureGateInstalled()) return false;
+        /*
+         * Do not trust a cached gate reference. ClusterService can replace its
+         * listener during an HMI lifecycle transition; re-read the live
+         * listener before every owned publication and wrap it again if needed.
+         */
+        if (!ensureGateInstalled()) {
+            ownershipActive = false;
+            return false;
+        }
         gate.setLowerBarBlocked(true);
         ownershipActive = true;
         return true;
@@ -152,8 +170,12 @@ public final class BAPBridge {
             if (current instanceof GatedCombiService) {
                 gate = (GatedCombiService)current;
             } else {
+                boolean replacingDetachedGate = gate != null;
                 gate = new GatedCombiService(current);
                 cs.setCombiBAPListenerCombiService(gate);
+                if (replacingDetachedGate) {
+                    Log.w(TAG, "LOWER_BAR_GATE=REINSTALLED reason=cluster_listener_replaced");
+                }
             }
             return true;
         } catch (Throwable t) {

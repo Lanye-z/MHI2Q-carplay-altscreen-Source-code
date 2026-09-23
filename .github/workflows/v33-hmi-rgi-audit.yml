@@ -106,6 +106,8 @@ jobs:
 
           grep -Fq 'clearLowerBar()' "$BAP"
           grep -Fq 'OEM_LOWER_BAR_CLEAR' "$BAP"
+          grep -Fq 'LOWER_BAR_GATE=REINSTALLED reason=cluster_listener_replaced' "$BAP"
+          grep -Fq 'if (!ensureGateInstalled())' "$BAP"
           grep -Fq 'sendDistanceToDestinationRaw(0, false)' "$BAP"
           grep -Fq 'updateTimeToDestination(0, 0, -1L)' "$BAP"
           grep -Fq 'appConnectorNavi.updateCurrentPositionInfo(road)' "$BAP"
@@ -143,10 +145,11 @@ jobs:
           PY
 
           mkdir -p "$BUILD/test-classes"
-          javac -encoding UTF-8 -cp "$BUILD/classes:$BUILD/stubs:$JAR"             -d "$BUILD/test-classes"             "$TESTS/CarplayBusStickyReplayTest.java"             "$TESTS/RouteGuidanceHardClearTest.java"             "$TESTS/AmapSoftInactiveTest.java"
+          javac -encoding UTF-8 -cp "$BUILD/classes:$BUILD/stubs:$JAR"             -d "$BUILD/test-classes"             "$TESTS/CarplayBusStickyReplayTest.java"             "$TESTS/RouteGuidanceHardClearTest.java"             "$TESTS/AmapSoftInactiveTest.java"             "$TESTS/BAPGateReinstallTest.java"
           java -cp "$BUILD/test-classes:$BUILD/classes:$BUILD/stubs:$JAR"             com.luka.carplay.framework.CarplayBusStickyReplayTest
           java -cp "$BUILD/test-classes:$BUILD/classes:$BUILD/stubs:$JAR"             com.luka.carplay.routeguidance.RouteGuidanceHardClearTest
           java -cp "$BUILD/test-classes:$BUILD/classes:$BUILD/stubs:$JAR"             com.luka.carplay.routeguidance.AmapSoftInactiveTest
+          java -cp "$BUILD/test-classes:$BUILD/classes:$BUILD/stubs:$JAR"             com.luka.carplay.routeguidance.BAPGateReinstallTest
           echo "V33_HMI_AUDIT=PASS packages=current lifecycle=guarded sticky_replay=LOCAL hard_clear=YES"
           echo "V33_HMI_AUDIT=END"
 

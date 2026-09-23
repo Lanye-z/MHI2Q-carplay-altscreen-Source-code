@@ -218,10 +218,11 @@ jobs:
           cp "$BUILD/jar/carplay_hook-basevideo3.jar" "$BASE"
 
           mkdir -p "$BUILD/test-classes"
-          javac -encoding UTF-8 -cp "$BUILD/classes:$BUILD/stubs:$BASE"             -d "$BUILD/test-classes"             "$TESTS/CarplayBusStickyReplayTest.java"             "$TESTS/RouteGuidanceHardClearTest.java"             "$TESTS/AmapSoftInactiveTest.java"
+          javac -encoding UTF-8 -cp "$BUILD/classes:$BUILD/stubs:$BASE"             -d "$BUILD/test-classes"             "$TESTS/CarplayBusStickyReplayTest.java"             "$TESTS/RouteGuidanceHardClearTest.java"             "$TESTS/AmapSoftInactiveTest.java"             "$TESTS/BAPGateReinstallTest.java"
           java -cp "$BUILD/test-classes:$BUILD/classes:$BUILD/stubs:$BASE"             com.luka.carplay.framework.CarplayBusStickyReplayTest
           java -cp "$BUILD/test-classes:$BUILD/classes:$BUILD/stubs:$BASE"             com.luka.carplay.routeguidance.RouteGuidanceHardClearTest
           java -cp "$BUILD/test-classes:$BUILD/classes:$BUILD/stubs:$BASE"             com.luka.carplay.routeguidance.AmapSoftInactiveTest
+          java -cp "$BUILD/test-classes:$BUILD/classes:$BUILD/stubs:$BASE"             com.luka.carplay.routeguidance.BAPGateReinstallTest
 
       - name: Verify CarPlayHook ABI and OEM lower-bar scope
         run: |
@@ -289,6 +290,8 @@ jobs:
           grep -Fq 'state.visibleInApp != 0) || routeLooksActive' "$SRC/RouteGuidance.java"
           grep -Fq 'clearLowerBar()' "$SRC/BAPBridge.java"
           grep -Fq 'OEM_LOWER_BAR_CLEAR' "$SRC/BAPBridge.java"
+          grep -Fq 'LOWER_BAR_GATE=REINSTALLED reason=cluster_listener_replaced' "$SRC/BAPBridge.java"
+          grep -Fq 'if (!ensureGateInstalled())' "$SRC/BAPBridge.java"
           grep -Fq 'sendDistanceToDestinationRaw(0, false)' "$SRC/BAPBridge.java"
           grep -Fq 'updateTimeToDestination(0, 0, -1L)' "$SRC/BAPBridge.java"
 
@@ -458,6 +461,7 @@ jobs:
               "rgi_runtime_scope": "PINNED_FULL_RGI_HOOK_METADATA_CONSUMER_ONLY",
               "rgi_runtime_extra_modules": "COVERART_PRESENT_NOT_USED_BY_V33_LOWER_BAR",
               "amap_soft_inactive_policy": "AMAP_OR_UNKNOWN_SIGNATURE_5S_GRACE_WITH_FRESH_GUIDANCE_EXTENSION",
+              "lower_bar_gate_policy": "REVALIDATE_CLUSTER_LISTENER_BEFORE_UPDATE_AND_TEARDOWN",
               "sidecar_observability_rebuild_required": "no",
               "wheel_zoom_observability":
                   "RAW_CALLBACK_COUNTERS_LIFECYCLE_OBSERVE_ONLY",
@@ -498,6 +502,7 @@ jobs:
               "Toolbox/carplay_alt_screen/hmi/tests/CarplayBusStickyReplayTest.java",
               "Toolbox/carplay_alt_screen/hmi/tests/RouteGuidanceHardClearTest.java",
               "Toolbox/carplay_alt_screen/hmi/tests/AmapSoftInactiveTest.java",
+              "Toolbox/carplay_alt_screen/hmi/tests/BAPGateReinstallTest.java",
               "Toolbox/carplay_alt_screen/src/altscreen_hook.c",
               "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java",
               "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java",
@@ -564,6 +569,7 @@ jobs:
           dual_preload_child_isolation=ALTSCREEN_AND_RGI_STRIPPED_BEFORE_HELPER_EXEC
           rgi_runtime_scope=PINNED_FULL_RGI_HOOK_METADATA_CONSUMER_ONLY
           amap_soft_inactive_policy=AMAP_OR_UNKNOWN_SIGNATURE_5S_GRACE_WITH_FRESH_GUIDANCE_EXTENSION
+          lower_bar_gate_policy=REVALIDATE_CLUSTER_LISTENER_BEFORE_UPDATE_AND_TEARDOWN
           touch=RETAINED
           wheel_zoom=RETAINED
           wheel_zoom_observability=RAW_CALLBACK_COUNTERS_LIFECYCLE_OBSERVE_ONLY

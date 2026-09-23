@@ -16,7 +16,7 @@ Baseline: `experiment/oem-layout-second-screen_v3.2`
 - `visible_in_app=0` 只表示 CarPlay 导航界面未处于前台；只要 `route_state` 或已缓存的有效路线数据仍表明路线活跃，就继续保持 Fct19/21/22 ownership。显式、已由 native debounce 的 `route_state=NO_ROUTE_SET` 仍然结束接管。
 - `CarplayBus` 在 Java 侧缓存 native sticky frame；RouteGuidance listener 晚注册时由 `on()` 在同一 bus lock 下本地重放最新 `EVT_RGD_UPDATE`。bus 保持 native→Java 单向，不再发送无效 `CMD_SYNC_REQ`。
 - `start()/stop()/onFrame()` 使用同一对象 monitor 串行化，并在 `bap.onStart()` 前再次检查 `running`，防止断开 teardown 后旧 frame 重新锁住 lower bar。
-- 导航结束或断开时，先清 `Fct19=""`、`Fct21=0`、`Fct22=invalid`，再解除 gate；CarPlay 明确发送空路名或 0 距离时也会立即清旧值。
+- 导航结束或断开时，先清 `Fct19=""`、`Fct21=0`、`Fct22=invalid`，再解除 gate；CarPlay 明确发送空路名或 0 距离时也会立即清旧值。每次 owned update 与 teardown 前都会重新核对 `ClusterService` 当前 listener；若 HMI 生命周期中替换了 listener，会重新包一层 `GatedCombiService`，避免 detached gate 让 stock 与 CarPlay 同时写 Fct19/21/22。
 - Fct45 仍为 **Audi stock passthrough**，不是 CarPlay 地图实际比例尺同步；这一点属于 V3.3 的明确功能边界，而不是已实现能力。
 - V3.3 已继承 V3.2 后续的 wheel observability / SD diagnostics 增强；这些改动只增加可观测性，不改变 wheel target-follow 行为。
 - 两个 preload 保持 `AltScreen → RGI → libc`。父 CarPlay 进程完成装载后，供 `/bin/sh`、`pfctl` 等 helper `exec()` 继承的 `LD_PRELOAD` 会同时剔除 AltScreen 与 RGI 两个项目 hook；CI 同时审计共享 interposer 与 RGI 的额外 `read/open/writev/MsgSend/MsgSendv` 表面。
