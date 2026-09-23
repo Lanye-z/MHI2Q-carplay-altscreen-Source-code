@@ -125,21 +125,11 @@ fi
 # Shared by fixtures and production. Test actual file creation first: a legacy
 # launcher may already have mounted the SD writable. A mount return code alone
 # is not evidence that writing worked (or that an already-writable SD failed).
+SD_RW_HELPER="$VOLUME/Toolbox/scripts/altscreen_sd_writable.sh"
+[ -f "$SD_RW_HELPER" ] || fail "SD writable helper missing: $SD_RW_HELPER"
+. "$SD_RW_HELPER"
 sd_writable() {
-    sd_probe="$VOLUME/.altscreen_write_probe.$$"
-    if ( : > "$sd_probe" ) 2>/dev/null; then
-        rm -f "$sd_probe" || return 1
-        say "SD_WRITE=PASS already_writable=1"
-        return 0
-    fi
-    mount_rw "$VOLUME" || say "WARN: SD remount failed; checking actual write access"
-    if ( : > "$sd_probe" ) 2>/dev/null; then
-        rm -f "$sd_probe" || return 1
-        say "SD_WRITE=PASS after_remount=1"
-        return 0
-    fi
-    say "SD_WRITE=FAILED volume=$VOLUME"
-    return 1
+    altscreen_sd_ensure_writable "$VOLUME" "KNOWN_CONTROLLER_${CMD:-UNKNOWN}"
 }
 ARTIFACT_DIR="$VOLUME/Toolbox/carplay_alt_screen"
 # Profile artifacts are ordinary files under profiles/<K1004|P1404>.

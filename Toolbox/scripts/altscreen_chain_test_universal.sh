@@ -50,6 +50,10 @@ else
     mount_ro(){ mount -ur "$1"; }
 fi
 
+SD_RW_HELPER="$VOLUME/Toolbox/scripts/altscreen_sd_writable.sh"
+[ -f "$SD_RW_HELPER" ] || fail "SD writable helper missing: $SD_RW_HELPER"
+. "$SD_RW_HELPER"
+
 ARTIFACT_DIR="$VOLUME/Toolbox/carplay_alt_screen"
 UNIVERSAL_SRC="$ARTIFACT_DIR/universal/libcarplay_altscreen.so"
 UNIVERSAL_REL="/mnt/app/root/carplay-altscreen/lib/libcarplay_altscreen.so"
@@ -264,6 +268,8 @@ lock_reap_stale(){
     fi
 }
 lock_acquire(){
+    altscreen_sd_ensure_writable "$VOLUME" "CONTROLLER_${CMD:-UNKNOWN}" ||
+        fail "cannot make Toolbox SD writable"
     migrate_legacy_layout || fail "cannot initialize unified SD layout"
     ensure_dirs "$(dirname -- "$LOCK_FILE")" || fail "cannot create lock directory"
     boot=$(lock_boot_token) || fail "cannot establish volatile boot token for operation lock"

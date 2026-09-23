@@ -12,6 +12,15 @@ CTRL="$ROOT/Toolbox/scripts/altscreen_chain_test_universal.sh"
 DIAG="$ROOT/Toolbox/scripts/altscreen_persistent_diag.sh"
 ADAPT="$ROOT/Toolbox/scripts/altscreen_adaptive_diag.sh"
 BOOT="$ROOT/Toolbox/scripts/altscreen_boot_diag.sh"
+SD_RW="$ROOT/Toolbox/scripts/altscreen_sd_writable.sh"
+INSTALL="$ROOT/Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh"
+START="$ROOT/Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh"
+STOP="$ROOT/Toolbox/scripts/stop_mmi_cockpit_carplay_test.sh"
+FINISH="$ROOT/Toolbox/scripts/finish_mmi_cockpit_carplay_test.sh"
+INSTALL_TXN="$ROOT/Toolbox/scripts/altscreen_install_transaction.sh"
+RESTORE_TXN="$ROOT/Toolbox/scripts/altscreen_restore_transaction.sh"
+UNIVERSAL="$ROOT/Toolbox/scripts/altscreen_chain_test_universal.sh"
+ROUTER="$ROOT/Toolbox/scripts/altscreen_chain_test.sh"
 INSTALL="$ROOT/Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh"
 LAUNCH="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/start_vehicle.sh"
 STOP_LAUNCH="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh"
@@ -150,3 +159,16 @@ grep -Fq 'basevideo3.enabled' "$START" || fail "persistent boot demand marker mi
 grep -Fq 'diagnostics.enabled' "$DIAG" || fail "persistent diagnostics marker missing"
 
 echo "STORAGE_POLICY_TEST=PASS tmp=flat_files_only install_router=flat start_txn=flat install_txn=sd_reboot_recoverable_exact_rollback prepared_durable=1 snapshot_integrity=1 terminal_nonblocking=1 recovery_set_verify=1 install_ops=sd_fail_closed restore_ops=sd_preferred_tmp_fallback mirror_runtime=flat hook_log=flat restore_txn=sd_reboot_recoverable persistent_logs=sd managed_residue_reasons=explicit"
+
+# Unified removable-media write policy.
+[ -f "$SD_RW" ] || fail "shared SD writable helper missing"
+sh -n "$SD_RW" || fail "shared SD writable helper syntax"
+grep -Fq '.altscreen-rw-probe.$$' "$SD_RW" || fail "SD probe is not process-unique"
+grep -Fq 'mount -uw "$alts_sd_volume"' "$SD_RW" || fail "direct SD remount attempt missing"
+grep -Fq 'on -f mmx /bin/mount -uw "$alts_sd_volume"' "$SD_RW" || fail "mmx SD remount fallback missing"
+grep -Fq 'AFTER_REMOUNT' "$SD_RW" || fail "post-remount write verification missing"
+for f in "$INSTALL" "$START" "$STOP" "$FINISH" "$INSTALL_TXN" "$RESTORE_TXN" "$UNIVERSAL"; do
+    grep -Fq 'altscreen_sd_ensure_writable' "$f" || fail "SD writable preflight missing from $f"
+done
+grep -Fq 'altscreen_sd_writable.sh' "$ROUTER" || fail "SD writable helper not staged into runtime"
+echo "SD_RW_POLICY_TEST=PASS policy=PROBE_REMOUNT_REPROBE"
