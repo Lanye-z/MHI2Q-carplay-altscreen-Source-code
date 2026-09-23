@@ -3,7 +3,7 @@
   ".github/workflows/private111-direct-display-v1.yml": "c1a5721ff34e3b22a9d5416bded1cce575009193699ac698e680b52e70a40649",
   ".github/workflows/private111-direct-display-v2.yml": "eb365149b4384e39d54c772325ee9d43a9cb9355009cbcac7fc32ce81d1c09aa",
   ".github/workflows/wheel-zoom-v3.yml": "5f4e54948a511a90236efb843bbf4654670ad14abc66ac66e816542e93f524a6",
-  "BRANCH-ZIP-READY.txt": "0ab04fe8e1ec776d5e4d2aa2834ac2cdf6495c555dd1d99f183e3ef6f059bb2a",
+  "BRANCH-ZIP-READY.txt": "811cf31d3f3124153a217a9f7016bf4b17c7f04f115bdb86f90ecf5144969c58",
   "CARPLAY-PRIVATE111-DIRECT-DISPLAY-V1.md": "232bed68c6ca0d89ecdc33a495c29b32fe199f01fb426b3c1c87a13074203d71",
   "CARPLAY-PRIVATE111-DIRECT-DISPLAY-V2.md": "8485f9cd1de57ad19030b8dd6f38c8fd59e9f98d2b52951cf42771706c4cca7d",
   "CONTEXT80-READBACK-V1.md": "14007efa1b39fc681dd75caab216d7e9caccf317c8144f685e93216e24e65255",
@@ -100,7 +100,7 @@
   "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/RouteGuidance.java": "1e4e89afc2d5735ed274e7aabd3e1caa9a0b5754d760cbeac94ffe03d5715cd0",
   "Toolbox/carplay_alt_screen/rgi_meta/libcarplay_rgi_meta.so": "87d10f67fbb3dc142642d899977bab0a6eb4009f61d3bcd873d0cce9e01511f7",
   "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/BAPBridge.java": "445852cb2ec28d66091075b591a78f31efc4ba9518105e5e36acc641d5334e78",
-  ".github/workflows/v33-oem-lower-bar-build.yml": "672dd4685a115fcce832f29e15c345a35c8126fa05392cd375e857f741cd0ad3",
+  ".github/workflows/v33-oem-lower-bar-build.yml": "1f1ae0e2d8b299f318d49c6adb46489b5f7988e621e291ba032758e0989e4ece",
   "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/AmapRouteGuidance.java": "bef9447f9c83fea47df00210c5e3f7a97f68fea82d2d1832c891a245fccda753",
   "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/GatedCombiService.java": "25d9169ba4542312a3e0a19d18c4961c93317b3fdf4f99d4f80db0a18133d021"
 }
