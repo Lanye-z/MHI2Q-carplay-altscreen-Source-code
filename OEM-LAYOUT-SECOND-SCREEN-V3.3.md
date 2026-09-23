@@ -14,12 +14,12 @@ Baseline: `experiment/oem-layout-second-screen_v3.2`
 本轮收口只修正 RGI 生命周期、状态边界和诊断链，**不改 V3.2 已验证的 Type111 显示链、safeArea、滚轮缩放算法或触摸主链**。
 
 - `visible_in_app=0` 只表示 CarPlay 导航界面未处于前台；只要 `route_state` 或已缓存的有效路线数据仍表明路线活跃，就继续保持 Fct19/21/22 ownership。显式、已由 native debounce 的 `route_state=NO_ROUTE_SET` 仍然结束接管。
-- RouteGuidance listener 建立后立即发送 `CMD_SYNC_REQ`，要求 native sticky RGI snapshot 重放，避免 CarPlay 已连接/已导航时 Java 后启动导致首屏道路、距离或 ETA 为空。
+- `CarplayBus` 在 Java 侧缓存 native sticky frame；RouteGuidance listener 晚注册时由 `on()` 在同一 bus lock 下本地重放最新 `EVT_RGD_UPDATE`。bus 保持 native→Java 单向，不再发送无效 `CMD_SYNC_REQ`。
 - `start()/stop()/onFrame()` 使用同一对象 monitor 串行化，并在 `bap.onStart()` 前再次检查 `running`，防止断开 teardown 后旧 frame 重新锁住 lower bar。
 - 导航结束或断开时，先清 `Fct19=""`、`Fct21=0`、`Fct22=invalid`，再解除 gate；CarPlay 明确发送空路名或 0 距离时也会立即清旧值。
 - Fct45 仍为 **Audi stock passthrough**，不是 CarPlay 地图实际比例尺同步；这一点属于 V3.3 的明确功能边界，而不是已实现能力。
 - V3.3 已继承 V3.2 后续的 wheel observability / SD diagnostics 增强；这些改动只增加可观测性，不改变 wheel target-follow 行为。
-- 两个 preload 保持 `AltScreen → RGI → libc` 的既定顺序，并由 CI 对 `write/recv/close` interposer 和转发依赖做 fail-closed 静态审计。
+- 两个 preload 保持 `AltScreen → RGI → libc`。父 CarPlay 进程完成装载后，供 `/bin/sh`、`pfctl` 等 helper `exec()` 继承的 `LD_PRELOAD` 会同时剔除 AltScreen 与 RGI 两个项目 hook；CI 同时审计共享 interposer 与 RGI 的额外 `read/open/writev/MsgSend/MsgSendv` 表面。
 - `V3.3 HMI/RGI audit` 已改为检查当前包名和真实 bytecode/source invariants；缺类或关键生命周期约束丢失会直接失败，不再以 `|| true` 掩盖。
 
 
@@ -66,7 +66,7 @@ CarPlay 停止导航或断开时立即释放这三个字段，恢复 stock navig
 
 ## 3. 元数据路径
 
-V3.3 恢复最小 RGI metadata transport，但不恢复旧的自定义 RGI 图形渲染：
+V3.3 **只消费 RGI metadata 子集**，不恢复旧的自定义 RGI 图形渲染。当前固定 SHA 的 `libcarplay_rgi_meta.so` 实际来自完整 RGI hook，仍包含 CoverArt 等历史模块；V3.3 lower-bar 不消费这些额外模块，因此明确标记为 `PINNED_FULL_RGI_HOOK_METADATA_CONSUMER_ONLY`，不再把二进制描述成真正裁剪后的 metadata-only build：
 
 ```text
 iPhone / CarPlay
@@ -191,7 +191,9 @@ release Fct19/21/22 gate
 stock navigator regains ownership
 ```
 
-缓存重放用于避免“RGI 元数据先到、导航 authority 后到”时首屏缺少路名、距离或 ETA。
+缓存重放用于避免“RGI 元数据先到、导航 authority 后到”时首屏缺少路名、距离或 ETA。`source_supports_rg=0` 与经过 native debounce 后真正送到 Java 的 `route_state=0` 都会同时失效 Java 内的道路/距离/ETA/剩余时间缓存，防止下一次 re-enable 重新发布上一条路线。
+
+当 `source_name` 明确识别为高德/Amap/Gaode 且出现 `route_state=1 + maneuver_count=0 + visible_in_app=0` 时，V3.3 使用 5 秒 soft-inactive grace；真实变化的道路/距离/ETA/剩余时间会续期，持续无变化超时后释放 lower bar。未知 source 不启用这一高德专用超时，避免误伤 Apple Maps。
 
 ## 9. V3.3 首次实车测试目标
 

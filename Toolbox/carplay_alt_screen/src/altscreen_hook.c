@@ -1417,18 +1417,26 @@ int altscreen_runtime_is_ready(void) { return 1; }
 #else
 static volatile unsigned g_runtime_init_state; /* 0 idle, 1 worker, 2 ready, 3 inert */
 
-/* Stream 111 firewall setup spawns /bin/sh and pfctl. The universal hook must
- * not propagate into those helpers through inherited LD_PRELOAD. */
+/* Stream 111 firewall setup spawns /bin/sh and pfctl. Neither project hook
+ * may propagate into those helper exec() descendants. Parent mappings are
+ * already established; only the inherited environment is cleaned here. */
 #define ALTSCREEN_SELF_PRELOAD "/mnt/app/root/carplay-altscreen/lib/libcarplay_altscreen.so"
 #define ALTSCREEN_SELF_PRELOAD_LEGACY "/mnt/app/root/hooks/libcarplay_altscreen.so"
+#define ALTSCREEN_RGI_PRELOAD "/mnt/app/root/carplay-altscreen/lib/libcarplay_rgi_meta.so"
+#define ALTSCREEN_RGI_PRELOAD_LEGACY "/mnt/app/root/hooks/libcarplay_hook.so"
 
-static int altscreen_preload_token_is_self(const char *token, size_t length) {
+static int altscreen_preload_token_is_project_hook(const char *token, size_t length) {
     const size_t current_len = sizeof(ALTSCREEN_SELF_PRELOAD) - 1u;
     const size_t legacy_len = sizeof(ALTSCREEN_SELF_PRELOAD_LEGACY) - 1u;
+    const size_t rgi_len = sizeof(ALTSCREEN_RGI_PRELOAD) - 1u;
+    const size_t rgi_legacy_len = sizeof(ALTSCREEN_RGI_PRELOAD_LEGACY) - 1u;
     return (length == current_len && !memcmp(token, ALTSCREEN_SELF_PRELOAD, current_len)) ||
-           (length == legacy_len && !memcmp(token, ALTSCREEN_SELF_PRELOAD_LEGACY, legacy_len));
+           (length == legacy_len && !memcmp(token, ALTSCREEN_SELF_PRELOAD_LEGACY, legacy_len)) ||
+           (length == rgi_len && !memcmp(token, ALTSCREEN_RGI_PRELOAD, rgi_len)) ||
+           (length == rgi_legacy_len &&
+            !memcmp(token, ALTSCREEN_RGI_PRELOAD_LEGACY, rgi_legacy_len));
 }
-static void altscreen_strip_self_from_child_preload(void) {
+static void altscreen_strip_project_hooks_from_child_preload(void) {
     const char *value = getenv("LD_PRELOAD");
     const char *cursor;
     char *clean, *out;
@@ -1438,14 +1446,14 @@ static void altscreen_strip_self_from_child_preload(void) {
     value_len = strlen(value);
     clean = (char *)malloc(value_len + 1u);
     if (!clean) {
-        if (altscreen_preload_token_is_self(value, value_len)) (void)unsetenv("LD_PRELOAD");
+        if (altscreen_preload_token_is_project_hook(value, value_len)) (void)unsetenv("LD_PRELOAD");
         return;
     }
     cursor = value; out = clean;
     while (*cursor) {
         const char *end = strchr(cursor, ':');
         size_t length = end ? (size_t)(end - cursor) : strlen(cursor);
-        if (length && !altscreen_preload_token_is_self(cursor, length)) {
+        if (length && !altscreen_preload_token_is_project_hook(cursor, length)) {
             if (kept) *out++ = ':';
             memcpy(out, cursor, length); out += length; kept = 1;
         }
@@ -1621,7 +1629,7 @@ __attribute__((constructor)) static void altscreen_ctor(void) {
 
     /* Remove only this hook from the inherited preload before dio_manager can
      * spawn shell/pfctl helpers. Preserve every unrelated preload token. */
-    altscreen_strip_self_from_child_preload();
+    altscreen_strip_project_hooks_from_child_preload();
 
     /* Defense in depth: even if a helper is launched with an explicit preload,
      * do not bind libc forwarding, patch GOT slots or start the runtime worker

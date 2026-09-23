@@ -61,6 +61,13 @@ public class RouteGuidance implements CarplayBus.Listener {
         public void clearDirty() { dirtyMask = 0; }
         public void markDirty(int flag) { dirtyMask |= flag; }
 
+        public void clearLowerBarCache() {
+            distDestM = -1;
+            etaSeconds = -1;
+            timeRemainingSeconds = -1L;
+            currentRoad = null;
+        }
+
         public boolean hasUsefulLowerBarData() {
             return (currentRoad != null && currentRoad.length() > 0)
                 || distDestM > 0 || etaSeconds >= 0 || timeRemainingSeconds >= 0L;
@@ -85,17 +92,16 @@ public class RouteGuidance implements CarplayBus.Listener {
         state.reset();
 
         CarplayBus bus = CarplayBus.getInstance();
+        /*
+         * CarplayBus stays native->Java one-way. on() locally replays the
+         * latest sticky frame before returning, which covers late listener
+         * registration without an unsupported CMD_SYNC_REQ.
+         */
         bus.on(CarplayBus.EVT_RGD_UPDATE, this);
         bus.start();
 
-        /*
-         * The native RGI hook keeps a sticky snapshot.  Request a replay only
-         * after this listener is registered so cold-start / late-Java startup
-         * cannot miss the first road, distance or ETA values.
-         */
-        bus.send(CarplayBus.CMD_SYNC_REQ, 0, null, 0);
-        Log.i(TAG, "RGI sticky sync requested after listener registration");
-        Log.i(TAG, "Started; waiting for CarPlay RGI metadata");
+        Log.i(TAG, "Started; sticky catch-up=LOCAL_LISTENER_REPLAY");
+        Log.i(TAG, "Waiting for CarPlay RGI metadata");
     }
 
     public synchronized void stop() {
@@ -204,8 +210,18 @@ public class RouteGuidance implements CarplayBus.Listener {
         Log.i(TAG, "OEM lower bar inactive reason=" + reason);
     }
 
+    protected synchronized void expireCompatibilitySoftInactive(String reason) {
+        if (!running) return;
+        state.routeState = ROUTE_STATE_NO_ROUTE_SET;
+        state.markDirty(State.DIRTY_ROUTE_STATE);
+        state.clearLowerBarCache();
+        if (rgActive) deactivate(reason);
+        state.clearDirty();
+    }
+
     private void parse(CarplayBus.Data d) {
         state.clearDirty();
+        boolean hardClear = false;
 
         if (d.has("disconnect_reason")) {
             String v = d.str("disconnect_reason");
@@ -224,6 +240,7 @@ public class RouteGuidance implements CarplayBus.Listener {
                 state.sourceSupportsRg = v;
                 state.markDirty(State.DIRTY_SOURCE_SUPPORTS_RG);
             }
+            if (v == 0) hardClear = true;
         }
 
         if (d.has("visible_in_app")) {
@@ -241,6 +258,8 @@ public class RouteGuidance implements CarplayBus.Listener {
                 state.routeState = v;
                 state.markDirty(State.DIRTY_ROUTE_STATE);
             }
+            /* Native already debounces transient reroute zeroes. */
+            if (v == ROUTE_STATE_NO_ROUTE_SET) hardClear = true;
         }
 
         if (d.has("dist_dest_m")) {
@@ -272,6 +291,23 @@ public class RouteGuidance implements CarplayBus.Listener {
             if (!strEq(state.currentRoad, v)) {
                 state.currentRoad = v;
                 state.markDirty(State.DIRTY_CURRENT_ROAD);
+            }
+        }
+
+        if (hardClear) {
+            boolean hadCachedLowerBar = state.hasUsefulLowerBarData();
+            if (state.sourceSupportsRg == 0
+                    && state.routeState != ROUTE_STATE_NO_ROUTE_SET) {
+                state.routeState = ROUTE_STATE_NO_ROUTE_SET;
+                state.markDirty(State.DIRTY_ROUTE_STATE);
+            }
+            state.clearLowerBarCache();
+            if (hadCachedLowerBar) {
+                state.markDirty(State.DIRTY_CURRENT_ROAD
+                    | State.DIRTY_DIST_DEST
+                    | State.DIRTY_ETA
+                    | State.DIRTY_TIME_REMAINING);
+                Log.i(TAG, "RGI hard clear invalidated cached OEM lower bar");
             }
         }
     }
