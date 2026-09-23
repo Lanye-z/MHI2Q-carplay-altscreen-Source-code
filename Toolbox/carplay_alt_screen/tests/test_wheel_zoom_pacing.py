@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reference contract for V3.1 OEM_TARGET_FOLLOW_V1 wheel scheduling."""
+"""Reference contract for frozen V3.1/V3.2 OEM_TARGET_FOLLOW_V1 wheel scheduling."""
 
 TARGET_LIMIT = 12
 MAX_EVENT_STEPS = 16
