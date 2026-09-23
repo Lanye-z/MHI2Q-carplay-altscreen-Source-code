@@ -1,4 +1,11 @@
-**实车状态：已完成本分支实车验证。** 当前版本已验证 private111 → stock OMX → Screen linearizer → decoded SHM → source-driven sidecar → displayable3 → Context80 全链路可长期运行；FULL / SMALL 可在同一 CarPlay 会话内通过 `updateViewArea` 动态切换，Sport Small 的 `-476` 平移也已实车生效。当前主要剩余问题不再是“能否点亮”，而是 **1440×542 源画面 → 1440×455 displayable3 的几何实现是否值得进一步改成更接近 OEM 的 1:1 + position/cropping 路径**。
+<!-- BRANCH_STATUS_BEGIN -->
+> [!IMPORTANT]
+> **分支用途：** 把前一阶段采集到的 OEM 布局规律真正应用到 CarPlay 第二屏：safeArea/viewArea、Full/Small 动态切换、Classic/Sport 识别、Sport Small `-476` 平移，并引入 source-driven 显示节奏。
+>
+> **上车测试结论：** 这条路线有实车日志/几何审计证据：第二屏显示路由可用，运行时确认了 1440×542 源画面及相应布局/偏移行为；Full/Small、Classic/Sport 和 Sport Small 偏移也曾在该路线的实车迭代中验证。后续该分支仍做过几何与存储安全修订，因此“当前 HEAD 的每一处细节”不应等同于一次完整四态重新验收。
+>
+> **当前定位：** OEM 布局实现基准和几何对照分支；V3/V3.1/V3.2 均由这条路线继续演进。
+<!-- BRANCH_STATUS_END -->
 
 > [!IMPORTANT]
 > **当前状态与安全提示**
