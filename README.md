@@ -1,4 +1,11 @@
-**实车状态：已成功点亮。** 当前 `main` 基于 2026-09-19 已实车成功的 V2 路线继续开发；基础显示链路已验证，后续性能与生命周期修改仍需持续实车回归。
+<!-- BRANCH_STATUS_BEGIN -->
+> [!IMPORTANT]
+> **分支用途：** 默认开发基线。以 2026-09-19 已正确点亮的 V2 private111 → 原车 OMX → Screen linearizer → displayable3 → Context80 路线为基础，承接通用显示链、诊断和生命周期维护；它不是当前 V3.x 滚轮/布局实验分支。
+>
+> **上车测试结论：** V2 基础路线已经实车确认可正确点亮 Virtual Cockpit 并随 CarPlay 导航更新。当前 `main` 在同步 V2 后仍有维护性改动，因此若要做“最后一个严格已知可点亮版本”的回归，请以 `carplay-private111-direct-display-v2` 为黄金基线。
+>
+> **当前定位：** 正式开发基础分支；用于通用回归，不代表 V3.x 最新功能状态。
+<!-- BRANCH_STATUS_END -->
 
 > [!IMPORTANT]
 > **当前状态与安全提示**
