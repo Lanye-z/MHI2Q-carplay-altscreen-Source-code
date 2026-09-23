@@ -120,6 +120,82 @@ log(){ echo "$*"; echo "$*" >&3; }
 size(){ n=$(wc -c < "$1" 2>/dev/null || echo 0); set -- $n; echo "${1:-0}"; }
 same(){ [ -f "$1" ] && [ -f "$2" ] && [ "$(size "$1")" = "$(size "$2")" ] && [ "$(cksum < "$1")" = "$(cksum < "$2")" ]; }
 find_startup(){ for f in "$(p /mnt/system/etc/boot/startup.sh)" "$(p /etc/boot/startup.sh)"; do [ -f "$f" ] && { echo "$f"; return 0; }; done; return 1; }
+
+hmi_backup_project_managed(){
+  jar=$1
+  [ -f "$jar" ] || return 1
+  # Project-only ZIP member names remain visible in the JAR central directory.
+  # Reject them even when the file is internally consistent: checksum-valid is
+  # not the same thing as OEM-original.
+  grep -Fq 'com/luka/carplay/cluster/ClusterStateController.class' "$jar" 2>/dev/null && return 0
+  grep -Fq 'com/luka/carplay/cluster/WheelZoomBridge.class' "$jar" 2>/dev/null && return 0
+  grep -Fq 'com/luka/carplay/cluster/ClusterLayerController.class' "$jar" 2>/dev/null && return 0
+
+  set -- $(cksum < "$jar" 2>/dev/null || echo "0 0")
+  sum=${1:-0}
+  case "$(size "$jar"):$sum" in
+    # Confirmed project-managed JAR recovered by vehicle log 41 plus older
+    # pre-WheelZoomBridge project identities retained for compatibility.
+    143072:1515795662|149510:180684234|149979:2362627699|150026:3028143795) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+strip_startup_blocks_preflight(){
+  awk '
+    {
+      key=$0
+      sub(/\r$/, "", key)
+      trimmed=key
+      gsub(/^[ \t]+/, "", trimmed)
+      gsub(/[ \t]+$/, "", trimmed)
+      if (trimmed == "# BEGIN ALT111 MIRROR AUTOSTART") {
+        if (block != "") bad=8
+        block="old"; next
+      }
+      if (trimmed == "# END ALT111 MIRROR AUTOSTART") {
+        if (block != "old") bad=8
+        block=""; next
+      }
+      if (trimmed == "# BEGIN ALT111 BASEVIDEO3 AUTOSTART") {
+        if (block != "") bad=8
+        block="new"; next
+      }
+      if (trimmed == "# END ALT111 BASEVIDEO3 AUTOSTART") {
+        if (block != "new") bad=8
+        block=""; next
+      }
+      if (block == "") print
+    }
+    END {
+      if (bad) exit bad
+      if (block != "") exit 9
+    }
+  ' "$1"
+}
+
+preflight_startup(){
+  startup=$(find_startup) || {
+    log "RESTORE_PREFLIGHT_STARTUP=FAIL reason=STARTUP_NOT_FOUND production_changed=NO"
+    return 1
+  }
+  tmp="$SD/restore-transaction/.startup-preflight.$"
+  rm -f "$tmp" 2>/dev/null || true
+  if ! strip_startup_blocks_preflight "$startup" > "$tmp"; then
+    rm -f "$tmp" 2>/dev/null || true
+    log "RESTORE_PREFLIGHT_STARTUP=FAIL reason=AUTOSTART_BLOCK_INVALID production_changed=NO"
+    return 1
+  fi
+  if ! sh -n "$tmp" >/dev/null 2>&1; then
+    rm -f "$tmp" 2>/dev/null || true
+    log "RESTORE_PREFLIGHT_STARTUP=FAIL reason=CLEANED_STARTUP_SYNTAX_INVALID production_changed=NO"
+    return 1
+  fi
+  rm -f "$tmp" 2>/dev/null || true
+  log "RESTORE_PREFLIGHT_STARTUP=PASS production_changed=NO"
+  return 0
+}
+
 dir_manifest(){
   src=$1; out=$2
   if [ ! -d "$src" ]; then : > "$out"; return 0; fi
@@ -292,9 +368,53 @@ verify_restore_rollback(){
 }
 
 verify_hmi(){
-  [ -f "$HMI/COMPLETE" ] && [ -f "$HMI/target" ] || return 1
-  [ "$(cat "$HMI/target" 2>/dev/null)" = /mnt/app/eso/hmi/lsd/jars/carplay_hook.jar ] || return 1
-  if [ -f "$HMI/present" ]; then [ -s "$HMI/carplay_hook.jar" ] || return 1; [ ! -f "$HMI/cksum" ] || [ "$(cksum < "$HMI/carplay_hook.jar")" = "$(cat "$HMI/cksum")" ]; else [ -f "$HMI/absent" ]; fi
+  [ -f "$HMI/COMPLETE" ] && [ -f "$HMI/target" ] || {
+    log "RESTORE_HMI_BACKUP=FAIL reason=METADATA_INCOMPLETE production_changed=NO"
+    return 1
+  }
+  [ "$(cat "$HMI/target" 2>/dev/null)" = /mnt/app/eso/hmi/lsd/jars/carplay_hook.jar ] || {
+    log "RESTORE_HMI_BACKUP=FAIL reason=TARGET_MISMATCH production_changed=NO"
+    return 1
+  }
+
+  hp=0; ha=0
+  [ ! -f "$HMI/present" ] || hp=1
+  [ ! -f "$HMI/absent" ] || ha=1
+  [ $((hp + ha)) -eq 1 ] || {
+    log "RESTORE_HMI_BACKUP=FAIL reason=PRESENCE_METADATA_AMBIGUOUS production_changed=NO"
+    return 1
+  }
+
+  if [ "$hp" = 1 ]; then
+    [ -s "$HMI/carplay_hook.jar" ] || {
+      log "RESTORE_HMI_BACKUP=FAIL reason=JAR_MISSING_OR_EMPTY production_changed=NO"
+      return 1
+    }
+    [ -f "$HMI/cksum" ] || {
+      log "RESTORE_HMI_BACKUP=FAIL reason=CKSUM_METADATA_MISSING production_changed=NO"
+      return 1
+    }
+    [ "$(cksum < "$HMI/carplay_hook.jar")" = "$(cat "$HMI/cksum")" ] || {
+      log "RESTORE_HMI_BACKUP=FAIL reason=CKSUM_MISMATCH production_changed=NO"
+      return 1
+    }
+    if hmi_backup_project_managed "$HMI/carplay_hook.jar"; then
+      log "RESTORE_HMI_BACKUP=FAIL reason=HMI_BACKUP_PROJECT_MANAGED action=DO_NOT_RESTORE_THIS_BACKUP production_changed=NO"
+      return 1
+    fi
+    log "RESTORE_HMI_BACKUP=PASS original=present project_managed=NO production_changed=NO"
+  else
+    [ ! -e "$HMI/carplay_hook.jar" ] || {
+      log "RESTORE_HMI_BACKUP=FAIL reason=ABSENT_MARKER_WITH_STALE_JAR production_changed=NO"
+      return 1
+    }
+    [ ! -e "$HMI/cksum" ] || {
+      log "RESTORE_HMI_BACKUP=FAIL reason=ABSENT_MARKER_WITH_STALE_CKSUM production_changed=NO"
+      return 1
+    }
+    log "RESTORE_HMI_BACKUP=PASS original=absent production_changed=NO"
+  fi
+  return 0
 }
 
 
@@ -406,8 +526,10 @@ if [ -d "$INSTALL_TXN" ]; then
 fi
 recover_stale || fail "previous restore transaction could not be recovered"
 [ -f "$CONTROLLER" ] && [ -f "$APPLY" ] || fail "restore controller/apply helper missing"
-verify_hmi || fail "trusted HMI backup unavailable/damaged"
-/bin/sh "$CONTROLLER" restore-precheck || fail "native restore precheck failed"
+verify_hmi || fail "trusted HMI backup unavailable/damaged or project-managed"
+preflight_startup || fail "startup restore preflight failed"
+/bin/sh "$CONTROLLER" restore-precheck || fail "native/runtime restore precheck failed"
+log "RESTORE_PREFLIGHT=PASS hmi=TRUSTED startup=SAFE native_runtime=SAFE production_changed=NO"
 detect_mixed_restore_state
 snapshot || { rm -rf "$TXN" 2>/dev/null || true; fail "pre-restore transaction snapshot failed"; }
 touch "$TXN/APPLYING" || fail "cannot mark transaction APPLYING"
