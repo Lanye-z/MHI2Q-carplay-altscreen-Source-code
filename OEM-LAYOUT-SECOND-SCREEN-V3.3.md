@@ -2,7 +2,7 @@
 
 > **用途：在 V3.2 已验证的 CarPlay Type111 第二屏基础上，正式接入 Audi VC 原厂灰色导航信息栏。**
 >
-> **实车状态：待 V3.3 首次实车验证。V3.2 的显示链与布局保持不变；V3.3 新增 CarPlay RGI → 原厂 BAP lower bar，并将滚轮连续 `changeMapZoomLevel` 的安全节奏从 100 ms 调整为 200 ms，用于降低 Apple Maps 比例尺继续变化而底图 camera 冻结的触发风险。**
+> **实车状态：V3.3 已完成首轮实车观察，当前进入 safeArea 微调复测。Type111 显示链、1:1 renderer、横向 safeArea、RGI lower bar 与滚轮架构保持不变；纵向 safeArea 从 V3.2 的 `0..455` 收敛为 `60..450`，目标是让顶部指南针/控制项比 V3.1 略下移，同时让 ETA 保持低位但不完全贴底。**
 
 Branch: `experiment/oem-layout-second-screen_v3.3`
 
@@ -11,7 +11,7 @@ Baseline: `experiment/oem-layout-second-screen_v3.2`
 
 ## 上车前收口（2026-09-23）
 
-本轮收口保持 V3.2 已验证的 Type111 显示链、safeArea、滚轮 target-follow 架构和触摸主链；除 RGI 生命周期、状态边界和诊断链外，仅对滚轮**连续命令 pacing**做 V3.3 专项修正，不改变输入、target 累积、方向反转、stall、rebase 或 `changeMapZoomLevel` 协议。
+本轮收口保持 V3.2 已验证的 Type111 显示链、滚轮 target-follow 架构和触摸主链。首轮实车显示表明 `y=0,h=455` 的纵向 safeArea 过度放开：顶部指南针/控制项过高甚至消失，ETA 又过度贴底。因此 V3.3 仅收敛纵向边界为 **top=60、bottom=450（h=390）**；横向 X/W、viewArea、renderer、Sport 偏移、RGI/BAP 与滚轮协议均不改变。
 
 - `visible_in_app=0` 只表示 CarPlay 导航界面未处于前台；只要 `route_state` 或已缓存的有效路线数据仍表明路线活跃，就继续保持 Fct19/21/22 ownership。显式、已由 native debounce 的 `route_state=NO_ROUTE_SET` 仍然结束接管。
 - `CarplayBus` 在 Java 侧缓存 native sticky frame；RouteGuidance listener 晚注册时由 `on()` 在同一 bus lock 下本地重放最新 `EVT_RGD_UPDATE`。bus 保持 native→Java 单向，不再发送无效 `CMD_SYNC_REQ`。
@@ -132,9 +132,12 @@ libcarplay_altscreen.so : libcarplay_rgi_meta.so : other stock/third-party entri
 - displayable3
 - Java 独占 Context80，`ctx80={98,101,102,3}`
 - V3.1 1:1 renderer + 1440x455 可见区
-- V3.2 safeArea：
-  - FULL: `370,0,700,455`
-  - SMALL: `490,0,460,455`
+- V3.3 tuned safeArea：
+  - FULL: `370,60,700,390`
+  - SMALL: `490,60,460,390`
+  - top = `60`
+  - bottom = `450`
+  - 横向仍完全继承 V3.1/V3.2：FULL `370/700`、SMALL `490/460`
 - Classic / Sport 与 FULL / SMALL 观察及布局逻辑
 - 方向盘滚轮 `changeMapZoomLevel` 协议、target-follow / retarget / stall / rebase 架构
 - V3.3 仅将连续命令节奏更新为：首格立即、healthy 最小 200 ms、telemetry fallback 250 ms
