@@ -341,18 +341,46 @@ cleanup_volatile_runtime(){
     return 0
 }
 
+remove_empty_unowned_runtime_residue(){
+    root=$1
+    # Recovery-only escape hatch for partial RESTORE states: allow removal only
+    # when the project runtime is nothing more than known empty directories.
+    # Never recurse through a symlink and never delete unknown files.
+    [ -d "$root" ] || return 1
+    [ ! -L "$root" ] || return 1
+    for dir in "$root/bin/mirror" "$root/bin" "$root/lib" "$root/state"; do
+        [ ! -e "$dir" ] && continue
+        [ -d "$dir" ] || return 1
+        rmdir "$dir" 2>/dev/null || return 1
+    done
+    rmdir "$root" 2>/dev/null || return 1
+    return 0
+}
+
 remove_runtime_scripts(){
-    [ ! -e "$RUNTIME_ROOT" ] || [ -f "$RUNTIME_ROOT/$RUNTIME_OWNER" ] || {
-        echo "FAIL: refusing to remove unowned runtime: /mnt/app/root/carplay-altscreen" >&2
-        return 1
-    }
+    runtime_unowned=0
+    if [ -e "$RUNTIME_ROOT" ] && [ ! -f "$RUNTIME_ROOT/$RUNTIME_OWNER" ]; then
+        runtime_unowned=1
+    fi
     [ ! -e "$RUNTIME_PREV" ] || [ -f "$RUNTIME_PREV/$RUNTIME_OWNER" ] || {
         echo "FAIL: refusing to remove unowned previous runtime" >&2
         return 1
     }
     if [ -e "$RUNTIME_ROOT" ] || [ -e "$RUNTIME_PREV" ] || [ -e "$RUNTIME_STAGE" ]; then
         mount_app_rw || return 1
-        [ ! -e "$RUNTIME_ROOT" ] || rm -rf "$RUNTIME_ROOT" || { mount_app_ro >/dev/null 2>&1 || true; return 1; }
+        if [ -e "$RUNTIME_ROOT" ]; then
+            if [ "$runtime_unowned" = 1 ]; then
+                if remove_empty_unowned_runtime_residue "$RUNTIME_ROOT"; then
+                    echo "RUNTIME_EMPTY_RESIDUE_REMOVED=PASS path=/mnt/app/root/carplay-altscreen policy=empty_known_dirs_only"
+                else
+                    mount_app_ro >/dev/null 2>&1 || true
+                    echo "FAIL: refusing to remove unowned non-empty runtime: /mnt/app/root/carplay-altscreen" >&2
+                    return 1
+                fi
+            else
+                rm -rf "$RUNTIME_ROOT" || { mount_app_ro >/dev/null 2>&1 || true; return 1; }
+            fi
+        fi
         [ ! -e "$RUNTIME_PREV" ] || rm -rf "$RUNTIME_PREV" || { mount_app_ro >/dev/null 2>&1 || true; return 1; }
         rm -rf "$RUNTIME_STAGE" 2>/dev/null || true
         sync >/dev/null 2>&1 || true

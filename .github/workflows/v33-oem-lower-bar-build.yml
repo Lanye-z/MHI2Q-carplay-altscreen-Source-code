@@ -15,6 +15,9 @@ on:
       - 'Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java'
       - 'Toolbox/carplay_alt_screen/hmi/stubs/**'
       - 'Toolbox/carplay_alt_screen/tests/test_storage_policy.sh'
+      - 'Toolbox/carplay_alt_screen/tests/test_restore_transaction.sh'
+      - 'Toolbox/scripts/altscreen_chain_test.sh'
+      - 'Toolbox/scripts/altscreen_restore_transaction.sh'
       - 'Toolbox/carplay_alt_screen/tests/test_wheel_zoom_pacing.py'
       - 'Toolbox/scripts/altscreen_boot_diag.sh'
       - 'Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar'
@@ -339,6 +342,7 @@ jobs:
           fi
           sh -n Toolbox/scripts/altscreen_boot_diag.sh
           sh Toolbox/carplay_alt_screen/tests/test_storage_policy.sh
+          sh Toolbox/carplay_alt_screen/tests/test_restore_transaction.sh
 
           echo 'V33_OEM_LOWER_BAR_ABI=PASS fct=19,21,22 fct45=STOCK touch=RETAINED wheel_observability=V32_LATEST'
 
@@ -610,6 +614,7 @@ jobs:
               "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java",
               "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java",
               "Toolbox/carplay_alt_screen/tests/test_storage_policy.sh",
+              "Toolbox/carplay_alt_screen/tests/test_restore_transaction.sh",
               "Toolbox/carplay_alt_screen/tests/test_wheel_zoom_pacing.py",
               "Toolbox/scripts/altscreen_boot_diag.sh",
               "Toolbox/carplay_alt_screen/rgi_meta/libcarplay_rgi_meta.so",

@@ -99,6 +99,15 @@ for f in "$START" "$STOP" "$CHAIN" "$CTRL" "$DIAG" "$ADAPT" "$BOOT" "$LAUNCH" "$
 done
 
 grep -Fq 'RUNTIME_ROLLBACK_SLOT_CLEANED=PASS' "$CHAIN" || fail "runtime rollback slot cleanup missing"
+grep -Fq 'RUNTIME_EMPTY_RESIDUE_REMOVED=PASS' "$CHAIN" || fail "empty unowned runtime recovery guard missing"
+grep -Fq 'rmdir "$dir"' "$CHAIN" || fail "unowned runtime recovery is not non-recursive/fail-closed"
+grep -Fq 'OVERLAY_BASELINE=ABSENT no_runtime_dir_synthesis=YES' "$CTRL" || fail "restore can still synthesize an absent runtime overlay directory"
+grep -Fq 'RESTORE_RECOVERY_MODE=MIXED_PRELOAD_RUNTIME_MISSING' "$RESTORE_TXN" || fail "mixed missing-runtime recovery detector missing"
+grep -Fq 'managed AltScreen preload remains in smartphone_integrator.json after restore' "$RESTORE_TXN" || fail "RESTORE final preload verifier missing"
+grep -Fq 'SD_DIAGNOSTICS_BEGIN' "$RESTORE_TXN" || fail "RESTORE SD failure diagnostics missing"
+grep -Fq 'SD_MOUNT_TABLE_BEGIN' "$RESTORE_TXN" || fail "RESTORE mount table diagnostics missing"
+grep -Fq 'SD_WRITE_PROBE scope=' "$RESTORE_TXN" || fail "RESTORE SD write probes missing"
+grep -Fq 'SD_FORMAT_HINT=FAT32_MBR_SINGLE_PRIMARY' "$RESTORE_TXN" || fail "RESTORE SD format hint missing"
 grep -Fq 'PUBLISH_SKIP_IDENTICAL' "$CTRL" || fail "universal publish lacks no-op skip"
 grep -Fq 'trusted original backup is absent' "$CTRL" || fail "native backup pollution guard missing"
 grep -Fq 'trusted original Java HMI backup is absent' "$INSTALL" || fail "HMI backup pollution guard missing"

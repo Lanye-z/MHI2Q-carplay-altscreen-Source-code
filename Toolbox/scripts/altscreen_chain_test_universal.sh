@@ -443,17 +443,24 @@ restore_overlay_baseline() (
     verify_backup || return 1
     backed_dir=$(cat "$BACKUP_DIR/overlay_dir.txt" 2>/dev/null || true)
     case "$backed_dir" in "$LIVE_LIBTARGET"|"$LEGACY_LIBTARGET") ;; *) return 1 ;; esac
-    ensure_dirs "$(p "$backed_dir")" "$(p "$LIVE_LIBTARGET")" || return 1
+    # Do not synthesize runtime/lib merely to restore an originally-absent
+    # overlay. stage_and_publish creates parents only when a real file exists.
     for name in libairplay.so libairplax.so libNmeBaseClasses.so; do
         dst="$(p "$backed_dir")/$name"
         if grep -q "^$name\$" "$BACKUP_DIR/overlay_present.txt" 2>/dev/null; then
             stage_and_publish "$BACKUP_DIR/files/overlay_$name" "$dst" 755 || return 1
         else
-            rm -f "$dst" || return 1
+            [ ! -e "$dst" ] || rm -f "$dst" || return 1
         fi
-        [ "$backed_dir" = "$LIVE_LIBTARGET" ] || rm -f "$(p "$LIVE_LIBTARGET")/$name" || return 1
+        if [ "$backed_dir" != "$LIVE_LIBTARGET" ]; then
+            live_dst="$(p "$LIVE_LIBTARGET")/$name"
+            [ ! -e "$live_dst" ] || rm -f "$live_dst" || return 1
+        fi
     done
+    [ -s "$BACKUP_DIR/overlay_present.txt" ] ||
+        say "OVERLAY_BASELINE=ABSENT no_runtime_dir_synthesis=YES"
 )
+
 restore_universal_hook() (
     verify_universal_backup || return 1
     present=$(cat "$UNIVERSAL_BACKUP_DIR/present")

@@ -150,4 +150,121 @@ grep -Fq 'ROLLBACK=REFUSED reason=SNAPSHOT_INTEGRITY_FAILED' "$TMP/corrupt.txt" 
 [ -d "$SD/restore-transaction/active" ] ||
   fail "corrupt RESTORE transaction evidence was discarded"
 
-echo "RESTORE_TRANSACTION_TEST=PASS prepared_sync_fail_closed=1 precheck_fail_closed=1 apply_failure_rollback=1 exact_rollback_verify=1 stale_terminal_cleanup=1 corrupt_snapshot_non_destructive=1"
+# Real recovery regression: reproduce the vehicle state where the live
+# smartphone_integrator still has our LD_PRELOAD but the runtime owner marker
+# is gone. First cover an empty unowned runtime skeleton (the old restore bug),
+# then cover a completely missing runtime.
+MIX_DEV="$TMP/mixed-device"
+MIX_VOL="$TMP/mixed-sd"
+MIX_SD="$MIX_VOL/MMI-Cockpit-Carplay"
+MIX_SCRIPTS="$MIX_VOL/Toolbox/scripts"
+MIX_NATIVE="$MIX_SD/backup/original"
+mkdir -p \
+  "$MIX_DEV/mnt/system/etc/boot" \
+  "$MIX_DEV/mnt/system/etc/eso/production" \
+  "$MIX_DEV/mnt/app/eso/hmi/lsd/jars" \
+  "$MIX_DEV/mnt/app/root/carplay-altscreen/lib" \
+  "$MIX_DEV/tmp" \
+  "$MIX_SCRIPTS" \
+  "$MIX_VOL/Toolbox/carplay_alt_screen/universal" \
+  "$MIX_SD/state" \
+  "$MIX_NATIVE/files" \
+  "$MIX_SD/backup/basevideo3-hmi-original" \
+  "$MIX_SD/backup/universal-hook-original" \
+  "$MIX_SD/backup/firewall-original"
+
+for name in altscreen_chain_test.sh altscreen_chain_test_universal.sh altscreen_restore_apply.sh altscreen_persistent_diag.sh; do
+  cp "$ROOT/Toolbox/scripts/$name" "$MIX_SCRIPTS/$name"
+  chmod 755 "$MIX_SCRIPTS/$name"
+done
+
+printf '%s\n' '#!/bin/sh' 'echo stock-startup' > "$MIX_DEV/mnt/system/etc/boot/startup.sh"
+printf '%s\n' 'LIVE_INSTALLED_SI LD_PRELOAD=/mnt/app/root/carplay-altscreen/lib/libcarplay_altscreen.so' > "$MIX_DEV/mnt/system/etc/eso/production/smartphone_integrator.json"
+printf '%s\n' 'LIVE_INSTALLED_DIO' > "$MIX_DEV/mnt/system/etc/eso/production/dio_manager.json"
+printf '%s\n' 'LIVE_INSTALLED_PF' > "$MIX_DEV/mnt/system/etc/pf.conf"
+printf '%s\n' 'LIVE_INSTALLED_JAR' > "$MIX_DEV/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar"
+
+: > "$MIX_NATIVE/manifest.txt"
+: > "$MIX_NATIVE/overlay_present.txt"
+printf '%s\n' '/mnt/app/root/carplay-altscreen/lib' > "$MIX_NATIVE/overlay_dir.txt"
+
+mix_native_member(){
+  rel=$1
+  value=$2
+  member="$MIX_NATIVE/files/$(echo "$rel" | tr '/' '_')"
+  printf '%s\n' "$value" > "$member"
+  cksum < "$member" > "$member.cksum"
+  printf '%s\n' "$rel" >> "$MIX_NATIVE/manifest.txt"
+}
+mix_native_member /eso/bin/apps/dio_manager ORIGINAL_DIO_BINARY
+mix_native_member /eso/lib/libairplay.so ORIGINAL_LIBAIRPLAY
+mix_native_member /armle/usr/lib/libNmeBaseClasses.so ORIGINAL_NME
+mix_native_member /mnt/system/etc/eso/production/smartphone_integrator.json ORIGINAL_SI
+mix_native_member /mnt/system/etc/eso/production/dio_manager.json ORIGINAL_DIO_JSON
+touch "$MIX_NATIVE/COMPLETE"
+
+MIX_HMI="$MIX_SD/backup/basevideo3-hmi-original"
+printf '%s\n' '/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar' > "$MIX_HMI/target"
+printf '%s\n' 'ORIGINAL_JAR' > "$MIX_HMI/carplay_hook.jar"
+cksum < "$MIX_HMI/carplay_hook.jar" > "$MIX_HMI/cksum"
+touch "$MIX_HMI/present" "$MIX_HMI/COMPLETE"
+
+MIX_HOOK="$MIX_SD/backup/universal-hook-original"
+printf '%s\n' '/mnt/app/root/carplay-altscreen/lib/libcarplay_altscreen.so' > "$MIX_HOOK/path"
+printf '%s\n' 0 > "$MIX_HOOK/present"
+touch "$MIX_HOOK/COMPLETE"
+
+MIX_FW="$MIX_SD/backup/firewall-original"
+printf '%s\n' 'ORIGINAL_PF' > "$MIX_FW/pf.conf"
+cksum < "$MIX_FW/pf.conf" > "$MIX_FW/pf.conf.cksum"
+printf '%s\n' '/mnt/system/etc/pf.conf' > "$MIX_FW/path"
+touch "$MIX_FW/COMPLETE"
+
+set +e
+ALTSCREEN_CHAIN_TESTING=1 \
+ALTSCREEN_CHAIN_ROOT="$MIX_DEV" \
+ALTSCREEN_CHAIN_VOLUME="$MIX_VOL" \
+/bin/sh "$WRAPPER" > "$TMP/mixed-unowned.txt" 2>&1
+MIX_RC=$?
+set -e
+[ "$MIX_RC" -eq 0 ] || { cat "$TMP/mixed-unowned.txt" >&2; [ ! -f "$MIX_SD/logs/restore-transaction.log" ] || cat "$MIX_SD/logs/restore-transaction.log" >&2; fail "mixed unowned-runtime recovery failed"; }
+grep -Fq 'RESTORE_RECOVERY_MODE=MIXED_PRELOAD_UNOWNED_RUNTIME_RESIDUE' "$TMP/mixed-unowned.txt" ||
+  fail "mixed unowned-runtime state was not detected"
+grep -Fq 'OVERLAY_BASELINE=ABSENT no_runtime_dir_synthesis=YES' "$MIX_SD/logs/restore-transaction.log" ||
+  fail "restore did not record the no-synthesis overlay path"
+grep -Fq 'RUNTIME_EMPTY_RESIDUE_REMOVED=PASS' "$MIX_SD/logs/restore-transaction.log" ||
+  fail "empty unowned runtime residue was not safely removed"
+grep -Fq 'RESTORE_MIXED_STATE_RECOVERY=PASS' "$TMP/mixed-unowned.txt" ||
+  fail "mixed-state recovery success marker missing"
+[ "$(cat "$MIX_DEV/mnt/system/etc/eso/production/smartphone_integrator.json")" = ORIGINAL_SI ] ||
+  fail "mixed-state recovery did not restore stock smartphone_integrator.json"
+[ ! -e "$MIX_DEV/mnt/app/root/carplay-altscreen" ] ||
+  fail "mixed-state recovery left runtime residue"
+
+# Same trusted backups must also recover the even more reduced state seen after
+# rollback: preload config remains but the runtime directory is already absent.
+printf '%s\n' 'LIVE_INSTALLED_SI LD_PRELOAD=/mnt/app/root/carplay-altscreen/lib/libcarplay_altscreen.so' > "$MIX_DEV/mnt/system/etc/eso/production/smartphone_integrator.json"
+printf '%s\n' 'LIVE_INSTALLED_JAR_2' > "$MIX_DEV/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar"
+rm -rf "$MIX_DEV/mnt/app/root/carplay-altscreen"
+rm -f "$MIX_SD/state/RESTORE_PENDING_REBOOT" 2>/dev/null || true
+
+set +e
+ALTSCREEN_CHAIN_TESTING=1 \
+ALTSCREEN_CHAIN_ROOT="$MIX_DEV" \
+ALTSCREEN_CHAIN_VOLUME="$MIX_VOL" \
+/bin/sh "$WRAPPER" > "$TMP/mixed-missing.txt" 2>&1
+MIX_RC2=$?
+set -e
+[ "$MIX_RC2" -eq 0 ] || { cat "$TMP/mixed-missing.txt" >&2; [ ! -f "$MIX_SD/logs/restore-transaction.log" ] || cat "$MIX_SD/logs/restore-transaction.log" >&2; fail "mixed missing-runtime recovery failed"; }
+grep -Fq 'RESTORE_RECOVERY_MODE=MIXED_PRELOAD_RUNTIME_MISSING' "$TMP/mixed-missing.txt" ||
+  fail "mixed missing-runtime state was not detected"
+grep -Fq 'RESTORE_MIXED_STATE_RECOVERY=PASS' "$TMP/mixed-missing.txt" ||
+  fail "missing-runtime recovery success marker missing"
+[ "$(cat "$MIX_DEV/mnt/system/etc/eso/production/smartphone_integrator.json")" = ORIGINAL_SI ] ||
+  fail "missing-runtime recovery did not restore stock smartphone_integrator.json"
+[ "$(cat "$MIX_DEV/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar")" = ORIGINAL_JAR ] ||
+  fail "missing-runtime recovery did not restore stock HMI JAR"
+[ ! -e "$MIX_DEV/mnt/app/root/carplay-altscreen" ] ||
+  fail "missing-runtime recovery recreated runtime"
+
+echo "RESTORE_TRANSACTION_TEST=PASS prepared_sync_fail_closed=1 precheck_fail_closed=1 apply_failure_rollback=1 exact_rollback_verify=1 stale_terminal_cleanup=1 corrupt_snapshot_non_destructive=1 mixed_unowned_runtime_recovery=1 mixed_missing_runtime_recovery=1"
