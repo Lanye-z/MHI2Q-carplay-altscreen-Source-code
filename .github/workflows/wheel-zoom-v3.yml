@@ -34,6 +34,7 @@ permissions:
 
 # V3.1/V3.2 use this workflow as the single hook/HMI artifact promoter to avoid
 # manifest races with the generic authorization-marker rebuild workflow.
+# Keep promotion on the latest branch head so generated JAR/manifests rebase cleanly.
 
 jobs:
   build-vehicle-package:
