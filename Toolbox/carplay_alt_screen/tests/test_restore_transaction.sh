@@ -43,6 +43,8 @@ case "${1:-}" in
 esac
 EOF
 chmod 755 "$SCRIPTS/altscreen_chain_test.sh"
+cp "$ROOT/Toolbox/scripts/altscreen_sd_writable.sh" "$SCRIPTS/altscreen_sd_writable.sh"
+chmod 755 "$SCRIPTS/altscreen_sd_writable.sh"
 
 cat > "$SCRIPTS/altscreen_restore_apply.sh" <<EOF
 #!/bin/sh
@@ -173,7 +175,7 @@ mkdir -p \
   "$MIX_SD/backup/universal-hook-original" \
   "$MIX_SD/backup/firewall-original"
 
-for name in altscreen_chain_test.sh altscreen_chain_test_universal.sh altscreen_restore_apply.sh altscreen_persistent_diag.sh; do
+for name in altscreen_chain_test.sh altscreen_chain_test_universal.sh altscreen_restore_apply.sh altscreen_persistent_diag.sh altscreen_sd_writable.sh; do
   cp "$ROOT/Toolbox/scripts/$name" "$MIX_SCRIPTS/$name"
   chmod 755 "$MIX_SCRIPTS/$name"
 done

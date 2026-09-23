@@ -56,6 +56,8 @@ case "${1:-}" in
 esac
 EOF
 chmod 755 "$SCRIPTS/altscreen_chain_test.sh"
+cp "$ROOT/Toolbox/scripts/altscreen_sd_writable.sh" "$SCRIPTS/altscreen_sd_writable.sh"
+chmod 755 "$SCRIPTS/altscreen_sd_writable.sh"
 
 # Unknown transaction actions must fail before any snapshot or mutation.
 set +e
