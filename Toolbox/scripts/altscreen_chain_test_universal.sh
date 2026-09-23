@@ -55,6 +55,10 @@ UNIVERSAL_SRC="$ARTIFACT_DIR/universal/libcarplay_altscreen.so"
 UNIVERSAL_REL="/mnt/app/root/carplay-altscreen/lib/libcarplay_altscreen.so"
 LEGACY_UNIVERSAL_REL="/mnt/app/root/hooks/libcarplay_altscreen.so"
 UNIVERSAL_DST="$(p "$UNIVERSAL_REL")"
+RGI_META_SRC="$ARTIFACT_DIR/rgi_meta/libcarplay_rgi_meta.so"
+RGI_META_REL="/mnt/app/root/carplay-altscreen/lib/libcarplay_rgi_meta.so"
+RGI_META_DST="$(p "$RGI_META_REL")"
+RGI_CONFIG="$VOLUME/Toolbox/scripts/altscreen_v33_rgi_config.sh"
 PRELOAD_AWK="$VOLUME/Toolbox/scripts/altscreen_preload.awk"
 LIVE_DIO_CANDIDATES="/eso/bin/apps/dio_manager /mnt/app/eso/bin/apps/dio_manager"
 LIVE_NME_CANDIDATES="/armle/usr/lib/libNmeBaseClasses.so /mnt/app/armle/usr/lib/libNmeBaseClasses.so /eso/lib/libNmeBaseClasses.so"
@@ -474,12 +478,17 @@ restore_originals() (
     done < "$BACKUP_MANIFEST"
     restore_overlay_baseline || return 1
     restore_universal_hook || return 1
+    # V3.3 metadata transport lives at a project-owned unique path.  The
+    # original smartphone_integrator/dio_manager files are restored above.
+    rm -f "$RGI_META_DST" 2>/dev/null || return 1
     restore_firewall || return 1
 )
 
 check_sources(){
     ensure_dirs "$STATE_DIR" || return 1
     nonempty "$UNIVERSAL_SRC" || { say "FAIL: universal hook missing: $UNIVERSAL_SRC"; return 1; }
+    nonempty "$RGI_META_SRC" || { say "FAIL: V3.3 RGI metadata hook missing: $RGI_META_SRC"; return 1; }
+    nonempty "$RGI_CONFIG" || { say "FAIL: V3.3 RGI config helper missing: $RGI_CONFIG"; return 1; }
     nonempty "$PRELOAD_AWK" || { say "FAIL: altscreen_preload.awk missing"; return 1; }
     dio_rel=$(locate_first "$LIVE_DIO_CANDIDATES") || return 1
     nme_rel=$(locate_first "$LIVE_NME_CANDIDATES") || return 1
@@ -504,16 +513,33 @@ cmd_install(){
     ensure_dirs "$(dirname -- "$UNIVERSAL_DST")" "$(p "$LIVE_LIBTARGET")" "$(dirname -- "$PROBE_MARKER")" || goto_fail=1
     if [ "${goto_fail:-0}" != 1 ]; then restore_overlay_baseline || goto_fail=1; fi
     if [ "${goto_fail:-0}" != 1 ]; then stage_and_publish "$UNIVERSAL_SRC" "$UNIVERSAL_DST" 755 || goto_fail=1; fi
+    if [ "${goto_fail:-0}" != 1 ]; then stage_and_publish "$RGI_META_SRC" "$RGI_META_DST" 755 || goto_fail=1; fi
     if [ "${goto_fail:-0}" != 1 ]; then
+        # Normalize both project preloads idempotently.  RGI first, then
+        # AltScreen, so the final stable order is AltScreen:RGI:other-stock.
+        cfg_rgi="$TXN_DIR/rgi-preload-config"
         cfg="$TXN_DIR/universal-config"
-        awk -v hook="$UNIVERSAL_REL" \
+        awk -v hook="$RGI_META_REL" \
             -v exclude=/mnt/app/root/hooks/libcarplay_hook.so \
-            -v exclude2=/mnt/app/root/hooks/libcp_mirror.so -v exclude_prefix=/mnt/app/root/hooks/libcarplay_altscreen.so \
-            -v insert_if_absent=1 -f "$PRELOAD_AWK" "$(p "$LIVE_JSON_SI")" > "$cfg" || goto_fail=1
+            -v insert_if_absent=1 -f "$PRELOAD_AWK" "$(p "$LIVE_JSON_SI")" > "$cfg_rgi" || goto_fail=1
+        if [ "${goto_fail:-0}" != 1 ]; then
+            awk -v hook="$UNIVERSAL_REL" \
+                -v exclude=/mnt/app/root/hooks/libcarplay_hook.so \
+                -v exclude2=/mnt/app/root/hooks/libcp_mirror.so -v exclude_prefix=/mnt/app/root/hooks/libcarplay_altscreen.so \
+                -v insert_if_absent=1 -f "$PRELOAD_AWK" "$cfg_rgi" > "$cfg" || goto_fail=1
+        fi
         if [ "${goto_fail:-0}" != 1 ]; then
             stage_and_publish "$cfg" "$(p "$LIVE_JSON_SI")" 644 || goto_fail=1
         fi
-        rm -f "$cfg"
+        rm -f "$cfg_rgi" "$cfg"
+    fi
+    if [ "${goto_fail:-0}" != 1 ]; then
+        /bin/sh "$RGI_CONFIG" apply "$(p "$LIVE_JSON_DIO")" || goto_fail=1
+    fi
+    if [ "${goto_fail:-0}" != 1 ]; then
+        awk -v query="$UNIVERSAL_REL" -f "$PRELOAD_AWK" "$(p "$LIVE_JSON_SI")" >/dev/null || goto_fail=1
+        awk -v query="$RGI_META_REL" -f "$PRELOAD_AWK" "$(p "$LIVE_JSON_SI")" >/dev/null || goto_fail=1
+        /bin/sh "$RGI_CONFIG" verify "$(p "$LIVE_JSON_DIO")" >/dev/null || goto_fail=1
     fi
     if [ "${goto_fail:-0}" != 1 ]; then remove_legacy_firewall_rule || goto_fail=1; fi
     if [ "${goto_fail:-0}" = 1 ]; then
@@ -533,6 +559,7 @@ cmd_install(){
     cleanup_txn
     say "FIRMWARE_PROFILE=UNIVERSAL source=aug22_unified_policy stock_reuse=YES"
     say "UNIVERSAL_PRELOAD=INSTALLED path=$UNIVERSAL_REL resolver=ELF_DYNAMIC_RELOCATION"
+    say "V33_RGI_METADATA=INSTALLED path=$RGI_META_REL messages=0x5200-0x5204 lower_bar=19,21,22 map_scale=stock"
     lock_release || return 1
     say "INSTALL=PASS reboot_required=YES"
 }
