@@ -2,7 +2,7 @@
 
 > **用途：在 V3.2 已验证的 CarPlay Type111 第二屏基础上，正式接入 Audi VC 原厂灰色导航信息栏。**
 >
-> **实车状态：待 V3.3 首次实车验证。V3.2 的显示链、布局与滚轮功能保持不变；V3.3 新增部分仅为 CarPlay RGI 元数据到原厂 BAP lower bar 的接管。**
+> **实车状态：待 V3.3 首次实车验证。V3.2 的显示链与布局保持不变；V3.3 新增 CarPlay RGI → 原厂 BAP lower bar，并将滚轮连续 `changeMapZoomLevel` 的安全节奏从 100 ms 调整为 200 ms，用于降低 Apple Maps 比例尺继续变化而底图 camera 冻结的触发风险。**
 
 Branch: `experiment/oem-layout-second-screen_v3.3`
 
@@ -11,14 +11,15 @@ Baseline: `experiment/oem-layout-second-screen_v3.2`
 
 ## 上车前收口（2026-09-23）
 
-本轮收口只修正 RGI 生命周期、状态边界和诊断链，**不改 V3.2 已验证的 Type111 显示链、safeArea、滚轮缩放算法或触摸主链**。
+本轮收口保持 V3.2 已验证的 Type111 显示链、safeArea、滚轮 target-follow 架构和触摸主链；除 RGI 生命周期、状态边界和诊断链外，仅对滚轮**连续命令 pacing**做 V3.3 专项修正，不改变输入、target 累积、方向反转、stall、rebase 或 `changeMapZoomLevel` 协议。
 
 - `visible_in_app=0` 只表示 CarPlay 导航界面未处于前台；只要 `route_state` 或已缓存的有效路线数据仍表明路线活跃，就继续保持 Fct19/21/22 ownership。显式、已由 native debounce 的 `route_state=NO_ROUTE_SET` 仍然结束接管。
 - `CarplayBus` 在 Java 侧缓存 native sticky frame；RouteGuidance listener 晚注册时由 `on()` 在同一 bus lock 下本地重放最新 `EVT_RGD_UPDATE`。bus 保持 native→Java 单向，不再发送无效 `CMD_SYNC_REQ`。
 - `start()/stop()/onFrame()` 使用同一对象 monitor 串行化，并在 `bap.onStart()` 前再次检查 `running`，防止断开 teardown 后旧 frame 重新锁住 lower bar。
 - 导航结束或断开时，先清 `Fct19=""`、`Fct21=0`、`Fct22=invalid`，再解除 gate；CarPlay 明确发送空路名或 0 距离时也会立即清旧值。每次 owned update 与 teardown 前都会重新核对 `ClusterService` 当前 listener；若 HMI 生命周期中替换了 listener，会重新包一层 `GatedCombiService`，避免 detached gate 让 stock 与 CarPlay 同时写 Fct19/21/22。
 - Fct45 仍为 **Audi stock passthrough**，不是 CarPlay 地图实际比例尺同步；这一点属于 V3.3 的明确功能边界，而不是已实现能力。
-- V3.3 已继承 V3.2 后续的 wheel observability / SD diagnostics 增强；这些改动只增加可观测性，不改变 wheel target-follow 行为。
+- V3.3 已继承 V3.2 后续的 wheel observability / SD diagnostics 增强；这些诊断改动只增加可观测性，不改变 wheel target-follow 行为。
+- V3.3 针对 Apple Maps 实车出现的“比例尺 UI 继续变化但底图 camera 冻结”增加 `CAMERA_SETTLE_GUARD_200MS_V1`：首格仍立即发送，连续 healthy step 最小间隔由 100 ms 调整为 200 ms，telemetry 不可用时 fallback 由 150 ms 调整为 250 ms；send retry 仍为 150 ms。decoded frame 只作为视频链 liveness，不解释为 camera animation 已完成。
 - 两个 preload 保持 `AltScreen → RGI → libc`。父 CarPlay 进程完成装载后，供 `/bin/sh`、`pfctl` 等 helper `exec()` 继承的 `LD_PRELOAD` 会同时剔除 AltScreen 与 RGI 两个项目 hook；CI 同时审计共享 interposer 与 RGI 的额外 `read/open/writev/MsgSend/MsgSendv` 表面。
 - `V3.3 HMI/RGI audit` 已改为检查当前包名和真实 bytecode/source invariants；缺类或关键生命周期约束丢失会直接失败，不再以 `|| true` 掩盖。
 
@@ -135,8 +136,8 @@ libcarplay_altscreen.so : libcarplay_rgi_meta.so : other stock/third-party entri
   - FULL: `370,0,700,455`
   - SMALL: `490,0,460,455`
 - Classic / Sport 与 FULL / SMALL 观察及布局逻辑
-- 方向盘滚轮 `changeMapZoomLevel`
-- stall guard / target-follow pacing
+- 方向盘滚轮 `changeMapZoomLevel` 协议、target-follow / retarget / stall / rebase 架构
+- V3.3 仅将连续命令节奏更新为：首格立即、healthy 最小 200 ms、telemetry fallback 250 ms
 - 安装、卸载事务与 SD 日志框架
 
 ## 6. 触摸功能
@@ -195,7 +196,21 @@ stock navigator regains ownership
 
 当 `source_name` 明确识别为高德/Amap/Gaode，**或 source_name 缺失但已先观察到真实活跃路线**，随后出现 `route_state=1 + maneuver_count=0 + visible_in_app=0` 时，V3.3 启用 5 秒行为探测 grace；真实变化的道路/距离/ETA/剩余时间会续期，持续无变化超时后释放 lower bar。已明确识别为非高德的 source 不进入该探测。这个边界与成熟 RGI 兼容逻辑一致，解决部分 snapshot 不提供 `source_name` 时的无限 ownership 风险。
 
-## 9. V3.3 首次实车测试目标
+## 9. V3.3 滚轮 pacing 修正
+
+V3.2 实车中，Apple Maps 曾出现连续缩放后“比例尺数值继续变化，但底图 camera 基本冻结”的现象；高德在相同控制链下正常。日志同时显示 `changeMapZoomLevel` 提交/响应成功且 Type111 decoded frame 持续前进，因此 V3.3 不把协议响应或任意新视频帧当作 camera animation completion。
+
+V3.3 保留 `OEM_TARGET_FOLLOW_V1`，只增加保守的连续命令 settle guard：
+
+- 第一格：立即发送；
+- 连续 healthy step：最少间隔 200 ms；
+- decoded progress：只作为 liveness evidence，仍要求上一命令后至少出现新帧；
+- telemetry 不可用：250 ms fallback；
+- send failure retry：仍为 150 ms；
+- `target limit ±12`、方向反转立即 retarget、stall/recovery、settled rebase 均不变；
+- 不做 Apple Maps/高德应用特判，不做图像识别，不把 `status=0` 当作动画完成信号。
+
+## 10. V3.3 首次实车测试目标
 
 第一次上车只验证新增 OEM lower-bar 链，不同时修改 Apple Maps 自己的视频内 ETA：
 
@@ -204,6 +219,9 @@ stock navigator regains ownership
 3. 剩余距离及单位是否正确；
 4. 原厂比例尺是否继续正常显示并保持 stock 行为；
 5. CarPlay 导航结束/断开后 stock lower bar 是否正常恢复；
-6. Type111、V3.2 布局、滚轮和触摸是否无回归。
+6. Apple Maps 连续同方向滚动 6–10 格时，比例尺与底图 camera 是否始终同步变化；
+7. Apple Maps 到缩放边界后立即反向滚动 4–6 格，底图是否能正常反向恢复；
+8. 高德重复相同测试，确认 200 ms pacing 仅轻微降低连续追赶速度，不引入功能回归；
+9. Type111、V3.2 布局、target-follow 方向反转、触摸是否无回归。
 
 在以上项目通过前，V3.3 只标记为 **READY_FOR_V3_3_VEHICLE_TEST**，不标记为实车验证完成。

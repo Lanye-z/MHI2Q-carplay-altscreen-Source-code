@@ -698,13 +698,14 @@ static int native_read_cluster_owned_for_zoom(void) {
  */
 #define WHEEL_ZOOM_EVENT_MODEL "OEM_STEPS_V1"
 #define WHEEL_ZOOM_SCHEDULER_MODEL "OEM_TARGET_FOLLOW_V1"
+#define WHEEL_ZOOM_PACING_MODEL "CAMERA_SETTLE_GUARD_200MS_V1"
 #define WHEEL_ZOOM_TARGET_LIMIT 12
 #define WHEEL_ZOOM_MAX_EVENT_STEPS 16
 #define WHEEL_ZOOM_MONITOR_TICK_US 50000u
 #define ALT111_VIEW_AREA_POLL_US 100000u
-#define WHEEL_ZOOM_MIN_PACE_US 100000u
+#define WHEEL_ZOOM_MIN_PACE_US 200000u
 #define WHEEL_ZOOM_SEND_RETRY_US 150000u
-#define WHEEL_ZOOM_FALLBACK_PACE_US 150000u
+#define WHEEL_ZOOM_FALLBACK_PACE_US 250000u
 #define WHEEL_ZOOM_FRESH_FRAME_AGE_US 100000u
 #define WHEEL_ZOOM_STALL_AGE_US 150000u
 #define WHEEL_ZOOM_RECOVERY_FRAMES 3u
@@ -899,12 +900,13 @@ static void *native_monitor_worker(void *arg) {
     altscreen_log(
         "PHASE=WHEEL_ZOOM_QUEUE_RESET receiver=%p stream=%p generation=%u "
         "baseline_epoch=%u baseline_seq=%u stale_events_before_attach=discarded "
-        "event_model=%s scheduler=%s tick_ms=%u min_pace_ms=%u "
+        "event_model=%s scheduler=%s pacing=%s tick_ms=%u min_pace_ms=%u "
         "fallback_pace_ms=%u recovery_frames=%u fresh_age_ms=%u "
         "stall_age_ms=%u burst_gap_ms=%u stall_abort_quiet_ms=%u "
         "stall_abort_ms=%u target_limit=%d timebase=wheel_us32",
         receiver, stream, generation, zoom_last_epoch, zoom_last_seq,
         WHEEL_ZOOM_EVENT_MODEL, WHEEL_ZOOM_SCHEDULER_MODEL,
+        WHEEL_ZOOM_PACING_MODEL,
         WHEEL_ZOOM_MONITOR_TICK_US / 1000u,
         WHEEL_ZOOM_MIN_PACE_US / 1000u,
         WHEEL_ZOOM_FALLBACK_PACE_US / 1000u,
@@ -1189,12 +1191,13 @@ static void *native_monitor_worker(void *arg) {
         /*
          * OEM_TARGET_FOLLOW_V1:
          *   - first detent of a new burst may submit immediately;
-         *   - consecutive healthy steps use a stable 100 ms cadence;
-         *   - healthy cadence requires only evidence that at least one decoded
-         *     frame progressed after the previous command, never three frames;
+         *   - consecutive healthy steps use a 200 ms camera-settle guard;
+         *   - decoded-frame progress is liveness evidence only. It does not
+         *     prove that the map camera animation completed, because Apple
+         *     Maps can update scale/UI frames while its map camera is static;
          *   - no post-send progress for >=150 ms latches STALL;
          *   - only STALL recovery requires three fresh frames;
-         *   - telemetry loss uses a conservative 150 ms timer;
+         *   - telemetry loss uses a conservative 250 ms timer;
          *   - a stall lasting >=1.2 s after >=350 ms input quiet rebases target
          *     to the submitted level, preventing a late replay after recovery.
          */
@@ -1367,7 +1370,7 @@ static void *native_monitor_worker(void *arg) {
                     "PHASE=WHEEL_ZOOM_PACED_SEND receiver=%p stream=%p "
                     "generation=%u command_seq=%u source_tail_seq=%u "
                     "action=%s direction=%d target=%d sent_before=%d "
-                    "sent_after=%d error_after=%d scheduler=%s "
+                    "sent_after=%d error_after=%d scheduler=%s pacing=%s "
                     "first_send=%d first_step_pending=%d telemetry=%s "
                     "fallback_timer=%d elapsed_us=%u fresh_since_send=%u "
                     "frame_age_ms=%u min_pace_ms=%u "
@@ -1379,6 +1382,7 @@ static void *native_monitor_worker(void *arg) {
                     zoom_sent_steps,
                     zoom_target_steps - zoom_sent_steps,
                     WHEEL_ZOOM_SCHEDULER_MODEL,
+                    WHEEL_ZOOM_PACING_MODEL,
                     first_send, zoom_first_step_pending,
                     progress_ok ? "decoded_progress" : "unavailable",
                     fallback_timer, elapsed_us, fresh_since_send,

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Reference contract for frozen V3.1/V3.2 OEM_TARGET_FOLLOW_V1 wheel scheduling."""
+"""V3.3 contract for OEM_TARGET_FOLLOW_V1 with the 200 ms camera-settle guard."""
 
 TARGET_LIMIT = 12
 MAX_EVENT_STEPS = 16
-MIN_PACE_MS = 100
+MIN_PACE_MS = 200
 SEND_RETRY_MS = 150
-FALLBACK_PACE_MS = 150
+FALLBACK_PACE_MS = 250
 FRESH_FRAME_AGE_MS = 100
 STALL_AGE_MS = 150
 RECOVERY_FRAMES = 3
@@ -224,15 +224,19 @@ def test_first_detent_is_immediate():
     assert m.sent == [(0, "OUT", 1, 1)]
 
 
-def test_healthy_target_follow_runs_at_100ms():
+def test_healthy_target_follow_uses_200ms_camera_settle_guard():
     m = Model()
     m.frame(0)
     m.add(0, 4)
-    for t in (50, 100, 150, 200, 250, 300):
+    for t in (50, 100, 150):
         m.frame(t)
         m.tick(t)
-    assert [x[0] for x in m.sent] == [0, 100, 200, 300]
-    m.tick(350)
+    assert [x[0] for x in m.sent] == [0]
+    for t in (200, 250, 300, 350, 400, 450, 500, 550, 600):
+        m.frame(t)
+        m.tick(t)
+    assert [x[0] for x in m.sent] == [0, 200, 400, 600]
+    m.tick(650)
     assert m.target == m.sent_level == 0
     assert m.rebases == 1
 
@@ -255,13 +259,16 @@ def test_reverse_past_submitted_level_changes_direction():
     m.add(0, 4)
     m.add(50, -5)
     assert m.target == -1
-    m.frame(100)
-    m.tick(100)
-    assert m.sent[-1][1] == "IN"
+    m.frame(150)
+    m.tick(150)
+    assert len(m.sent) == 1
     m.frame(200)
     m.tick(200)
     assert m.sent[-1][1] == "IN"
-    m.tick(250)
+    m.frame(400)
+    m.tick(400)
+    assert m.sent[-1][1] == "IN"
+    m.tick(450)
     assert m.target == m.sent_level == 0
 
 
@@ -322,13 +329,15 @@ def test_long_stall_rebases_without_late_replay():
     assert m.target == m.sent_level == 0
 
 
-def test_telemetry_fallback_is_150ms():
+def test_telemetry_fallback_is_250ms():
     m = Model()
     m.telemetry = False
     m.add(0, 3)
-    m.tick(100)
+    m.tick(200)
     assert len(m.sent) == 1
-    m.tick(150)
+    m.tick(249)
+    assert len(m.sent) == 1
+    m.tick(250)
     assert len(m.sent) == 2
 
 
@@ -339,7 +348,7 @@ def test_limit_applies_to_outstanding_error_not_session_total():
     for _ in range(30):
         m.add(now, 1)
         m.tick(now)
-        now += 150
+        now += 250
         m.tick(now)
     assert len(m.sent) == 30
     assert all(item[1] == "OUT" for item in m.sent)
@@ -353,10 +362,10 @@ def test_fast_backlog_is_bounded_without_permanent_ceiling():
     for _ in range(20):
         m.add(0, 1)
     assert m.target - m.sent_level == TARGET_LIMIT
-    now = 150
+    now = 250
     while m.target != m.sent_level:
         m.tick(now)
-        now += 150
+        now += 250
     m.tick(now)
     assert m.target == m.sent_level == 0
     m.add(now + 500, 1)
@@ -383,7 +392,9 @@ def test_u32_wrap_zero_is_not_a_sentinel():
     assert m.have_input_time
     m.tick(0)
     assert len(m.sent) == 1
-    m.tick(100)
+    m.tick(150)
+    assert len(m.sent) == 1
+    m.tick(200)
     assert len(m.sent) == 2
 
 
@@ -416,9 +427,11 @@ def test_successful_catchup_rebases_before_next_event():
     assert m.target == m.sent_level == 0
     m.add(50, 1)
     assert len(m.sent) == 1
-    m.tick(100)
+    m.tick(200)
     assert len(m.sent) == 1
-    m.tick(150)
+    m.tick(249)
+    assert len(m.sent) == 1
+    m.tick(250)
     assert len(m.sent) == 2
     assert m.target == m.sent_level == 0
 
@@ -438,14 +451,14 @@ def test_gate_close_clears_valid_zero_timestamp_state():
 
 def main():
     test_first_detent_is_immediate()
-    test_healthy_target_follow_runs_at_100ms()
+    test_healthy_target_follow_uses_200ms_camera_settle_guard()
     test_reverse_retargets_instead_of_replaying_old_out_steps()
     test_reverse_past_submitted_level_changes_direction()
     test_no_progress_latches_stall_then_three_frames_recover()
     test_target_can_change_while_stalled_without_old_replay()
     test_new_burst_can_wake_static_map()
     test_long_stall_rebases_without_late_replay()
-    test_telemetry_fallback_is_150ms()
+    test_telemetry_fallback_is_250ms()
     test_limit_applies_to_outstanding_error_not_session_total()
     test_fast_backlog_is_bounded_without_permanent_ceiling()
     test_frame_age_future_sample_race_is_clamped_without_breaking_wrap()
@@ -456,13 +469,13 @@ def main():
     print(
         "WHEEL_ZOOM_PACING_TEST=PASS "
         "event_model=OEM_STEPS_V1 scheduler=OEM_TARGET_FOLLOW_V1 "
-        "tick_ms=50 min_pace_ms=100 fallback_ms=150 "
+        "tick_ms=50 min_pace_ms=200 fallback_ms=250 "
         "recovery_frames=3 fresh_age_ms=100 stall_age_ms=150 "
         "burst_gap_ms=300 stall_abort_quiet_ms=350 "
         "stall_abort_ms=1200 outstanding_limit=12 "
         "settled_rebase=IMMEDIATE send_retry_ms=150 "
         "submit_failure_advances_state=NO u32_zero_sentinel=NO "
-        "future_frame_timestamp_clamp=YES"
+        "future_frame_timestamp_clamp=YES decoded_feedback=LIVENESS_ONLY "        "camera_completion_signal=UNAVAILABLE pacing=CAMERA_SETTLE_GUARD_200MS_V1"
     )
 
 

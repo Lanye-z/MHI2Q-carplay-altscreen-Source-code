@@ -15,6 +15,7 @@ on:
       - 'Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java'
       - 'Toolbox/carplay_alt_screen/hmi/stubs/**'
       - 'Toolbox/carplay_alt_screen/tests/test_storage_policy.sh'
+      - 'Toolbox/carplay_alt_screen/tests/test_wheel_zoom_pacing.py'
       - 'Toolbox/scripts/altscreen_boot_diag.sh'
       - 'Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar'
       - 'Toolbox/carplay_alt_screen/rgi_meta/**'
@@ -65,6 +66,20 @@ jobs:
           HOOK_SHA="$(sha256sum Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so | awk '{print tolower($1)}')"
           echo "HOOK_SHA=$HOOK_SHA" >> "$GITHUB_ENV"
           echo "V33_UNIVERSAL_RUNTIME=PASS child_preload=ALTSCREEN_AND_RGI_REMOVED sha256=$HOOK_SHA"
+
+      - name: Verify V3.3 wheel pacing contract
+        run: |
+          set -euo pipefail
+          NATIVE=Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          HOOK=Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so
+          grep -Fq '#define WHEEL_ZOOM_SCHEDULER_MODEL "OEM_TARGET_FOLLOW_V1"' "$NATIVE"
+          grep -Fq '#define WHEEL_ZOOM_PACING_MODEL "CAMERA_SETTLE_GUARD_200MS_V1"' "$NATIVE"
+          grep -Fq '#define WHEEL_ZOOM_MIN_PACE_US 200000u' "$NATIVE"
+          grep -Fq '#define WHEEL_ZOOM_FALLBACK_PACE_US 250000u' "$NATIVE"
+          grep -Fq '#define WHEEL_ZOOM_SEND_RETRY_US 150000u' "$NATIVE"
+          strings "$HOOK" | grep -Fq 'CAMERA_SETTLE_GUARD_200MS_V1'
+          python3 Toolbox/carplay_alt_screen/tests/test_wheel_zoom_pacing.py
+          echo 'V33_WHEEL_PACING=PASS scheduler=OEM_TARGET_FOLLOW_V1 pacing=CAMERA_SETTLE_GUARD_200MS_V1 min_pace_ms=200 fallback_ms=250 first_send=IMMEDIATE decoded_feedback=LIVENESS_ONLY'
 
       - name: Compile clean V3.3 lower-bar control plane
         run: |
@@ -466,6 +481,17 @@ jobs:
               "wheel_zoom_observability":
                   "RAW_CALLBACK_COUNTERS_LIFECYCLE_OBSERVE_ONLY",
               "wheel_zoom_lifecycle_change": "NONE",
+              "wheel_zoom_model": "OEM_TARGET_FOLLOW_V1",
+              "wheel_zoom_pacing": "TARGET_FOLLOW_CAMERA_SETTLE_GUARD",
+              "wheel_zoom_pacing_revision": "CAMERA_SETTLE_GUARD_200MS_V1",
+              "wheel_zoom_min_pace_ms": "200",
+              "wheel_zoom_fallback_pace_ms": "250",
+              "wheel_zoom_send_retry_ms": "150",
+              "wheel_zoom_frame_feedback":
+                  "PROCESS_LOCAL_DECODED_PROGRESS_LIVENESS_ONLY_NOT_CAMERA_COMPLETION",
+              "wheel_zoom_telemetry_fallback": "250MS_TIMER",
+              "wheel_zoom_response_gate":
+                  "NO_ACCEPTANCE_CALLBACK_IS_OBSERVE_ONLY",
               "wheel_zoom_sd_log": "streams/mmi-mirror-wheel-zoom.log",
               "wheel_zoom_sd_event_snapshot":
                   "streams/mmi-mirror-wheel-zoom.events",
@@ -507,6 +533,7 @@ jobs:
               "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java",
               "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java",
               "Toolbox/carplay_alt_screen/tests/test_storage_policy.sh",
+              "Toolbox/carplay_alt_screen/tests/test_wheel_zoom_pacing.py",
               "Toolbox/scripts/altscreen_boot_diag.sh",
               "Toolbox/carplay_alt_screen/rgi_meta/libcarplay_rgi_meta.so",
               ".github/workflows/v33-oem-lower-bar-build.yml",
@@ -571,7 +598,16 @@ jobs:
           amap_soft_inactive_policy=AMAP_OR_UNKNOWN_SIGNATURE_5S_GRACE_WITH_FRESH_GUIDANCE_EXTENSION
           lower_bar_gate_policy=REVALIDATE_CLUSTER_LISTENER_BEFORE_UPDATE_AND_TEARDOWN
           touch=RETAINED
-          wheel_zoom=RETAINED
+          wheel_zoom=RETAINED_TARGET_FOLLOW_WITH_CAMERA_SETTLE_GUARD
+          wheel_zoom_model=OEM_TARGET_FOLLOW_V1
+          wheel_zoom_pacing=TARGET_FOLLOW_CAMERA_SETTLE_GUARD
+          wheel_zoom_pacing_revision=CAMERA_SETTLE_GUARD_200MS_V1
+          wheel_zoom_min_pace_ms=200
+          wheel_zoom_fallback_pace_ms=250
+          wheel_zoom_send_retry_ms=150
+          wheel_zoom_frame_feedback=PROCESS_LOCAL_DECODED_PROGRESS_LIVENESS_ONLY_NOT_CAMERA_COMPLETION
+          wheel_zoom_telemetry_fallback=250MS_TIMER
+          wheel_zoom_response_gate=NO_ACCEPTANCE_CALLBACK_IS_OBSERVE_ONLY
           wheel_zoom_observability=RAW_CALLBACK_COUNTERS_LIFECYCLE_OBSERVE_ONLY
           boot_log_capture=VOLATILE_BOOT_FLAT_CURSOR_NO_REPLAY
           rgi_metadata_sha256=87d10f67fbb3dc142642d899977bab0a6eb4009f61d3bcd873d0cce9e01511f7
@@ -619,6 +655,10 @@ jobs:
           sh VERIFY-BRANCH-ZIP-READY.sh
           grep -Fq 'branch=experiment/oem-layout-second-screen_v3.3' BRANCH-ZIP-READY.txt
           grep -Fq 'vehicle_zip_status=READY_FOR_V3_3_VEHICLE_TEST' BRANCH-ZIP-READY.txt
+          grep -Fq 'wheel_zoom_pacing_revision=CAMERA_SETTLE_GUARD_200MS_V1' BRANCH-ZIP-READY.txt
+          grep -Fq 'wheel_zoom_min_pace_ms=200' BRANCH-ZIP-READY.txt
+          grep -Fq 'wheel_zoom_fallback_pace_ms=250' BRANCH-ZIP-READY.txt
+          grep -Fq 'wheel_zoom_frame_feedback=PROCESS_LOCAL_DECODED_PROGRESS_LIVENESS_ONLY_NOT_CAMERA_COMPLETION' BRANCH-ZIP-READY.txt
           echo 'V33_BRANCH_ZIP_CONTRACT=PASS'
 
       - name: Promote V3.3 HMI artifact
