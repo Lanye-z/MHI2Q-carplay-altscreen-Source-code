@@ -83,6 +83,12 @@ select_controller_log_source() {
     # ClusterStateController writes this exact path on the vehicle.
     printf '%s\n' "$ROOT/tmp/mmi-mirror-controller.log"
 }
+select_wheel_log_source() {
+    printf '%s\n' "$ROOT/tmp/mmi-mirror-wheel-zoom.log"
+}
+select_wheel_events_source() {
+    printf '%s\n' "$ROOT/tmp/mmi-mirror-wheel-zoom.events"
+}
 select_oem_geometry_history_source() {
     printf '%s\n' "$ROOT/tmp/carplay-oem-geometry.log"
 }
@@ -92,8 +98,27 @@ select_oem_displaymanager_api_source() {
 flat_plain_append() {
     cat "$1" >> "$2"
 }
+flat_read_cursor() {
+    flat_cursor_path=$1
+    [ -f "$flat_cursor_path" ] || { echo 0; return 0; }
+    flat_cursor_value=$(cat "$flat_cursor_path" 2>/dev/null || true)
+    case "$flat_cursor_value" in
+        ''|*[!0-9]*) echo 0 ;;
+        *) echo "$flat_cursor_value" ;;
+    esac
+}
+flat_file_signature() {
+    flat_sig_path=$1
+    [ -f "$flat_sig_path" ] || { echo absent; return 0; }
+    flat_sig_line=$(cksum "$flat_sig_path" 2>/dev/null) || { echo unreadable; return 0; }
+    set -- $flat_sig_line
+    [ "$#" -ge 2 ] || { echo unreadable; return 0; }
+    printf '%s:%s\n' "$1" "$2"
+}
 flat_capture_delta() {
     flat_source=$1; flat_offset=$2; flat_target=$3; flat_temp=$4
+    flat_cursor_path=${5:-}
+    flat_initial_offset=$flat_offset
     [ -f "$flat_source" ] || { echo "$flat_offset"; return 0; }
     flat_size=$(wc -c < "$flat_source")
     [ "$flat_size" -ge "$flat_offset" ] || flat_offset=0
@@ -101,6 +126,12 @@ flat_capture_delta() {
         tail -c "+$((flat_offset + 1))" "$flat_source" > "$flat_temp" 2>/dev/null || { echo "$flat_offset"; return 0; }
         if flat_plain_append "$flat_temp" "$flat_target" 2>/dev/null; then flat_offset=$flat_size; fi
         rm -f "$flat_temp"
+    fi
+    if [ -n "$flat_cursor_path" ] && [ "$flat_offset" != "$flat_initial_offset" ]; then
+        flat_cursor_tmp="${flat_cursor_path}.new.$$"
+        if printf '%s\n' "$flat_offset" > "$flat_cursor_tmp" 2>/dev/null; then
+            mv "$flat_cursor_tmp" "$flat_cursor_path" 2>/dev/null || rm -f "$flat_cursor_tmp"
+        fi
     fi
     echo "$flat_offset"
 }
@@ -135,6 +166,13 @@ run_flat_plaintext() {
     FLAT_DEST="$VOLUME/MMI-Cockpit-Carplay/logs/boots/$BOOT_ID"
     FLAT_PREFIX="$ROOT/tmp/altscreen_diag_$$"
     ensure_dirs "$FLAT_DEST/streams" 2>/dev/null || return 0
+
+    # Cursor state is deliberately flat and volatile. It survives only an
+    # observer-process restart in the current boot, so a real reboot starts at
+    # offset zero even when the vehicle clock is still 1970 and PIDs repeat.
+    # This also avoids periodic cursor metadata writes to the SD card.
+    CURSOR_PREFIX="$ROOT/tmp/altscreen_diag_cursor"
+
     # START/controller wrappers may have emitted a flat /tmp journal before the
     # SD card became writable. Promote those breadcrumbs now, without requiring
     # any volatile directory tree.
@@ -151,22 +189,49 @@ run_flat_plaintext() {
             fi
         done
     fi
-    flat_log_event "BOOT_BEGIN storage=FLAT_TMP_PLAINTEXT_SD volume=$VOLUME"
+    flat_log_event "BOOT_BEGIN storage=FLAT_TMP_PLAINTEXT_SD volume=$VOLUME cursor_scope=VOLATILE_BOOT_FLAT cursor_resume=1"
     flat_log_event "SD_READY volume=$VOLUME"
     flat_system="${FLAT_PREFIX}_system.raw"; flat_slog_pid=""
     if command -v sloginfo >/dev/null 2>&1; then
         (exec sloginfo -w -t) > "$flat_system" 2>&1 & flat_slog_pid=$!
     fi
-    flat_hook_offset=0; flat_dio_offset=0; flat_entry_offset=0; flat_mirror_offset=0; flat_mirror_autostart_offset=0; flat_controller_offset=0; flat_oem_geometry_offset=0; flat_oem_api_offset=0; flat_system_offset=0; flat_tick=0
+    flat_hook_offset=$(flat_read_cursor "${CURSOR_PREFIX}_hook.offset")
+    flat_dio_offset=$(flat_read_cursor "${CURSOR_PREFIX}_dio.offset")
+    flat_entry_offset=$(flat_read_cursor "${CURSOR_PREFIX}_boot-entry.offset")
+    flat_mirror_offset=$(flat_read_cursor "${CURSOR_PREFIX}_mirror.offset")
+    flat_mirror_autostart_offset=$(flat_read_cursor "${CURSOR_PREFIX}_mirror-autostart.offset")
+    flat_controller_offset=$(flat_read_cursor "${CURSOR_PREFIX}_controller.offset")
+    flat_wheel_log_offset=$(flat_read_cursor "${CURSOR_PREFIX}_wheel-log.offset")
+    flat_oem_geometry_offset=$(flat_read_cursor "${CURSOR_PREFIX}_oem-geometry.offset")
+    flat_oem_api_offset=$(flat_read_cursor "${CURSOR_PREFIX}_oem-api.offset")
+    flat_wheel_events_sig=absent
+    flat_system_offset=0
+    flat_tick=0
     while [ -f "$ENABLED" ]; do
-        flat_hook_offset=$(flat_capture_delta "$(select_hook_source)" "$flat_hook_offset" "$FLAT_DEST/streams/hook_tmp.log" "${FLAT_PREFIX}_hook.chunk")
-        flat_dio_offset=$(flat_capture_delta "$ROOT/tmp/CinemoDioManager.log" "$flat_dio_offset" "$FLAT_DEST/streams/dio_tmp.log" "${FLAT_PREFIX}_dio.chunk")
-        flat_entry_offset=$(flat_capture_delta "$(select_boot_entry_source)" "$flat_entry_offset" "$FLAT_DEST/streams/boot_entry.log" "${FLAT_PREFIX}_entry.chunk")
-        flat_mirror_offset=$(flat_capture_delta "$(select_mirror_log_source)" "$flat_mirror_offset" "$FLAT_DEST/streams/mirror.log" "${FLAT_PREFIX}_mirror.chunk")
-        flat_mirror_autostart_offset=$(flat_capture_delta "$(select_mirror_autostart_source)" "$flat_mirror_autostart_offset" "$FLAT_DEST/streams/mirror_autostart.log" "${FLAT_PREFIX}_mirror_autostart.chunk")
-        flat_controller_offset=$(flat_capture_delta "$(select_controller_log_source)" "$flat_controller_offset" "$FLAT_DEST/streams/mmi-mirror-controller.log" "${FLAT_PREFIX}_controller.chunk")
-        flat_oem_geometry_offset=$(flat_capture_delta "$(select_oem_geometry_history_source)" "$flat_oem_geometry_offset" "$FLAT_DEST/streams/carplay-oem-geometry.log" "${FLAT_PREFIX}_oem_geometry.chunk")
-        flat_oem_api_offset=$(flat_capture_delta "$(select_oem_displaymanager_api_source)" "$flat_oem_api_offset" "$FLAT_DEST/streams/carplay-oem-displaymanager-read-api.log" "${FLAT_PREFIX}_oem_api.chunk")
+        flat_hook_offset=$(flat_capture_delta "$(select_hook_source)" "$flat_hook_offset" "$FLAT_DEST/streams/hook_tmp.log" "${FLAT_PREFIX}_hook.chunk" "${CURSOR_PREFIX}_hook.offset")
+        flat_dio_offset=$(flat_capture_delta "$ROOT/tmp/CinemoDioManager.log" "$flat_dio_offset" "$FLAT_DEST/streams/dio_tmp.log" "${FLAT_PREFIX}_dio.chunk" "${CURSOR_PREFIX}_dio.offset")
+        flat_entry_offset=$(flat_capture_delta "$(select_boot_entry_source)" "$flat_entry_offset" "$FLAT_DEST/streams/boot_entry.log" "${FLAT_PREFIX}_entry.chunk" "${CURSOR_PREFIX}_boot-entry.offset")
+        flat_mirror_offset=$(flat_capture_delta "$(select_mirror_log_source)" "$flat_mirror_offset" "$FLAT_DEST/streams/mirror.log" "${FLAT_PREFIX}_mirror.chunk" "${CURSOR_PREFIX}_mirror.offset")
+        flat_mirror_autostart_offset=$(flat_capture_delta "$(select_mirror_autostart_source)" "$flat_mirror_autostart_offset" "$FLAT_DEST/streams/mirror_autostart.log" "${FLAT_PREFIX}_mirror_autostart.chunk" "${CURSOR_PREFIX}_mirror-autostart.offset")
+        flat_controller_offset=$(flat_capture_delta "$(select_controller_log_source)" "$flat_controller_offset" "$FLAT_DEST/streams/mmi-mirror-controller.log" "${FLAT_PREFIX}_controller.chunk" "${CURSOR_PREFIX}_controller.offset")
+        flat_wheel_log_offset=$(flat_capture_delta "$(select_wheel_log_source)" "$flat_wheel_log_offset" "$FLAT_DEST/streams/mmi-mirror-wheel-zoom.log" "${FLAT_PREFIX}_wheel_log.chunk" "${CURSOR_PREFIX}_wheel-log.offset")
+        flat_oem_geometry_offset=$(flat_capture_delta "$(select_oem_geometry_history_source)" "$flat_oem_geometry_offset" "$FLAT_DEST/streams/carplay-oem-geometry.log" "${FLAT_PREFIX}_oem_geometry.chunk" "${CURSOR_PREFIX}_oem-geometry.offset")
+        flat_oem_api_offset=$(flat_capture_delta "$(select_oem_displaymanager_api_source)" "$flat_oem_api_offset" "$FLAT_DEST/streams/carplay-oem-displaymanager-read-api.log" "${FLAT_PREFIX}_oem_api.chunk" "${CURSOR_PREFIX}_oem-api.offset")
+        wheel_events_source=$(select_wheel_events_source)
+        wheel_events_sig=$(flat_file_signature "$wheel_events_source")
+        if [ "$wheel_events_sig" != "$flat_wheel_events_sig" ]; then
+            if [ -f "$wheel_events_source" ]; then
+                if cp "$wheel_events_source" "$FLAT_DEST/streams/mmi-mirror-wheel-zoom.events.new" 2>/dev/null &&
+                   mv "$FLAT_DEST/streams/mmi-mirror-wheel-zoom.events.new" "$FLAT_DEST/streams/mmi-mirror-wheel-zoom.events" 2>/dev/null; then
+                    flat_wheel_events_sig=$wheel_events_sig
+                else
+                    rm -f "$FLAT_DEST/streams/mmi-mirror-wheel-zoom.events.new" 2>/dev/null || true
+                fi
+            else
+                rm -f "$FLAT_DEST/streams/mmi-mirror-wheel-zoom.events" "$FLAT_DEST/streams/mmi-mirror-wheel-zoom.events.new" 2>/dev/null || true
+                flat_wheel_events_sig=absent
+            fi
+        fi
         if [ -f "$ROOT/tmp/carplay-oem-geometry.state" ]; then
             cp "$ROOT/tmp/carplay-oem-geometry.state" "$FLAT_DEST/streams/carplay-oem-geometry.state.new" 2>/dev/null &&
                 mv "$FLAT_DEST/streams/carplay-oem-geometry.state.new" "$FLAT_DEST/streams/carplay-oem-geometry.state" 2>/dev/null || true
