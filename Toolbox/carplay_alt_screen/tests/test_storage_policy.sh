@@ -79,6 +79,13 @@ grep -Fq 'staging/restore-apply' "$RESTORE_APPLY" || fail "RESTORE APPLY scratch
 grep -Fq 'STAGING_ROOT/controller-txn' "$CTRL" || fail "controller scratch is not SD staging"
 grep -Fq 'staging/diag-txn' "$DIAG" || fail "diagnostics transaction is not SD staging"
 grep -Fq 'FLAT_PREFIX="$ROOT/tmp/altscreen_diag_$$"' "$BOOT" || fail "boot diagnostics scratch is not flat /tmp"
+grep -Fq 'CURSOR_PREFIX="$ROOT/tmp/altscreen_diag_cursor"' "$BOOT" ||
+    fail "boot diagnostic dedupe cursor is not flat volatile /tmp"
+if grep -Fq '.capture-cursors' "$BOOT"; then
+    fail "boot diagnostic dedupe cursor still writes persistent metadata to SD"
+fi
+grep -Fq 'flat_file_signature' "$BOOT" ||
+    fail "wheel event snapshot lacks change detection"
 
 # Legacy namespace references are allowed only for read/cleanup compatibility.
 for f in "$START" "$STOP" "$CHAIN" "$CTRL" "$DIAG" "$ADAPT" "$BOOT" "$LAUNCH" "$STOP_LAUNCH"; do

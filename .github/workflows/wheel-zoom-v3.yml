@@ -399,11 +399,23 @@ jobs:
             Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
           grep -Fq 'WheelZoomBridge.logCarPlayLifecycle(active);' \
             Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java
+          grep -Fq 'public static void logCarPlayLifecycle(boolean active)' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          if grep -Fq 'public static synchronized void logCarPlayLifecycle' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java; then
+            echo 'ERROR: diagnostics-only lifecycle logger must not take the functional wheel class lock' >&2
+            exit 1
+          fi
           test "$(grep -Fc 'WheelZoomBridge.reset();' \
             Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java)" -eq 1
           grep -Fq 'select_wheel_log_source' Toolbox/scripts/altscreen_boot_diag.sh
           grep -Fq 'mmi-mirror-wheel-zoom.events' Toolbox/scripts/altscreen_boot_diag.sh
-          grep -Fq '.capture-cursors' Toolbox/scripts/altscreen_boot_diag.sh
+          grep -Fq 'CURSOR_PREFIX="$ROOT/tmp/altscreen_diag_cursor"' Toolbox/scripts/altscreen_boot_diag.sh
+          if grep -Fq '.capture-cursors' Toolbox/scripts/altscreen_boot_diag.sh; then
+            echo 'ERROR: boot diagnostic cursors must remain volatile and must not write cursor metadata to SD' >&2
+            exit 1
+          fi
+          grep -Fq 'flat_file_signature' Toolbox/scripts/altscreen_boot_diag.sh
           sh -n Toolbox/scripts/altscreen_boot_diag.sh
           grep -Fq '#define WHEEL_ZOOM_EVENT_MODEL "OEM_STEPS_V1"' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
@@ -677,7 +689,7 @@ jobs:
               "wheel_zoom_sd_event_snapshot":
                   "streams/mmi-mirror-wheel-zoom.events",
               "boot_log_capture":
-                  "PERSISTENT_SOURCE_CURSOR_NO_REPLAY",
+                  "VOLATILE_BOOT_FLAT_CURSOR_NO_REPLAY",
               "wheel_zoom_event_model": "OEM_STEPS_V1",
               "wheel_zoom_model": "OEM_TARGET_FOLLOW_V1",
               "wheel_zoom_dispatch":
@@ -720,6 +732,9 @@ jobs:
           if is_v32:
               updates["safearea_policy"] = "V32_OEM_X_VISIBLE_Y"
               updates["geometry_safearea_space"] = "OEM_X_VISIBLE_Y_0_455"
+              updates["sidecar_observability_rebuild_required"] = (
+                  "no" if mirror_ready else "yes"
+              )
 
           if is_oem_1to1:
               updates["branch_zip_status"] = (
@@ -801,7 +816,7 @@ jobs:
                   "wheel_zoom_sd_event_snapshot":
                       "streams/mmi-mirror-wheel-zoom.events",
                   "boot_log_capture":
-                      "PERSISTENT_SOURCE_CURSOR_NO_REPLAY",
+                      "VOLATILE_BOOT_FLAT_CURSOR_NO_REPLAY",
                   "wheel_zoom_model": "OEM_TARGET_FOLLOW_V1",
                   "wheel_zoom_pacing": "TARGET_FOLLOW_STALL_GUARD",
                   "wheel_zoom_scheduler_tick_ms": "50",

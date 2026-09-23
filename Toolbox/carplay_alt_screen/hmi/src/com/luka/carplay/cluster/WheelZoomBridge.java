@@ -136,7 +136,7 @@ public final class WheelZoomBridge {
      * not seed, reset, arm, re-arm, delete queues, change ownership, or touch
      * any native target-follow state.
      */
-    public static synchronized void logCarPlayLifecycle(boolean active) {
+    public static void logCarPlayLifecycle(boolean active) {
         diag("WHEEL_LIFECYCLE carplay_session=" + (active ? "1" : "0")
             + " action=OBSERVE_ONLY"
             + " have_magnification=" + (haveMagnification ? "1" : "0")
