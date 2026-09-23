@@ -402,6 +402,10 @@ verify_hmi(){
       log "RESTORE_HMI_BACKUP=FAIL reason=HMI_BACKUP_PROJECT_MANAGED action=DO_NOT_RESTORE_THIS_BACKUP production_changed=NO"
       return 1
     fi
+    if [ -f "$JAR" ] && ! hmi_backup_project_managed "$JAR" && ! same "$HMI/carplay_hook.jar" "$JAR"; then
+      log "RESTORE_HMI_BACKUP=FAIL reason=LIVE_HMI_CONFLICT_WITH_TRUSTED_BACKUP action=VERIFY_RECOVERY_MEDIA production_changed=NO"
+      return 1
+    fi
     log "RESTORE_HMI_BACKUP=PASS original=present project_managed=NO production_changed=NO"
   else
     [ ! -e "$HMI/carplay_hook.jar" ] || {
@@ -412,7 +416,11 @@ verify_hmi(){
       log "RESTORE_HMI_BACKUP=FAIL reason=ABSENT_MARKER_WITH_STALE_CKSUM production_changed=NO"
       return 1
     }
-    log "RESTORE_HMI_BACKUP=PASS original=absent production_changed=NO"
+    if [ -f "$JAR" ] && ! hmi_backup_project_managed "$JAR"; then
+      log "RESTORE_HMI_BACKUP=FAIL reason=ABSENT_BACKUP_LIVE_JAR_NOT_PROJECT_MANAGED action=DO_NOT_DELETE_UNKNOWN_HMI production_changed=NO"
+      return 1
+    fi
+    log "RESTORE_HMI_BACKUP=PASS original=absent live_state=ABSENT_OR_PROJECT_MANAGED production_changed=NO"
   fi
   return 0
 }
