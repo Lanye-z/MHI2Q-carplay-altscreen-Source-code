@@ -40,6 +40,9 @@ jobs:
           BAP=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/BAPBridge.java
           WHEEL=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
           CTRL=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java
+          STUB=Toolbox/carplay_alt_screen/hmi/stubs
+          SRC=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance
+          BUILD="$RUNNER_TEMP/v33-hmi-audit-build"
           OUT="$RUNNER_TEMP/v33-hmi-audit.txt"
 
           exec > >(tee "$OUT") 2>&1
@@ -47,28 +50,29 @@ jobs:
           unzip -t "$JAR" >/dev/null
           unzip -Z1 "$JAR" > "$RUNNER_TEMP/v33-jar.list"
 
+          rm -rf "$BUILD"
+          mkdir -p "$BUILD/stubs" "$BUILD/classes"
+          find "$STUB" -name '*.java' -print | sort > "$BUILD/stubs.list"
+          javac -encoding UTF-8 -source 1.3 -target 1.2             -d "$BUILD/stubs" @"$BUILD/stubs.list"
+          javac -encoding UTF-8 -source 1.3 -target 1.2             -cp "$BUILD/stubs:$JAR" -sourcepath "$SRC"             -d "$BUILD/classes"             "$SRC/RouteGuidance.java"             "$SRC/AmapRouteGuidance.java"             "$SRC/GatedCombiService.java"             "$SRC/BAPBridge.java"
+          javac -encoding UTF-8 -source 1.3 -target 1.2             -cp "$BUILD/stubs:$JAR"             -d "$BUILD/classes" "$CTRL" "$WHEEL"
+
           echo "V33_HMI_AUDIT=BEGIN"
           echo "jar_size=$(wc -c < "$JAR" | tr -d ' ')"
           echo "jar_sha256=$(sha256sum "$JAR" | awk '{print $1}')"
 
-          required_classes="
-          com.luka.carplay.routeguidance.RouteGuidance
-          com.luka.carplay.routeguidance.BAPBridge
-          com.luka.carplay.routeguidance.GatedCombiService
-          com.luka.carplay.framework.CarplayBus
-          com.luka.carplay.cursor.CursorController
-          com.luka.carplay.cluster.ClusterStateController
-          com.luka.carplay.cluster.WheelZoomBridge
-          "
-          for cls in $required_classes; do
+          for cls in             com.luka.carplay.framework.CarplayBus             com.luka.carplay.cursor.CursorController; do
             member="$(echo "$cls" | tr . /).class"
             grep -Fxq "$member" "$RUNNER_TEMP/v33-jar.list" || {
-              echo "ERROR: required V3.3 class missing: $cls" >&2
+              echo "ERROR: required retained base class missing: $cls" >&2
               exit 1
             }
+          done
+
+          for cls in             com.luka.carplay.routeguidance.RouteGuidance             com.luka.carplay.routeguidance.BAPBridge             com.luka.carplay.routeguidance.GatedCombiService             com.luka.carplay.cluster.ClusterStateController             com.luka.carplay.cluster.WheelZoomBridge; do
             echo
-            echo "--- $cls ---"
-            javap -classpath "$JAR" -p -s -c "$cls"
+            echo "--- compiled source $cls ---"
+            javap -classpath "$BUILD/classes:$BUILD/stubs:$JAR" -p -s -c "$cls"
           done
 
           if grep -Fxq 'com/luka/carplay/rgd/RouteGuidance.class' "$RUNNER_TEMP/v33-jar.list"; then
@@ -103,23 +107,22 @@ jobs:
           grep -Fq 'action=OBSERVE_ONLY' "$WHEEL"
           grep -Fq 'WheelZoomBridge.logCarPlayLifecycle(active);' "$CTRL"
 
-          python3 - "$JAR" <<'PY'
+          python3 - "$BUILD/classes/com/luka/carplay/cluster/WheelZoomBridge.class" <<'PY'
+          import pathlib
           import sys
-          import zipfile
 
-          with zipfile.ZipFile(sys.argv[1]) as zf:
-              wheel = zf.read("com/luka/carplay/cluster/WheelZoomBridge.class")
-              for marker in (
-                  b"WHEEL_CALLBACK_RAW",
-                  b"WHEEL_LIFECYCLE",
-                  b"callback_count",
-                  b"ignored_not_owned",
-                  b"action=OBSERVE_ONLY",
-              ):
-                  if marker not in wheel:
-                      raise SystemExit(
-                          "compiled wheel observability marker missing: %r" % (marker,)
-                      )
+          wheel = pathlib.Path(sys.argv[1]).read_bytes()
+          for marker in (
+              b"WHEEL_CALLBACK_RAW",
+              b"WHEEL_LIFECYCLE",
+              b"callback_count",
+              b"ignored_not_owned",
+              b"action=OBSERVE_ONLY",
+          ):
+              if marker not in wheel:
+                  raise SystemExit(
+                      "compiled wheel observability marker missing: %r" % (marker,)
+                  )
           print("V33_WHEEL_OBSERVABILITY=PASS source=V3.2_latest")
           PY
 
