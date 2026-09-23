@@ -1,0 +1,70 @@
+name: V3.3 HMI/RGI audit
+
+on:
+  push:
+    branches:
+      - experiment/oem-layout-second-screen_v3.3
+    paths:
+      - '.github/workflows/v33-hmi-rgi-audit.yml'
+      - 'Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experiment/oem-layout-second-screen_v3.3
+          fetch-depth: 1
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+
+      - name: Inventory historical HMI classes and lower-bar methods
+        run: |
+          set -euo pipefail
+          JAR=Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar
+          OUT="$RUNNER_TEMP/v33-hmi-audit.txt"
+          test -s "$JAR"
+
+          {
+            echo "V33_HMI_AUDIT=BEGIN"
+            echo "jar_size=$(wc -c < "$JAR" | tr -d ' ')"
+            echo "jar_sha256=$(sha256sum "$JAR" | awk '{print $1}')"
+            echo
+            echo "=== relevant archive members ==="
+            unzip -l "$JAR" | awk '{print $4}' | grep -E '^(com/luka/carplay/(rgd|routeguidance|bus|input|touch|core|cluster)/|de/audi/tghu/navi/app/cluster/)' || true
+            echo
+            echo "=== string/method evidence ==="
+            for token in               updateCurrentPositionInfo               updateDistanceToDestination               updateTimeToDestination               updateMapScale               updateAltitude               blockCurrentPositionInfo               blockRouteGuidance               EVT_RGD_UPDATE               touch               DPAD; do
+              printf '%s=' "$token"
+              if grep -aFq "$token" "$JAR"; then echo YES; else echo NO; fi
+            done
+            echo
+            echo "=== selected javap surfaces ==="
+            for cls in               com.luka.carplay.rgd.RouteGuidance               com.luka.carplay.rgd.BAPBridge               com.luka.carplay.rgd.GatedCombiService               com.luka.carplay.core.ScreenNavStatusGate               com.luka.carplay.bus.CarplayBus               com.luka.carplay.cluster.ClusterStateController               com.luka.carplay.cluster.WheelZoomBridge; do
+              if unzip -l "$JAR" | awk '{print $4}' | grep -Fqx "$(echo "$cls" | tr . /).class"; then
+                echo
+                echo "--- $cls ---"
+                javap -classpath "$JAR" -p -s "$cls" || true
+              else
+                echo
+                echo "--- $cls MISSING ---"
+              fi
+            done
+            echo
+            echo "V33_HMI_AUDIT=END"
+          } | tee "$OUT"
+
+      - name: Upload audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: v33-hmi-rgi-audit
+          path: ${{ runner.temp }}/v33-hmi-audit.txt
+          if-no-files-found: error
