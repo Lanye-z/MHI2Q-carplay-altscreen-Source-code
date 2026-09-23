@@ -35,6 +35,7 @@ public final class BAPBridge {
 
     private boolean initialized;
     private boolean ownershipRequested;
+    private boolean ownershipActive;
     private long lastEtaSeconds = -1L;
     private long lastRemainingSeconds = -1L;
     private long lastRemainingSampleUtcSeconds = -1L;
@@ -60,6 +61,7 @@ public final class BAPBridge {
 
     public void onStart() {
         ownershipRequested = true;
+        ownershipActive = false;
         if (ensureLowerBarOwnership()) {
             Log.i(TAG, "LOWER_BAR_OWNERSHIP=ACQUIRED fct=19,21,22 fct45=STOCK");
         } else {
@@ -72,12 +74,22 @@ public final class BAPBridge {
     }
 
     public void onShutdown() {
+        /*
+         * Clear V3.3-owned fields while the stock producer is still gated.
+         * Only do this after ownership was actually acquired: clearing an
+         * never-owned lower bar could overwrite valid OEM navigation data.
+         */
+        boolean hadOwnership = ownershipActive;
+        if (hadOwnership) clearLowerBar();
+
         ownershipRequested = false;
+        ownershipActive = false;
         if (gate != null) gate.setLowerBarBlocked(false);
         lastEtaSeconds = -1L;
         lastRemainingSeconds = -1L;
         lastRemainingSampleUtcSeconds = -1L;
-        Log.i(TAG, "LOWER_BAR_OWNERSHIP=RELEASED stock_restored=YES");
+        Log.i(TAG, "LOWER_BAR_OWNERSHIP=RELEASED stock_restored=YES"
+            + " cleared=" + (hadOwnership ? "YES" : "NO"));
     }
 
     public void update(RouteGuidance.State s) {
@@ -89,11 +101,13 @@ public final class BAPBridge {
 
             if ((dirty & RouteGuidance.State.DIRTY_CURRENT_ROAD) != 0) {
                 String road = limitUtf8(s.currentRoad, 96);
-                /* Audi renders an empty Fct19 as "---"; keep the last useful road instead. */
-                if (road.length() > 0) {
-                    appConnectorNavi.updateCurrentPositionInfo(road);
-                    Log.i(TAG, "OEM_FCT19 current_road=" + road);
-                }
+                /*
+                 * Empty is meaningful: unnamed roads must clear the previous
+                 * Fct19 value rather than leaving stale text on the VC.
+                 */
+                appConnectorNavi.updateCurrentPositionInfo(road);
+                Log.i(TAG, "OEM_FCT19 current_road="
+                    + (road.length() == 0 ? "<empty>" : road));
             }
 
             if ((dirty & RouteGuidance.State.DIRTY_DIST_DEST) != 0) {
@@ -121,6 +135,7 @@ public final class BAPBridge {
         if (!ownershipRequested) return false;
         if (gate == null && !ensureGateInstalled()) return false;
         gate.setLowerBarBlocked(true);
+        ownershipActive = true;
         return true;
     }
 
@@ -148,12 +163,20 @@ public final class BAPBridge {
     }
 
     private void sendDistanceToDestination(int meters) {
-        if (meters <= 0) return;
+        if (meters <= 0) {
+            sendDistanceToDestinationRaw(0, false);
+            Log.i(TAG, "OEM_FCT21 dist_m=" + meters + " action=CLEAR");
+            return;
+        }
         FormattedDistance fd = formatDistanceToDestination(meters);
         if (fd.value < 0) return;
         appConnectorNavi.updateDistanceToDestination(fd.value, fd.unit, false);
         Log.i(TAG, "OEM_FCT21 dist_m=" + meters
             + " bap_value=" + fd.value + " bap_unit=" + fd.unit);
+    }
+
+    private void sendDistanceToDestinationRaw(int value, boolean stopover) {
+        appConnectorNavi.updateDistanceToDestination(value, 0, stopover);
     }
 
     private FormattedDistance formatDistanceToDestination(int meters) {
@@ -175,7 +198,10 @@ public final class BAPBridge {
 
     private void sendArrivalTime() {
         long utcSeconds = currentArrivalSeconds();
-        if (utcSeconds < 0L) return;
+        if (utcSeconds < 0L) {
+            clearArrivalTime();
+            return;
+        }
 
         long localSeconds = convertUtcToLocalMs(utcSeconds * 1000L) / 1000L;
         int timeFormat = getHuNavigationTimeFormat();
@@ -183,6 +209,22 @@ public final class BAPBridge {
         appConnectorNavi.updateTimeToDestination(1, timeFormat, localSeconds);
         Log.i(TAG, "OEM_FCT22 eta_utc=" + utcSeconds
             + " eta_local=" + localSeconds + " format=" + timeFormat);
+    }
+
+    private void clearArrivalTime() {
+        appConnectorNavi.updateTimeToDestination(0, 0, -1L);
+        Log.i(TAG, "OEM_FCT22 action=CLEAR");
+    }
+
+    private void clearLowerBar() {
+        try {
+            appConnectorNavi.updateCurrentPositionInfo("");
+            sendDistanceToDestinationRaw(0, false);
+            appConnectorNavi.updateTimeToDestination(0, 0, -1L);
+            Log.i(TAG, "OEM_LOWER_BAR_CLEAR fct=19,21,22 result=OK");
+        } catch (Throwable t) {
+            Log.w(TAG, "OEM lower-bar clear failed: " + t);
+        }
     }
 
     private long currentArrivalSeconds() {
