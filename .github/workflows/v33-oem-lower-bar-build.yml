@@ -198,8 +198,8 @@ jobs:
 
           grep -Fq 'com.luka.carplay.routeguidance.RouteGuidance' "$BUILD/hook.sig"
           grep -Fq 'public boolean init(java.lang.Object);' "$BUILD/rg.sig"
-          grep -Fq 'public void start();' "$BUILD/rg.sig"
-          grep -Fq 'public void stop();' "$BUILD/rg.sig"
+          grep -Fq 'public synchronized void start();' "$BUILD/rg.sig"
+          grep -Fq 'public synchronized void stop();' "$BUILD/rg.sig"
           grep -Fq 'public boolean isRunning();' "$BUILD/rg.sig"
           grep -Fq 'public void update(com.luka.carplay.routeguidance.RouteGuidance$State);' "$BUILD/bap.sig"
 
