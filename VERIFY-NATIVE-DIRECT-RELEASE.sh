@@ -158,6 +158,10 @@ grep -Fq 'remove-precheck' "$PERSIST_DIAG" ||
     fail "persistent diagnostics removal lacks a non-mutating precheck"
 grep -Fq 'poisoned_hmi_backup_fail_closed=1' "$RESTORE_TX_TEST" ||
     fail "RESTORE poisoned-HMI regression test missing"
+grep -Fq 'ABSENT_BACKUP_LIVE_JAR_NOT_PROJECT_MANAGED' "$RESTORE_TXN" ||
+    fail "RESTORE absent-backup live-HMI deletion guard missing"
+grep -Fq 'absent_backup_live_conflict_fail_closed=1' "$RESTORE_TX_TEST" ||
+    fail "RESTORE absent-backup live-HMI regression test missing"
 grep -Fq 'runtime_cleanup_preflight_fail_closed=1' "$RESTORE_TX_TEST" ||
     fail "RESTORE runtime preflight regression test missing"
 grep -Fq 'STAGING_ROOT/controller-txn' "$CTRL" ||
