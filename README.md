@@ -1,6 +1,11 @@
-**V3 开发状态：CarPlay Instrument Cluster 真地图缩放协议已完成 STATIC_BINARY 级逆向确认，V3 已接入“方向盘滚轮 → epoch+seq 离散事件队列 → `changeMapZoomLevel` → iPhone 地图重渲染”控制链。** Wire contract 为 `params{uuid, zoomDirection}`，其中 `0=Zoom In`、`1=Zoom Out`、无 `zoomFactor`；滚轮发送门控由独立的 Java80 ownership state 提供，要求 CarPlay session active 且 `getCurrentContextID(1)==80`，不再依赖 OEM layout observer 或旧 Context76/displayable58 状态。V2 的 private111 / OMX / sidecar / displayable3 / Context80 显示链保持不动。实车仍需验证 completion 语义以及 Apple Maps / Amap 的真实缩放响应，详见 [OEM-LAYOUT-SECOND-SCREEN-V3-WHEEL-ZOOM.md](OEM-LAYOUT-SECOND-SCREEN-V3-WHEEL-ZOOM.md)。
-
-**实车状态：已完成本分支实车验证。** 当前版本已验证 private111 → stock OMX → Screen linearizer → decoded SHM → source-driven sidecar → displayable3 → Context80 全链路可长期运行；FULL / SMALL 可在同一 CarPlay 会话内通过 `updateViewArea` 动态切换，Sport Small 的 `-476` 平移也已实车生效。当前主要剩余问题不再是“能否点亮”，而是 **1440×542 源画面 → 1440×455 displayable3 的几何实现是否值得进一步改成更接近 OEM 的 1:1 + position/cropping 路径**。
+<!-- BRANCH_STATUS_BEGIN -->
+> [!IMPORTANT]
+> **分支用途：** 当前候选实验主线。继承 V3.1 后期 `OEM_TARGET_FOLLOW_V1` 滚轮逻辑，重点修复 V3.1 的纵向几何：保留 OEM 横向安全范围，同时把纵向 safeArea 从局部 `y=49,h=300` 放开到地图有效高度 `y=0,h=455`；另修复 future frame timestamp 可能误报 stall 的边缘问题。
+>
+> **上车测试结论：** 截至 2026-09-23，当前 HEAD 已完成构建、静态校验、CI promotion 和整包 verifier，状态为 `READY_FOR_VEHICLE_TEST`；尚没有一份能够明确绑定到该 exact HEAD 的完整实车验收日志，因此当前正式结论仍是“待实车验证”，不能写成已通过。
+>
+> **当前定位：** 最新待测主线；上车重点验证车辆锚点/ETA/指南针纵向位置，以及继承后的 target-follow 滚轮。
+<!-- BRANCH_STATUS_END -->
 
 > [!IMPORTANT]
 > **当前状态与安全提示**
