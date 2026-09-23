@@ -192,12 +192,14 @@ historical_managed_jar(){
     # archive directory, so previous CI rebuilds remain detectable even though
     # their whole-file cksum changes with JAR timestamps.
     grep -Fq 'com/luka/carplay/cluster/WheelZoomBridge.class' "$1" 2>/dev/null && return 0
+    grep -Fq 'com/luka/carplay/cluster/ClusterStateController.class' "$1" 2>/dev/null && return 0
+    grep -Fq 'com/luka/carplay/cluster/ClusterLayerController.class' "$1" 2>/dev/null && return 0
     size=$(file_size "$1")
     sum=$(file_cksum "$1")
     [ "$sum" != unavailable ] || return 1
     # Older pre-WheelZoomBridge project JAR identities kept for compatibility.
     case "$size:$sum" in
-      149510:180684234|149979:2362627699|150026:3028143795) return 0 ;;
+      143072:1515795662|149510:180684234|149979:2362627699|150026:3028143795) return 0 ;;
       *) return 1 ;;
     esac
 }
@@ -266,6 +268,11 @@ verify_backup(){
         [ -s "$BACKUP/carplay_hook.jar" ] || return 1
         if [ -f "$BACKUP/cksum" ] && command -v cksum >/dev/null 2>&1; then
             [ "$(cksum < "$BACKUP/carplay_hook.jar")" = "$(cat "$BACKUP/cksum")" ] || return 1
+        fi
+        if historical_managed_jar "$BACKUP/carplay_hook.jar"; then
+            echo "FAIL: existing HMI backup is project-managed; refusing to trust it as OEM" >&2
+            echo "ACTION=USE_VERIFIED_OEM_BACKUP_OR_RECOVERY_PACKAGE" >&2
+            return 1
         fi
     elif [ -f "$BACKUP/absent" ]; then
         [ ! -e "$BACKUP/carplay_hook.jar" ] || return 1
@@ -427,12 +434,14 @@ historical_managed_jar(){
     # archive directory, so previous CI rebuilds remain detectable even though
     # their whole-file cksum changes with JAR timestamps.
     grep -Fq 'com/luka/carplay/cluster/WheelZoomBridge.class' "$1" 2>/dev/null && return 0
+    grep -Fq 'com/luka/carplay/cluster/ClusterStateController.class' "$1" 2>/dev/null && return 0
+    grep -Fq 'com/luka/carplay/cluster/ClusterLayerController.class' "$1" 2>/dev/null && return 0
     size=$(file_size "$1")
     sum=$(file_cksum "$1")
     [ "$sum" != unavailable ] || return 1
     # Older pre-WheelZoomBridge project JAR identities kept for compatibility.
     case "$size:$sum" in
-      149510:180684234|149979:2362627699|150026:3028143795) return 0 ;;
+      143072:1515795662|149510:180684234|149979:2362627699|150026:3028143795) return 0 ;;
       *) return 1 ;;
     esac
 }
@@ -501,6 +510,11 @@ verify_backup(){
         [ -s "$BACKUP/carplay_hook.jar" ] || return 1
         if [ -f "$BACKUP/cksum" ] && command -v cksum >/dev/null 2>&1; then
             [ "$(cksum < "$BACKUP/carplay_hook.jar")" = "$(cat "$BACKUP/cksum")" ] || return 1
+        fi
+        if historical_managed_jar "$BACKUP/carplay_hook.jar"; then
+            echo "FAIL: existing HMI backup is project-managed; refusing to trust it as OEM" >&2
+            echo "ACTION=USE_VERIFIED_OEM_BACKUP_OR_RECOVERY_PACKAGE" >&2
+            return 1
         fi
     elif [ -f "$BACKUP/absent" ]; then
         [ ! -e "$BACKUP/carplay_hook.jar" ] || return 1
