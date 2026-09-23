@@ -791,11 +791,12 @@ jobs:
                       "safearea_full": "370,0,700,455",
                       "safearea_small": "490,0,460,455",
                       "rebuild_required":
-                          "none" if mirror_ready else "libcarplay_altscreen.so",
+                          "none" if mirror_ready else
+                          "carplay-alt111-mirror-display",
                       "vehicle_zip_status":
                           "READY_FOR_VEHICLE_TEST"
                           if mirror_ready else
-                          "NOT_READY_NATIVE_OVERLAY_REBUILD_REQUIRED",
+                          "NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED",
                   })
 
               for key, value in ready_updates.items():
