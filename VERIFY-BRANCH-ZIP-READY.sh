@@ -5,6 +5,7 @@ READY="$ROOT/BRANCH-ZIP-READY.txt"
 HMI_INFO="$ROOT/Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt"
 JAR="$ROOT/Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar"
 HOOK="$ROOT/Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so"
+RGI_META="$ROOT/Toolbox/carplay_alt_screen/rgi_meta/libcarplay_rgi_meta.so"
 SUMS="$ROOT/SHA256SUMS.txt"
 
 fail(){ echo "BRANCH_ZIP_VERIFY=FAIL: $*" >&2; exit 1; }
@@ -41,8 +42,11 @@ grep -Fq 'branch_zip_status=READY_FOR_VEHICLE_TEST' "$HMI_INFO" ||
     fail "HMI BUILD_INFO does not mark branch ZIP vehicle-ready"
 grep -Fq 'branch_zip_policy=GITHUB_BRANCH_ZIP_INSTALLABLE' "$HMI_INFO" ||
     fail "HMI BUILD_INFO direct-download policy missing"
-grep -Fq 'mode=PRIVATE111_DIRECT_DISPLAY_V3_WHEEL_ZOOM' "$HMI_INFO" ||
-    fail "HMI mode is not V3 wheel zoom"
+mode=$(sed -n 's/^mode=//p' "$HMI_INFO")
+case "$mode" in
+  PRIVATE111_DIRECT_DISPLAY_V3_WHEEL_ZOOM|PRIVATE111_DIRECT_DISPLAY_V3_3_OEM_LOWER_BAR) ;;
+  *) fail "unsupported HMI mode: $mode" ;;
+esac
 grep -Fq 'wheel_zoom_build_status=COMPILED_READY_FOR_VEHICLE_TEST' "$HMI_INFO" ||
     fail "V3 wheel JAR is not marked compiled"
 
@@ -65,6 +69,19 @@ grep -Fq "jar_sha256=$actual_jar_sha" "$READY" ||
 grep -Fq "universal_runtime_sha256=$actual_hook_sha" "$READY" ||
     fail "ready marker hook SHA mismatch"
 
+if [ "$mode" = PRIVATE111_DIRECT_DISPLAY_V3_3_OEM_LOWER_BAR ]; then
+    [ -s "$RGI_META" ] || fail "V3.3 RGI metadata hook missing"
+    actual_rgi_sha=$(sha256_file "$RGI_META")
+    [ "$actual_rgi_sha" = 87d10f67fbb3dc142642d899977bab0a6eb4009f61d3bcd873d0cce9e01511f7 ] ||
+        fail "V3.3 RGI metadata hook identity mismatch"
+    grep -Fq 'oem_lower_bar=CARPLAY_RGI_FCT19_21_22_V1' "$HMI_INFO" ||
+        fail "V3.3 OEM lower-bar contract missing"
+    grep -Fq 'oem_lower_bar_map_scale=FCT45_STOCK_PASSTHROUGH' "$HMI_INFO" ||
+        fail "V3.3 OEM map-scale passthrough missing"
+    grep -Fq "rgi_metadata_sha256=$actual_rgi_sha" "$READY" ||
+        fail "V3.3 ready marker RGI SHA mismatch"
+fi
+
 sh "$ROOT/VERIFY-NATIVE-DIRECT-RELEASE.sh"
 
 if command -v sha256sum >/dev/null 2>&1; then
@@ -75,7 +92,7 @@ else
 fi
 
 echo "BRANCH_ZIP_VERIFY=PASS"
-echo "mode=PRIVATE111_DIRECT_DISPLAY_V3_WHEEL_ZOOM"
+echo "mode=$mode"
 echo "jar_sha256=$actual_jar_sha"
 echo "hook_sha256=$actual_hook_sha"
 echo "download_policy=GITHUB_BRANCH_ZIP_INSTALLABLE"
