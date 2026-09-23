@@ -739,7 +739,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add             Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar             Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so             Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt             Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh             Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh             Toolbox/scripts/status_mmi_cockpit_carplay_test.sh             BRANCH-ZIP-READY.txt             PACKAGE_SOURCE_MAP.json             SHA256SUMS.txt
+          git add             Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar             Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so             Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt             Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt             Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS             Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh             Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh             Toolbox/scripts/status_mmi_cockpit_carplay_test.sh             BRANCH-ZIP-READY.txt             PACKAGE_SOURCE_MAP.json             SHA256SUMS.txt
 
           if ! git diff --cached --quiet; then
             git commit -m "build(v3.3): promote OEM lower-bar HMI [skip ci]"
