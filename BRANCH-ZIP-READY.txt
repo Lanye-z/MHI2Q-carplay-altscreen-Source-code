@@ -1,6 +1,6 @@
-BRANCH_ZIP_READY=YES
+BRANCH_ZIP_READY=NO
 branch=experiment/oem-layout-second-screen_v3.3
-validated_source_commit=5a83b0268ddf5828ae25e227794a521fdf177e1a
+validated_source_commit=PENDING_RESTORE_HARDENING_CI
 mode=PRIVATE111_DIRECT_DISPLAY_V3_3_OEM_LOWER_BAR
 jar_size=113781
 jar_cksum=1699756523
@@ -49,6 +49,6 @@ wheel_zoom_observability=RAW_CALLBACK_COUNTERS_LIFECYCLE_OBSERVE_ONLY
 boot_log_capture=VOLATILE_BOOT_FLAT_CURSOR_NO_REPLAY
 rgi_metadata_sha256=87d10f67fbb3dc142642d899977bab0a6eb4009f61d3bcd873d0cce9e01511f7
 rgi_messages=0x5200,0x5201,0x5202,0x5203,0x5204
-rebuild_required=none
-vehicle_zip_status=READY_FOR_V3_3_VEHICLE_TEST
+rebuild_required=restore_hardening_ci
+vehicle_zip_status=NOT_READY_RESTORE_HARDENING_CI_REQUIRED
 install_policy=EXTRACT_BRANCH_ZIP_CONTENTS_TO_SD_ROOT
