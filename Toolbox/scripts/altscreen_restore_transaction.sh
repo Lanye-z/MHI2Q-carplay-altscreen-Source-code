@@ -544,8 +544,8 @@ log "===== V3 transactional RESTORE ORIGINAL started ====="
 if [ -d "$INSTALL_TXN" ]; then
   [ -f "$INSTALL_TXN_HELPER" ] || fail "active install transaction exists but recovery helper is missing"
   log "ACTIVE_INSTALL_TRANSACTION=DETECTED action=ROLLBACK_PRE_INSTALL_BEFORE_RESTORE"
-  /bin/sh "$INSTALL_TXN_HELPER" recover || fail "active install transaction could not be recovered before restore"
   PRE_RECOVERY_CHANGED=1
+  /bin/sh "$INSTALL_TXN_HELPER" recover || fail "active install transaction could not be recovered before restore"
   log "PRE_RESTORE_RECOVERY=PASS kind=INSTALL_TRANSACTION production_changed=RECOVERY_TO_PRE_INSTALL"
 fi
 recover_stale || fail "previous restore transaction could not be recovered"
