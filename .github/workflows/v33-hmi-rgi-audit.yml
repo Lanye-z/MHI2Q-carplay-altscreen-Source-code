@@ -52,7 +52,7 @@ jobs:
               if unzip -l "$JAR" | awk '{print $4}' | grep -Fqx "$(echo "$cls" | tr . /).class"; then
                 echo
                 echo "--- $cls ---"
-                javap -classpath "$JAR" -p -s "$cls" || true
+                javap -classpath "$JAR" -p -s -c "$cls" || true
               else
                 echo
                 echo "--- $cls MISSING ---"
