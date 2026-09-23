@@ -261,6 +261,10 @@ jobs:
               for marker in [
                   b"mmi-mirror-wheel-zoom.events",
                   b"WHEEL_ZOOM_INPUT",
+                  b"WHEEL_CALLBACK_RAW",
+                  b"WHEEL_LIFECYCLE",
+                  b"callback_count",
+                  b"ignored_not_owned",
                   b"ZOOM_IN",
                   b"ZOOM_OUT",
                   b"OEM_STEPS_V1",
@@ -386,6 +390,20 @@ jobs:
           fi
           grep -Fq 'new FileOutputStream(EVENT_FILE, true)' \
             Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          grep -Fq 'WHEEL_CALLBACK_RAW' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          grep -Fq 'WHEEL_LIFECYCLE' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          grep -Fq 'action=OBSERVE_ONLY' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          grep -Fq 'WheelZoomBridge.logCarPlayLifecycle(active);' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java
+          test "$(grep -Fc 'WheelZoomBridge.reset();' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java)" -eq 1
+          grep -Fq 'select_wheel_log_source' Toolbox/scripts/altscreen_boot_diag.sh
+          grep -Fq 'mmi-mirror-wheel-zoom.events' Toolbox/scripts/altscreen_boot_diag.sh
+          grep -Fq '.capture-cursors' Toolbox/scripts/altscreen_boot_diag.sh
+          sh -n Toolbox/scripts/altscreen_boot_diag.sh
           grep -Fq '#define WHEEL_ZOOM_EVENT_MODEL "OEM_STEPS_V1"' \
             Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
           grep -Fq '#define WHEEL_ZOOM_SCHEDULER_MODEL "OEM_TARGET_FOLLOW_V1"' \
@@ -650,6 +668,15 @@ jobs:
                   "EPOCH_RESET_AT_256K",
               "wheel_zoom_java_log":
                   "/tmp/mmi-mirror-wheel-zoom.log",
+              "wheel_zoom_observability":
+                  "RAW_CALLBACK_COUNTERS_LIFECYCLE_OBSERVE_ONLY",
+              "wheel_zoom_lifecycle_change": "NONE",
+              "wheel_zoom_sd_log":
+                  "streams/mmi-mirror-wheel-zoom.log",
+              "wheel_zoom_sd_event_snapshot":
+                  "streams/mmi-mirror-wheel-zoom.events",
+              "boot_log_capture":
+                  "PERSISTENT_SOURCE_CURSOR_NO_REPLAY",
               "wheel_zoom_event_model": "OEM_STEPS_V1",
               "wheel_zoom_model": "OEM_TARGET_FOLLOW_V1",
               "wheel_zoom_dispatch":
@@ -765,6 +792,15 @@ jobs:
                   "cluster_show_eta": "yes",
                   "cluster_maneuver_layout": "empty",
                   "wheel_zoom_event_model": "OEM_STEPS_V1",
+                  "wheel_zoom_observability":
+                      "RAW_CALLBACK_COUNTERS_LIFECYCLE_OBSERVE_ONLY",
+                  "wheel_zoom_lifecycle_change": "NONE",
+                  "wheel_zoom_sd_log":
+                      "streams/mmi-mirror-wheel-zoom.log",
+                  "wheel_zoom_sd_event_snapshot":
+                      "streams/mmi-mirror-wheel-zoom.events",
+                  "boot_log_capture":
+                      "PERSISTENT_SOURCE_CURSOR_NO_REPLAY",
                   "wheel_zoom_model": "OEM_TARGET_FOLLOW_V1",
                   "wheel_zoom_pacing": "TARGET_FOLLOW_STALL_GUARD",
                   "wheel_zoom_scheduler_tick_ms": "50",
