@@ -720,6 +720,22 @@ static uint32_t wheel_now_us32(void) {
     return (uint32_t)tv.tv_sec * 1000000u + (uint32_t)tv.tv_usec;
 }
 
+/*
+ * A decoded frame can be published after the monitor sampled wheel_now but
+ * before p111_frame_tap_get_progress() returns its snapshot.  For these
+ * sub-second wheel guards, a modular age greater than INT32_MAX cannot be a
+ * real age; it means the sampled publication timestamp is a few microseconds
+ * "in the future". Clamp only that race to zero. Genuine uint32 wrap with a
+ * short elapsed interval still produces the normal small modular difference.
+ *
+ * This helper deliberately does not change wheel pacing, target-follow,
+ * rebase, retry, or any timing threshold.
+ */
+static uint32_t wheel_short_age_us32(uint32_t now, uint32_t before) {
+    uint32_t age = (uint32_t)(now - before);
+    return age > 0x7fffffffu ? 0u : age;
+}
+
 static int native_wheel_zoom_target_accumulate(int target, int sent,
                                                 int delta, int *saturated) {
     long error = (long)target - (long)sent;
@@ -1193,8 +1209,9 @@ static void *native_monitor_worker(void *arg) {
             progress_ok = p111_frame_tap_get_progress(
                 stream, &zoom_progress);
             if (progress_ok) {
-                frame_age_us =
-                    (uint32_t)(wheel_now - zoom_progress.last_publish_us32);
+                const uint32_t frame_now_us = wheel_now_us32();
+                frame_age_us = wheel_short_age_us32(
+                    frame_now_us, zoom_progress.last_publish_us32);
                 baseline_current =
                     zoom_send_frame_baseline_valid &&
                     zoom_send_frame_generation == zoom_progress.generation;
