@@ -192,5 +192,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: v33-hmi-rgi-audit
-          path: $RUNNER_TEMP/v33-hmi-audit.txt
+          path: ${{ runner.temp }}/v33-hmi-audit.txt
           if-no-files-found: error
