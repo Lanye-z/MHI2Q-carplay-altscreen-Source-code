@@ -25,6 +25,7 @@ on:
       - 'Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh'
       - 'Toolbox/scripts/status_mmi_cockpit_carplay_test.sh'
       - 'VERIFY-BRANCH-ZIP-READY.sh'
+      - 'VERIFY-NATIVE-DIRECT-RELEASE.sh'
       - 'BRANCH-ZIP-READY.txt'
       - 'OEM-LAYOUT-SECOND-SCREEN-V3.3.md'
   workflow_dispatch:
@@ -538,6 +539,7 @@ jobs:
               "Toolbox/carplay_alt_screen/rgi_meta/libcarplay_rgi_meta.so",
               ".github/workflows/v33-oem-lower-bar-build.yml",
               ".github/workflows/v33-hmi-rgi-audit.yml",
+              "VERIFY-NATIVE-DIRECT-RELEASE.sh",
               "BRANCH-ZIP-READY.txt",
               "OEM-LAYOUT-SECOND-SCREEN-V3.3.md",
           ]
