@@ -166,7 +166,10 @@ SOURCE_ONLY=0
 HOOK_PENDING=0
 NATIVE_REBUILDS=0
 SAFEAREA_V32=0
-if grep -Fq 'safearea_revision=V32_OEM_X_VISIBLE_Y' "$AIRPLAY_SRC"; then
+SAFEAREA_V33=0
+if grep -Fq 'safearea_revision=V33_OEM_X_VERTICAL_60_450' "$AIRPLAY_SRC"; then
+    SAFEAREA_V33=1
+elif grep -Fq 'safearea_revision=V32_OEM_X_VISIBLE_Y' "$AIRPLAY_SRC"; then
     SAFEAREA_V32=1
 fi
 if grep -Fq 'release_binary_status=V1_BINARY_STALE_V2_SOURCE_REBUILD_REQUIRED' "$INFO"; then
@@ -280,6 +283,23 @@ elif grep -Fq 'release_binary_status=V3_1_BINARY_STALE_OBSERVABILITY_REBUILD_REQ
     if binary_strings "$BIN" | grep -Fq 'display_observer_revision=V32_READABLE_STATE_V1'; then
         fail "BUILD_INFO says V3.2 observability rebuild pending but sidecar already contains the new observer marker"
     fi
+elif grep -Fq 'release_binary_status=V3_3_BINARY_STALE_SAFEAREA_REBUILD_REQUIRED' "$INFO"; then
+    SOURCE_ONLY=0
+    HOOK_PENDING=1
+    NATIVE_REBUILDS=0
+    grep -Fq 'vehicle_zip_status=NOT_READY_HOOK_REBUILD_REQUIRED' "$INFO" ||
+        fail "V3.3 safeArea source must remain blocked until universal hook rebuild"
+    grep -Fq 'hook_runtime_rebuild_required=yes' "$INFO" ||
+        fail "V3.3 safeArea source must declare hook rebuild pending"
+    grep -Fq 'hook_layout_safearea_rebuild_required=yes' "$INFO" ||
+        fail "V3.3 safeArea source must declare safeArea hook rebuild pending"
+    grep -Fq 'hook_safearea_policy=V33_OEM_X_VERTICAL_60_450' "$INFO" ||
+        fail "V3.3 safeArea pending metadata missing"
+    binary_strings "$HOOK" | grep -Fq 'safearea_revision=V32_OEM_X_VISIBLE_Y' ||
+        fail "V3.3 pending package must still contain the previously promoted V3.2 hook"
+    if binary_strings "$HOOK" | grep -Fq 'safearea_revision=V33_OEM_X_VERTICAL_60_450'; then
+        fail "V3.3 BUILD_INFO says hook rebuild pending but rebuilt 60..450 marker is already present"
+    fi
 elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$INFO"; then
     if grep -Fq 'vehicle_zip_status=NOT_READY_HOOK_REBUILD_REQUIRED' "$INFO"; then
         HOOK_PENDING=1
@@ -308,7 +328,14 @@ elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$INFO"; then
                 fail "V3.2 BUILD_INFO declares readable display telemetry but promoted sidecar is stale"
         fi
         if [ "$HOOK_PENDING" = 0 ]; then
-            if [ "$SAFEAREA_V32" = 1 ]; then
+            if [ "$SAFEAREA_V33" = 1 ]; then
+                binary_strings "$HOOK" | grep -Fq 'safe_yh_mapping=vertical_inset_top60_bottom450' ||
+                    fail "V3.3 universal hook missing tuned 60..450 safeArea mapping"
+                binary_strings "$HOOK" | grep -Fq 'safearea_revision=V33_OEM_X_VERTICAL_60_450' ||
+                    fail "V3.3 universal hook missing safeArea revision marker"
+                binary_strings "$HOOK" | grep -Fq 'renderer_geometry_revision=V31_ONE_TO_ONE_CLIP' ||
+                    fail "V3.3 universal hook missing retained V3.1 renderer geometry marker"
+            elif [ "$SAFEAREA_V32" = 1 ]; then
                 binary_strings "$HOOK" | grep -Fq 'safe_yh_mapping=vertical_full_visible_0_455' ||
                     fail "V3.2 universal hook missing visible-height safeArea mapping"
                 binary_strings "$HOOK" | grep -Fq 'safearea_revision=V32_OEM_X_VISIBLE_Y' ||
@@ -613,7 +640,18 @@ grep -Fq 'r.w = 460u;' "$AIRPLAY_SRC" ||
     fail "SMALL safeArea width missing"
 grep -Fq 'map_plane_terminal_y_policy=metadata_only_not_renderer_offset' "$AIRPLAY_SRC" ||
     fail "OEM terminal Y=26 must remain metadata-only"
-if [ "$SAFEAREA_V32" = 1 ]; then
+if [ "$SAFEAREA_V33" = 1 ]; then
+    grep -Fq 'safe_yh_mapping=vertical_inset_top60_bottom450' "$AIRPLAY_SRC" ||
+        fail "V3.3 tuned safeArea coordinate-space diagnostic missing"
+    grep -Fq 'renderer_geometry_revision=V31_ONE_TO_ONE_CLIP' "$AIRPLAY_SRC" ||
+        fail "V3.3 must retain the V3.1 renderer geometry revision"
+    grep -Fq 'r.y = 60u;' "$AIRPLAY_SRC" ||
+        fail "V3.3 FULL/SMALL safeArea Y must be 60"
+    grep -Fq 'r.h = 390u;' "$AIRPLAY_SRC" ||
+        fail "V3.3 FULL/SMALL safeArea height must be 390"
+    grep -Fq 'physical_y = 60 + (int64_t)r.renderer_dy;' "$AIRPLAY_SRC" ||
+        fail "V3.3 physical safe-region Y must start at 60 before renderer translation"
+elif [ "$SAFEAREA_V32" = 1 ]; then
     grep -Fq 'safe_yh_mapping=vertical_full_visible_0_455' "$AIRPLAY_SRC" ||
         fail "V3.2 visible-height safeArea coordinate-space diagnostic missing"
     grep -Fq 'renderer_geometry_revision=V31_ONE_TO_ONE_CLIP' "$AIRPLAY_SRC" ||
