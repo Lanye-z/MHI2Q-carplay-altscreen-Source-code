@@ -134,7 +134,10 @@ grep -Fq 'oem_geometry_build_status=COMPILED_OBSERVER_READY' "$HMI_INFO" 2>/dev/
     echo "ACTION=RUN_OEM_LAYOUT_OBSERVER_BUILD_BEFORE_INSTALL"
     exit 1
 }
-grep -Eq '^mode=(PRIVATE111_DIRECT_DISPLAY_V3_WHEEL_ZOOM|PRIVATE111_DIRECT_DISPLAY_V3_3_OEM_LOWER_BAR)    grep -E '^(mode|wheel_zoom_build_status|jar_size|jar_cksum|jar_sha256)=' "$HMI_INFO" 2>/dev/null || true
+grep -Eq '^mode=(PRIVATE111_DIRECT_DISPLAY_V3_WHEEL_ZOOM|PRIVATE111_DIRECT_DISPLAY_V3_3_OEM_LOWER_BAR)$' "$HMI_INFO" 2>/dev/null &&
+grep -Fq 'wheel_zoom_build_status=COMPILED_READY_FOR_VEHICLE_TEST' "$HMI_INFO" 2>/dev/null || {
+    echo "FAIL: V3/V3.3 HMI artifact is not the compiled vehicle-test build"
+    grep -E '^(mode|wheel_zoom_build_status|jar_size|jar_cksum|jar_sha256)=' "$HMI_INFO" 2>/dev/null || true
     echo "ACTION=RUN_WHEEL_ZOOM_V3_BUILD"
     exit 1
 }
