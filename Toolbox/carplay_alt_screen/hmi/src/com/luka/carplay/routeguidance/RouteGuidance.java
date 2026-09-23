@@ -140,6 +140,10 @@ public class RouteGuidance implements CarplayBus.Listener {
 
             if (wantActive && !rgActive) {
                 if (bap != null) bap.onStart();
+                /* Ownership can become authoritative after metadata was cached.
+                 * Re-publish every useful OEM lower-bar field once so an earlier
+                 * current-road/distance/ETA update is never lost at handoff. */
+                markCachedLowerBarDirty();
                 rgActive = true;
                 Log.i(TAG, "OEM lower bar active route_state=" + state.routeState
                     + " visible=" + state.visibleInApp
@@ -151,6 +155,17 @@ public class RouteGuidance implements CarplayBus.Listener {
 
         if (rgActive && bap != null) bap.update(state);
         state.clearDirty();
+    }
+
+    private void markCachedLowerBarDirty() {
+        if (state.currentRoad != null && state.currentRoad.length() > 0)
+            state.markDirty(State.DIRTY_CURRENT_ROAD);
+        if (state.distDestM > 0)
+            state.markDirty(State.DIRTY_DIST_DEST);
+        if (state.etaSeconds >= 0)
+            state.markDirty(State.DIRTY_ETA);
+        if (state.timeRemainingSeconds >= 0L)
+            state.markDirty(State.DIRTY_TIME_REMAINING);
     }
 
     private void deactivate(String reason) {
