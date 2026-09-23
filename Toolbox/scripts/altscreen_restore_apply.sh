@@ -68,18 +68,38 @@ cleanup_txn(){ [ ! -e "$TXN_DIR" ] || rm -rf "$TXN_DIR" 2>/dev/null || true; }
 trap cleanup_txn 0
 trap 'cleanup_txn; exit 130' 1 2 15
 
+hmi_backup_project_managed(){
+    jar=$1
+    [ -f "$jar" ] || return 1
+    grep -Fq 'com/luka/carplay/cluster/ClusterStateController.class' "$jar" 2>/dev/null && return 0
+    grep -Fq 'com/luka/carplay/cluster/WheelZoomBridge.class' "$jar" 2>/dev/null && return 0
+    grep -Fq 'com/luka/carplay/cluster/ClusterLayerController.class' "$jar" 2>/dev/null && return 0
+    set -- $(cksum < "$jar" 2>/dev/null || echo "0 0")
+    sum=${1:-0}
+    bytes=${2:-0}
+    case "$bytes:$sum" in
+      143072:1515795662|149510:180684234|149979:2362627699|150026:3028143795) return 0 ;;
+      *) return 1 ;;
+    esac
+}
+
 verify_backup(){
-    [ -f "$BACKUP/COMPLETE" ] || return 1
-    if [ -f "$BACKUP/present" ]; then
+    [ -f "$BACKUP/COMPLETE" ] && [ -f "$BACKUP/target" ] || return 1
+    [ "$(cat "$BACKUP/target" 2>/dev/null)" = "/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar" ] || return 1
+    bp=0; ba=0
+    [ ! -f "$BACKUP/present" ] || bp=1
+    [ ! -f "$BACKUP/absent" ] || ba=1
+    [ $((bp + ba)) -eq 1 ] || return 1
+    if [ "$bp" = 1 ]; then
         [ -s "$BACKUP/carplay_hook.jar" ] || return 1
-        if [ -f "$BACKUP/cksum" ] && command -v cksum >/dev/null 2>&1; then
-            [ "$(cksum < "$BACKUP/carplay_hook.jar")" = "$(cat "$BACKUP/cksum")" ] || return 1
-        fi
-    elif [ -f "$BACKUP/absent" ]; then
-        :
+        [ -f "$BACKUP/cksum" ] || return 1
+        [ "$(cksum < "$BACKUP/carplay_hook.jar")" = "$(cat "$BACKUP/cksum")" ] || return 1
+        hmi_backup_project_managed "$BACKUP/carplay_hook.jar" && return 1
     else
-        return 1
+        [ ! -e "$BACKUP/carplay_hook.jar" ] || return 1
+        [ ! -e "$BACKUP/cksum" ] || return 1
     fi
+    return 0
 }
 
 strip_blocks(){
@@ -119,6 +139,15 @@ strip_blocks(){
       }
     ' "$1"
 }
+
+# Recheck the HMI recovery source immediately before the first APPLY mutation.
+# The outer transaction wrapper already performed the same trust check; this
+# closes the SD-card TOCTOU window between PREPARED and APPLY.
+verify_backup || {
+    echo "RESTORE_APPLY_PREFLIGHT=FAIL reason=HMI_BACKUP_CHANGED_OR_UNTRUSTED production_changed=NO"
+    exit 1
+}
+echo "RESTORE_APPLY_PREFLIGHT=PASS hmi_backup=TRUSTED production_changed=NO"
 
 # Stop the pixel sidecar first. It has no context writer in this branch.
 [ ! -x "$MIRROR_STOP" ] || /bin/sh "$MIRROR_STOP" >/dev/null 2>&1 || true
