@@ -227,6 +227,7 @@ public final class ClusterStateController {
         Object dm = displayManager();
         int actual = currentContext(dm);
         String state = readSmallState(DISPLAYABLE3_STATE_FILE, 4096);
+        boolean displayStateReadable = state.length() != 0;
         long stateTs = stateLong(state, "timestamp_ms", -1L);
         long stateAge = stateTs >= 0L && now >= stateTs ? now - stateTs : -1L;
         int backendReady = (int)stateLong(state, "backend_ready", -1L);
@@ -237,6 +238,8 @@ public final class ClusterStateController {
         long presented = stateLong(state, "presented_frames", -1L);
         long generation = stateLong(state, "generation", -1L);
         long sequence = stateLong(state, "sequence", -1L);
+        long h264Packets = stateLong(state, "h264_packets", -1L);
+        long decodedFrames = stateLong(state, "decoded_frames", -1L);
         String nativeWindow = stateValue(state, "native_window", "?");
         String kdWindow = stateValue(state, "kd_window", "?");
         String manager = stateValue(state, "manager", "?");
@@ -250,6 +253,8 @@ public final class ClusterStateController {
             + "/" + (rgiPresentationActive ? "1" : "0")
             + "/" + (baseActive ? "1" : "0")
             + "/" + (baseReady ? "1" : "0")
+            + "/" + (displayStatePresent ? "1" : "0")
+            + "/" + (displayStateReadable ? "1" : "0")
             + "/" + backendReady + "/" + nativePresent
             + "/" + visibleValid + "/" + visible
             + "/" + firstPresent + "/" + nativeWindow
@@ -274,6 +279,8 @@ public final class ClusterStateController {
             + " rgi=" + (rgiPresentationActive ? "1" : "0")
             + " base=" + (baseActive ? "1" : "0")
             + "/" + (baseReady ? "1" : "0")
+            + " display_state_present=" + (displayStatePresent ? "1" : "0")
+            + " display_state_readable=" + (displayStateReadable ? "1" : "0")
             + " display_state_age_ms=" + stateAge
             + " display_state_stale=" + (stale ? "1" : "0")
             + " backend_ready=" + backendReady
@@ -286,6 +293,8 @@ public final class ClusterStateController {
             + " presented=" + presented
             + " gen=" + generation
             + " seq=" + sequence
+            + " h264_packets=" + h264Packets
+            + " decoded_frames=" + decodedFrames
             + " manager=" + sanitizeStateValue(manager)
             + " oem_rev=" + oemGeometryRevision
             + " oem_status=" + sanitizeStateValue(lastOemProbeStatus)
@@ -309,6 +318,8 @@ public final class ClusterStateController {
             diag("OWNERSHIP_SUSPECT kind=DISPLAYABLE_STATE_STALE"
                 + " actual=" + actual
                 + " state_age_ms=" + stateAge
+                + " present=" + (displayStatePresent ? "1" : "0")
+                + " readable=" + (displayStateReadable ? "1" : "0")
                 + " base=" + (baseActive ? "1" : "0")
                 + "/" + (baseReady ? "1" : "0"));
         }
