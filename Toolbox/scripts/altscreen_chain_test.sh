@@ -347,8 +347,14 @@ runtime_owned_by_project(){
     [ ! -L "$root" ] || return 1
     marker="$root/$RUNTIME_OWNER"
     [ -f "$marker" ] || return 1
-    grep -Fxq 'owner=MMI-Cockpit-Carplay' "$marker" 2>/dev/null &&
-        grep -Fxq 'runtime=carplay-altscreen' "$marker" 2>/dev/null
+    grep -Fxq 'owner=MMI-Cockpit-Carplay' "$marker" 2>/dev/null || return 1
+    # Current markers also carry runtime=carplay-altscreen.  Accept the older
+    # one-line project owner marker for backward-compatible RESTORE, but if a
+    # runtime= field exists it must name this runtime exactly.
+    if grep -q '^runtime=' "$marker" 2>/dev/null; then
+        grep -Fxq 'runtime=carplay-altscreen' "$marker" 2>/dev/null || return 1
+    fi
+    return 0
 }
 
 runtime_empty_unowned_removable(){
