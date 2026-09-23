@@ -334,6 +334,14 @@ jobs:
 
           echo "V33_HMI_SHA256=$SHA"
 
+      - name: Verify complete V3.3 branch ZIP contract
+        run: |
+          set -euo pipefail
+          sh VERIFY-BRANCH-ZIP-READY.sh
+          grep -Fq 'branch=experiment/oem-layout-second-screen_v3.3' BRANCH-ZIP-READY.txt
+          grep -Fq 'vehicle_zip_status=READY_FOR_V3_3_VEHICLE_TEST' BRANCH-ZIP-READY.txt
+          echo 'V33_BRANCH_ZIP_CONTRACT=PASS'
+
       - name: Promote V3.3 HMI artifact
         run: |
           set -euo pipefail
