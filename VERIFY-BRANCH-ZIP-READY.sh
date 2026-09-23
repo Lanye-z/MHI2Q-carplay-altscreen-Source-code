@@ -8,6 +8,18 @@ HOOK="$ROOT/Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so"
 SUMS="$ROOT/SHA256SUMS.txt"
 
 fail(){ echo "BRANCH_ZIP_VERIFY=FAIL: $*" >&2; exit 1; }
+check_unique_keys(){
+    file=$1
+    dup=$(awk -F= '
+        /^[A-Za-z0-9_.-]+=/ {
+            if (++seen[$1] > 1) {
+                print $1
+                exit
+            }
+        }
+    ' "$file")
+    [ -z "$dup" ] || fail "duplicate metadata key in $file: $dup"
+}
 sha256_file(){
     if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print tolower($1)}'
     else shasum -a 256 "$1" | awk '{print tolower($1)}'; fi
@@ -20,6 +32,9 @@ file_cksum(){ cksum < "$1" | awk '{print $1}'; }
 [ -s "$JAR" ] || fail "V3 HMI JAR missing"
 [ -s "$HOOK" ] || fail "universal hook missing"
 [ -s "$SUMS" ] || fail "SHA256SUMS.txt missing"
+
+check_unique_keys "$READY"
+check_unique_keys "$HMI_INFO"
 
 grep -Fq 'BRANCH_ZIP_READY=YES' "$READY" || fail "branch ZIP is not marked ready"
 grep -Fq 'branch_zip_status=READY_FOR_VEHICLE_TEST' "$HMI_INFO" ||
