@@ -541,6 +541,30 @@ jobs:
               mirror_text = upsert(mirror_text, key, value)
           mirror_info.write_text(mirror_text)
 
+          # mirror BUILD_INFO is release evidence. Any V3.3 metadata update
+          # must refresh the release-local SHA table before the full verifier.
+          release_dir = root / "Toolbox/carplay_alt_screen/mirror_display/release"
+          release_sums = release_dir / "SHA256SUMS"
+          release_table = {}
+          for line in release_sums.read_text().splitlines():
+              parts = line.split(None, 1)
+              if len(parts) == 2:
+                  release_table[parts[1].strip()] = parts[0].lower()
+          for rel_name in [
+              "BUILD_INFO.txt",
+              "carplay-alt111-mirror-display",
+              "start_vehicle.sh",
+              "stop_vehicle.sh",
+          ]:
+              release_path = release_dir / rel_name
+              release_table[rel_name] = hashlib.sha256(
+                  release_path.read_bytes()
+              ).hexdigest()
+          release_sums.write_text("".join(
+              "%s %s\n" % (release_table[name], name)
+              for name in sorted(release_table)
+          ))
+
           for rel in [
               "Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh",
               "Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh",
