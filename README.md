@@ -1,6 +1,11 @@
-**V3 开发状态：CarPlay Instrument Cluster 真地图缩放协议已完成 STATIC_BINARY 级逆向确认，V3 已接入“方向盘滚轮 → epoch+seq 离散事件队列 → `changeMapZoomLevel` → iPhone 地图重渲染”控制链。** Wire contract 为 `params{uuid, zoomDirection}`，其中 `0=Zoom In`、`1=Zoom Out`、无 `zoomFactor`；滚轮发送门控由独立的 Java80 ownership state 提供，要求 CarPlay session active 且 `getCurrentContextID(1)==80`，不再依赖 OEM layout observer 或旧 Context76/displayable58 状态。V2 的 private111 / OMX / sidecar / displayable3 / Context80 显示链保持不动。实车仍需验证 completion 语义以及 Apple Maps / Amap 的真实缩放响应，详见 [OEM-LAYOUT-SECOND-SCREEN-V3-WHEEL-ZOOM.md](OEM-LAYOUT-SECOND-SCREEN-V3-WHEEL-ZOOM.md)。
-
-**实车状态：已完成本分支实车验证。** 当前版本已验证 private111 → stock OMX → Screen linearizer → decoded SHM → source-driven sidecar → displayable3 → Context80 全链路可长期运行；FULL / SMALL 可在同一 CarPlay 会话内通过 `updateViewArea` 动态切换，Sport Small 的 `-476` 平移也已实车生效。当前主要剩余问题不再是“能否点亮”，而是 **1440×542 源画面 → 1440×455 displayable3 的几何实现是否值得进一步改成更接近 OEM 的 1:1 + position/cropping 路径**。
+<!-- BRANCH_STATUS_BEGIN -->
+> [!IMPORTANT]
+> **分支用途：** 在 OEM 第二屏显示基础上加入第一代真正的 CarPlay 地图滚轮缩放：方向盘滚轮 → epoch/seq 离散队列 → 约 100 ms native drain → `changeMapZoomLevel(uuid, zoomDirection)` → iPhone 地图重渲染。
+>
+> **上车测试结论：** 已实车验证。后续正确测试包记录到 172/172 次缩放提交成功、方向匹配 86/86；Apple Maps 与高德地图能够随滚轮真实缩放。百度地图侧命令链可成功返回，但地图本身未产生可见缩放响应。第二屏主显示链保持正常。
+>
+> **当前定位：** 第一代“真实地图缩放”成功基线；滚轮手感较基础，后续由 V3.1 的 target-follow 方案继续优化。
+<!-- BRANCH_STATUS_END -->
 
 > [!IMPORTANT]
 > **当前状态与安全提示**
