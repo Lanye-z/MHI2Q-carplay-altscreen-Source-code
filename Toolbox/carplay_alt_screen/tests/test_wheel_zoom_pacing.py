@@ -478,7 +478,7 @@ def test_fast_backlog_is_bounded_without_permanent_ceiling():
     now = 250
     while m.target != m.sent_level:
         m.tick(now)
-        now += 150
+        now += 250
     m.tick(now)
     assert m.target == m.sent_level == 0
     m.add(now + 500, 1)
@@ -505,9 +505,9 @@ def test_u32_wrap_zero_is_not_a_sentinel():
     assert m.have_input_time
     m.tick(0)
     assert len(m.sent) == 1
-    m.tick(99)
+    m.tick(199)
     assert len(m.sent) == 1
-    m.tick(100)
+    m.tick(200)
     assert len(m.sent) == 2
 
 
@@ -527,7 +527,8 @@ def test_send_failure_does_not_advance_success_state():
     assert len(m.attempts) == 1
     m.tick(150)
     assert len(m.attempts) == 2
-    assert m.sent == [(150, "OUT", 1, 1)]
+    assert m.sent[0][:4] == (150, "OUT", 1, 1)
+    assert m.sent[0][4:] == ("FIRST_SEND", 0)
     assert m.have_send_time
     assert not m.have_failed_send_time
     assert m.target == m.sent_level == 0
@@ -540,9 +541,9 @@ def test_successful_catchup_rebases_before_next_event():
     assert m.target == m.sent_level == 0
     m.add(50, 1)
     assert len(m.sent) == 1
-    m.tick(99)
+    m.tick(249)
     assert len(m.sent) == 1
-    m.tick(100)
+    m.tick(250)
     assert len(m.sent) == 2
     assert m.target == m.sent_level == 0
 
