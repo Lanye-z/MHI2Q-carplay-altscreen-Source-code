@@ -39,6 +39,13 @@ if [ "${ALTS_OPLOG_CAPTURED:-0}" != 1 ]; then
         echo "FAIL: no Toolbox SD card discovered; INSTALL not started and no production files changed"
         exit 1
     }
+    SD_RW_HELPER="$journal_volume/Toolbox/scripts/altscreen_sd_writable.sh"
+    [ -f "$SD_RW_HELPER" ] || { echo "INSTALL=REFUSED reason=SD_WRITABLE_HELPER_MISSING production_changed=NO"; exit 127; }
+    . "$SD_RW_HELPER"
+    altscreen_sd_ensure_writable "$journal_volume" INSTALL_JOURNAL || {
+        echo "INSTALL=REFUSED reason=SD_NOT_WRITABLE production_changed=NO"
+        exit 1
+    }
 
     journal_dir="$journal_volume/MMI-Cockpit-Carplay/logs/operations"
     ensure_dirs "$journal_dir" 2>/dev/null || {

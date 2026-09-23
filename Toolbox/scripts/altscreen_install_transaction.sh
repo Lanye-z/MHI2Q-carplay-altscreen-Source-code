@@ -20,6 +20,10 @@ else
   done
 fi
 [ -n "$VOLUME" ] && [ -d "$VOLUME/Toolbox" ] || { echo "INSTALL=REFUSED reason=SD_NOT_FOUND production_changed=NO"; exit 1; }
+SD_RW_HELPER="$VOLUME/Toolbox/scripts/altscreen_sd_writable.sh"
+[ -f "$SD_RW_HELPER" ] || { echo "INSTALL=REFUSED reason=SD_WRITABLE_HELPER_MISSING production_changed=NO"; exit 127; }
+. "$SD_RW_HELPER"
+altscreen_sd_ensure_writable "$VOLUME" INSTALL_TRANSACTION || { echo "INSTALL=REFUSED reason=SD_NOT_WRITABLE production_changed=NO"; exit 1; }
 
 p(){ printf '%s%s\n' "$ROOT" "$1"; }
 mount_app_rw(){ [ "$TESTING" = 1 ] || mount -uw /mnt/app; }

@@ -32,6 +32,10 @@ if [ "${ALTS_OPLOG_CAPTURED:-0}" != 1 ]; then
         echo "RESTORE=REFUSED reason=SD_WITH_TOOLBOX_NOT_FOUND production_changed=NO"
         exit 1
     }
+    SD_RW_HELPER="$journal_volume/Toolbox/scripts/altscreen_sd_writable.sh"
+    [ -f "$SD_RW_HELPER" ] || { echo "RESTORE=REFUSED reason=SD_WRITABLE_HELPER_MISSING production_changed=NO"; exit 127; }
+    . "$SD_RW_HELPER"
+    altscreen_sd_ensure_writable "$journal_volume" STORE_RESTORE_JOURNAL || { echo "RESTORE=REFUSED reason=SD_NOT_WRITABLE production_changed=NO"; exit 1; }
 
     journal_stamp=$(date +%Y%m%d_%H%M%S 2>/dev/null || echo unknown)
     journal_dir="$journal_volume/MMI-Cockpit-Carplay/logs/operations"

@@ -41,6 +41,13 @@ if [ "${ALTS_START_CAPTURED:-0}" != 1 ]; then
     fi
     journal_storage=TMP
     if [ -n "$journal_volume" ] && [ -d "$journal_volume/Toolbox" ]; then
+        SD_RW_HELPER="$journal_volume/Toolbox/scripts/altscreen_sd_writable.sh"
+        [ -f "$SD_RW_HELPER" ] || { echo "START_FAIL_STAGE=SD_WRITABLE rc=127 reason=SD_WRITABLE_HELPER_MISSING"; exit 127; }
+        . "$SD_RW_HELPER"
+        altscreen_sd_ensure_writable "$journal_volume" START_JOURNAL || {
+            echo "START_FAIL_STAGE=SD_WRITABLE rc=1 reason=SD_NOT_WRITABLE"
+            exit 1
+        }
         journal_dir="$journal_volume/MMI-Cockpit-Carplay/logs/operations"
         if ensure_dirs "$journal_dir" 2>/dev/null; then
             journal="$journal_dir/$journal_name"
@@ -113,6 +120,10 @@ else
     done
 fi
 [ -n "$VOLUME" ] || { echo "START_FAIL_STAGE=DISCOVER_SD rc=1 reason=no_Toolbox_SD"; echo "FAIL: no Toolbox SD card discovered"; exit 1; }
+SD_RW_HELPER="$VOLUME/Toolbox/scripts/altscreen_sd_writable.sh"
+[ -f "$SD_RW_HELPER" ] || { echo "START_FAIL_STAGE=SD_WRITABLE rc=127 reason=SD_WRITABLE_HELPER_MISSING"; exit 127; }
+. "$SD_RW_HELPER"
+altscreen_sd_ensure_writable "$VOLUME" START_RUNTIME || { echo "START_FAIL_STAGE=SD_WRITABLE rc=1 reason=SD_NOT_WRITABLE"; exit 1; }
 echo "DIAGNOSTICS_VOLUME=$VOLUME"
 CHAIN_STATE="$VOLUME/MMI-Cockpit-Carplay/state"
 

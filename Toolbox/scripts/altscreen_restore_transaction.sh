@@ -11,8 +11,8 @@ SD_CANDIDATES="/net/mmx/fs/sda0 /net/mmx/fs/sda1 /net/mmx/fs/sdb0 /net/mmx/fs/sd
 sd_probe_write(){
   base=$1; label=$2
   [ -d "$base" ] || { echo "SD_WRITE_PROBE scope=$label path=$base result=SKIP reason=DIR_ABSENT"; return 0; }
-  probe="$base/.altscreen-rw-probe"
-  err="/tmp/altscreen_sd_probe.err"
+  probe="$base/.altscreen-rw-probe.$$"
+  err="/tmp/altscreen_sd_probe_$$.err"
   rm -f "$err" "$probe" 2>/dev/null || true
   if ( umask 077; printf '%s\n' "altscreen-write-probe" > "$probe" ) 2>"$err"; then
     rm -f "$probe" 2>/dev/null || true
@@ -80,6 +80,14 @@ else
   done
 fi
 [ -n "$VOLUME" ] && [ -d "$VOLUME/Toolbox" ] || { echo "RESTORE=REFUSED reason=SD_NOT_FOUND production_changed=NO"; exit 1; }
+SD_RW_HELPER="$VOLUME/Toolbox/scripts/altscreen_sd_writable.sh"
+[ -f "$SD_RW_HELPER" ] || { echo "RESTORE=REFUSED reason=SD_WRITABLE_HELPER_MISSING production_changed=NO"; exit 127; }
+. "$SD_RW_HELPER"
+if ! altscreen_sd_ensure_writable "$VOLUME" RESTORE_TRANSACTION; then
+  echo "RESTORE=REFUSED reason=SD_NOT_WRITABLE production_changed=NO"
+  emit_sd_diagnostics
+  exit 1
+fi
 p(){ printf '%s%s\n' "$ROOT" "$1"; }
 mount_app_rw(){ [ "$TESTING" = 1 ] || mount -uw /mnt/app; }
 mount_app_ro(){ [ "$TESTING" = 1 ] || mount -ur /mnt/app; }
