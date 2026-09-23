@@ -620,7 +620,9 @@ case "$CMD" in
     diag=$(persistent_diag_helper || true)
     [ -n "$diag" ] && [ -f "$diag" ] ||
         fail "universal persistent diagnostics helper is missing; production files unchanged"
-    echo "RESTORE_ROUTER_PRECHECK=PASS runtime_cleanup=SAFE persistent_diag=PRESENT production_changed=NO"
+    /bin/sh "$diag" remove-precheck ||
+        fail "persistent diagnostics removal precheck failed; production files unchanged"
+    echo "RESTORE_ROUTER_PRECHECK=PASS runtime_cleanup=SAFE persistent_diag=SAFE production_changed=NO"
     ;;
   restore)
     route=$(route_for_restore) || fail "no trusted restore route/recovery set is available"
@@ -633,6 +635,8 @@ case "$CMD" in
         diag=$(persistent_diag_helper || true)
         [ -n "$diag" ] && [ -f "$diag" ] ||
             fail "universal persistent diagnostics helper is missing; refusing partial restore"
+        /bin/sh "$diag" remove-precheck ||
+            fail "persistent diagnostics removal precheck changed after outer preflight"
         /bin/sh "$diag" remove || fail "could not disable universal persistent diagnostics"
     fi
     delegate "$route" restore || exit $?
