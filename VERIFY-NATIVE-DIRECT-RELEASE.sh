@@ -439,10 +439,11 @@ if binary_strings "$BIN" | grep -Fq 'screen_read_window'; then
 fi
 
 if [ "$HOOK_PENDING" = 0 ]; then
-    binary_strings "$HOOK" | grep -Fq "$AUTH_MARKER" ||
-        fail "universal hook binary is stale: authorization marker path mismatch"
-    if binary_strings "$HOOK" | grep -Fq "$LEGACY_AUTH_MARKER"; then
-        fail "universal hook binary still embeds legacy authorization marker"
+    if binary_strings "$HOOK" | grep -Fq '/mnt/app/root/carplay-altscreen/state/fullchain_probe'; then
+        fail "V3.4 universal hook still embeds retired persistent authorization marker"
+    fi
+    if binary_strings "$HOOK" | grep -Fq '/mnt/app/root/hooks/.mibcarplay_fullchain_probe'; then
+        fail "V3.4 universal hook still embeds legacy authorization marker"
     fi
     binary_strings "$HOOK" | grep -Fq 'rate_policy=uncapped_source_callbacks' ||
         fail "universal hook binary is stale: rebuild/promote uncapped source-callback readback"
