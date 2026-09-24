@@ -100,7 +100,7 @@ CONTROLLER="$VOLUME/Toolbox/scripts/altscreen_chain_test.sh"
 APPLY="$VOLUME/Toolbox/scripts/altscreen_restore_apply.sh"
 INSTALL_TXN_HELPER="$VOLUME/Toolbox/scripts/altscreen_install_transaction.sh"
 INSTALL_TXN="$SD/install-transaction/active"
-HMI="$BACKUP/basevideo3-hmi-original"; NATIVE="$BACKUP/original"
+NATIVE="$BACKUP/original"
 RUNTIME="$(p /mnt/app/root/carplay-altscreen)"; STAGE="$(p /mnt/app/root/.carplay-altscreen.new)"; PREV="$(p /mnt/app/root/.carplay-altscreen.previous)"
 SI="$(p /mnt/system/etc/eso/production/smartphone_integrator.json)"; DIO="$(p /mnt/system/etc/eso/production/dio_manager.json)"; PF="$(p /mnt/system/etc/pf.conf)"
 JAR="$(p /mnt/app/eso/hmi/lsd/jars/carplay_hook.jar)"; LEGACY_HOOK="$(p /mnt/app/root/hooks/libcarplay_altscreen.so)"; LIBTARGET="$(p /mnt/app/root/lib-target)"
@@ -121,25 +121,6 @@ size(){ n=$(wc -c < "$1" 2>/dev/null || echo 0); set -- $n; echo "${1:-0}"; }
 same(){ [ -f "$1" ] && [ -f "$2" ] && [ "$(size "$1")" = "$(size "$2")" ] && [ "$(cksum < "$1")" = "$(cksum < "$2")" ]; }
 find_startup(){ for f in "$(p /mnt/system/etc/boot/startup.sh)" "$(p /etc/boot/startup.sh)"; do [ -f "$f" ] && { echo "$f"; return 0; }; done; return 1; }
 
-hmi_backup_project_managed(){
-  jar=$1
-  [ -f "$jar" ] || return 1
-  # Project-only ZIP member names remain visible in the JAR central directory.
-  # Reject them even when the file is internally consistent: checksum-valid is
-  # not the same thing as OEM-original.
-  grep -Fq 'com/luka/carplay/cluster/ClusterStateController.class' "$jar" 2>/dev/null && return 0
-  grep -Fq 'com/luka/carplay/cluster/WheelZoomBridge.class' "$jar" 2>/dev/null && return 0
-  grep -Fq 'com/luka/carplay/cluster/ClusterLayerController.class' "$jar" 2>/dev/null && return 0
-
-  set -- $(cksum < "$jar" 2>/dev/null || echo "0 0")
-  sum=${1:-0}
-  case "$(size "$jar"):$sum" in
-    # Confirmed project-managed JAR recovered by vehicle log 41 plus older
-    # pre-WheelZoomBridge project identities retained for compatibility.
-    143072:1515795662|149510:180684234|149979:2362627699|150026:3028143795) return 0 ;;
-    *) return 1 ;;
-  esac
-}
 
 strip_startup_blocks_preflight(){
   awk '
@@ -367,63 +348,6 @@ verify_restore_rollback(){
   return 0
 }
 
-verify_hmi(){
-  [ -f "$HMI/COMPLETE" ] && [ -f "$HMI/target" ] || {
-    log "RESTORE_HMI_BACKUP=FAIL reason=METADATA_INCOMPLETE production_changed=NO"
-    return 1
-  }
-  [ "$(cat "$HMI/target" 2>/dev/null)" = /mnt/app/eso/hmi/lsd/jars/carplay_hook.jar ] || {
-    log "RESTORE_HMI_BACKUP=FAIL reason=TARGET_MISMATCH production_changed=NO"
-    return 1
-  }
-
-  hp=0; ha=0
-  [ ! -f "$HMI/present" ] || hp=1
-  [ ! -f "$HMI/absent" ] || ha=1
-  [ $((hp + ha)) -eq 1 ] || {
-    log "RESTORE_HMI_BACKUP=FAIL reason=PRESENCE_METADATA_AMBIGUOUS production_changed=NO"
-    return 1
-  }
-
-  if [ "$hp" = 1 ]; then
-    [ -s "$HMI/carplay_hook.jar" ] || {
-      log "RESTORE_HMI_BACKUP=FAIL reason=JAR_MISSING_OR_EMPTY production_changed=NO"
-      return 1
-    }
-    [ -f "$HMI/cksum" ] || {
-      log "RESTORE_HMI_BACKUP=FAIL reason=CKSUM_METADATA_MISSING production_changed=NO"
-      return 1
-    }
-    [ "$(cksum < "$HMI/carplay_hook.jar")" = "$(cat "$HMI/cksum")" ] || {
-      log "RESTORE_HMI_BACKUP=FAIL reason=CKSUM_MISMATCH production_changed=NO"
-      return 1
-    }
-    if hmi_backup_project_managed "$HMI/carplay_hook.jar"; then
-      log "RESTORE_HMI_BACKUP=FAIL reason=HMI_BACKUP_PROJECT_MANAGED action=DO_NOT_RESTORE_THIS_BACKUP production_changed=NO"
-      return 1
-    fi
-    if [ -f "$JAR" ] && ! hmi_backup_project_managed "$JAR" && ! same "$HMI/carplay_hook.jar" "$JAR"; then
-      log "RESTORE_HMI_BACKUP=FAIL reason=LIVE_HMI_CONFLICT_WITH_TRUSTED_BACKUP action=VERIFY_RECOVERY_MEDIA production_changed=NO"
-      return 1
-    fi
-    log "RESTORE_HMI_BACKUP=PASS original=present project_managed=NO production_changed=NO"
-  else
-    [ ! -e "$HMI/carplay_hook.jar" ] || {
-      log "RESTORE_HMI_BACKUP=FAIL reason=ABSENT_MARKER_WITH_STALE_JAR production_changed=NO"
-      return 1
-    }
-    [ ! -e "$HMI/cksum" ] || {
-      log "RESTORE_HMI_BACKUP=FAIL reason=ABSENT_MARKER_WITH_STALE_CKSUM production_changed=NO"
-      return 1
-    }
-    if [ -f "$JAR" ] && ! hmi_backup_project_managed "$JAR"; then
-      log "RESTORE_HMI_BACKUP=FAIL reason=ABSENT_BACKUP_LIVE_JAR_NOT_PROJECT_MANAGED action=DO_NOT_DELETE_UNKNOWN_HMI production_changed=NO"
-      return 1
-    fi
-    log "RESTORE_HMI_BACKUP=PASS original=absent live_state=ABSENT_OR_PROJECT_MANAGED production_changed=NO"
-  fi
-  return 0
-}
 
 
 detect_mixed_restore_state(){
@@ -558,10 +482,9 @@ if [ -d "$INSTALL_TXN" ]; then
 fi
 recover_stale || fail "previous restore transaction could not be recovered"
 [ -f "$CONTROLLER" ] && [ -f "$APPLY" ] || fail "restore controller/apply helper missing"
-verify_hmi || fail "trusted HMI backup unavailable/damaged or project-managed"
 preflight_startup || fail "startup restore preflight failed"
 /bin/sh "$CONTROLLER" restore-precheck || fail "native/runtime restore precheck failed"
-log "RESTORE_PREFLIGHT=PASS hmi=TRUSTED startup=SAFE native_runtime=SAFE production_changed=NO"
+log "RESTORE_PREFLIGHT=PASS hmi=PROJECT_OWNED_DELETE startup=SAFE native_runtime=SAFE production_changed=NO"
 detect_mixed_restore_state
 snapshot || { rm -rf "$TXN" 2>/dev/null || true; fail "pre-restore transaction snapshot failed"; }
 touch "$TXN/APPLYING" || fail "cannot mark transaction APPLYING"
@@ -625,7 +548,7 @@ if [ -f "$BACKUP/universal-hook-original/COMPLETE" ]; then
     *) fail "invalid universal-hook backup state" ;;
   esac
 fi
-if [ -f "$HMI/present" ]; then same "$HMI/carplay_hook.jar" "$JAR" || fail "carplay_hook.jar verification failed"; else [ ! -e "$JAR" ] || fail "carplay_hook.jar should be absent"; fi
+[ ! -e "$JAR" ] || fail "project-owned carplay_hook.jar remains after restore"
 [ ! -e "$RUNTIME" ] && [ ! -e "$STAGE" ] && [ ! -e "$PREV" ] || fail "managed runtime residue remains after restore"
 STARTUP=$(find_startup) || fail "startup.sh missing after restore"
 ! grep -E 'BEGIN ALT111 (MIRROR|BASEVIDEO3) AUTOSTART|BEGIN ALTSCREEN DIAGNOSTICS' "$STARTUP" >/dev/null 2>&1 || fail "AltScreen autostart/diagnostic block remains"
