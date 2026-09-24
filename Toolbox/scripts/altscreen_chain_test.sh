@@ -168,7 +168,7 @@ validate_runtime_sources(){
         [ -s "$src" ] || { echo "FAIL: runtime companion missing/empty: $src" >&2; return 1; }
         case "$name" in *.sh) sh -n "$src" || { echo "FAIL: runtime companion shell syntax: $name" >&2; return 1; } ;; esac
     done
-    for name in carplay-alt111-mirror-display start_vehicle.sh stop_vehicle.sh BUILD_INFO.txt; do
+    for name in carplay-alt111-mirror-display start_vehicle.sh stop_vehicle.sh stream_supervisor.sh BUILD_INFO.txt; do
         [ -s "$MIRROR_SD/$name" ] || { echo "FAIL: integrated direct-display sidecar missing/empty: $MIRROR_SD/$name" >&2; return 1; }
     done
     grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$MIRROR_SD/BUILD_INFO.txt" 2>/dev/null &&
@@ -178,6 +178,7 @@ validate_runtime_sources(){
     }
     sh -n "$MIRROR_SD/start_vehicle.sh" || return 1
     sh -n "$MIRROR_SD/stop_vehicle.sh" || return 1
+    sh -n "$MIRROR_SD/stream_supervisor.sh" || return 1
     return 0
 }
 
@@ -238,7 +239,7 @@ install_runtime_scripts(){
         }
     done
     ensure_dirs "$RUNTIME_STAGE/bin/mirror" || { rm -rf "$RUNTIME_STAGE" 2>/dev/null || true; mount_app_ro >/dev/null 2>&1 || true; return 1; }
-    for name in carplay-alt111-mirror-display start_vehicle.sh stop_vehicle.sh BUILD_INFO.txt LICENSE.MMI-MIRROR SHA256SUMS; do
+    for name in carplay-alt111-mirror-display start_vehicle.sh stop_vehicle.sh stream_supervisor.sh BUILD_INFO.txt LICENSE.MMI-MIRROR SHA256SUMS; do
         [ -f "$MIRROR_SD/$name" ] || continue
         cp "$MIRROR_SD/$name" "$RUNTIME_STAGE/bin/mirror/$name" || {
             rm -rf "$RUNTIME_STAGE" 2>/dev/null || true
@@ -246,7 +247,7 @@ install_runtime_scripts(){
             return 1
         }
     done
-    chmod 755 "$RUNTIME_STAGE/bin/mirror/carplay-alt111-mirror-display"               "$RUNTIME_STAGE/bin/mirror/start_vehicle.sh"               "$RUNTIME_STAGE/bin/mirror/stop_vehicle.sh" || {
+    chmod 755 "$RUNTIME_STAGE/bin/mirror/carplay-alt111-mirror-display"               "$RUNTIME_STAGE/bin/mirror/start_vehicle.sh"               "$RUNTIME_STAGE/bin/mirror/stop_vehicle.sh"               "$RUNTIME_STAGE/bin/mirror/stream_supervisor.sh" || {
         rm -rf "$RUNTIME_STAGE" 2>/dev/null || true
         mount_app_ro >/dev/null 2>&1 || true
         return 1
@@ -329,6 +330,9 @@ cleanup_volatile_runtime(){
           "$(p /tmp/altscreen_mirror.stop.requested)" "$(p /tmp/altscreen_mirror.log)" \
           "$(p /tmp/altscreen_mirror.autorestart.log)" "$(p /tmp/altscreen_mirror.ready)" \
           "$(p /tmp/altscreen_mirror.phone111.gate)" \
+          "$(p /tmp/altscreen-private111.stream-ready)" "$(p /tmp/altscreen-private111.stream-ready.new)" \
+          "$(p /tmp/altscreen_stream_supervisor.pid)" "$(p /tmp/altscreen_stream_supervisor.active)" \
+          "$(p /tmp/altscreen_stream_supervisor.log)" \
           "$(p /tmp/mmi-mirror-active)" "$(p /tmp/mmi-mirror-basevideo.ready)" \
           "$(p /tmp/mmi-mirror-controller.started)" 2>/dev/null || true
     rmdir "$(p /tmp/altscreen_mirror.recovery.lock)" 2>/dev/null || true
