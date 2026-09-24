@@ -22,6 +22,11 @@ int alt_request_cluster_after_main(void *receiver);
 void *alt_build_cluster_display(void);
 void *alt_info_add_cluster_display(void *container);
 void *alt_advertise_features(void *value);
+/* V3.5 cold-start contract: capability negotiation may use the measured
+ * 1440x542 B9 bootstrap canvas before Screen display-1 is queryable.  The
+ * private renderer still requires a live runtime geometry match. */
+int alt_airplay_negotiation_geometry_ready(void);
+int alt_airplay_validate_runtime_geometry(uint32_t width, uint32_t height);
 void alt_note_control_command(void *session, void *cmd_name, void *arg);
 void alt_note_stream_instance(void *stream, int created);
 void alt_note_displays_container(const char *tag, void *container);
