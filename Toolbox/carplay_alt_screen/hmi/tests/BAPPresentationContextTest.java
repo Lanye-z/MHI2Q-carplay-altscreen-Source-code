@@ -10,19 +10,20 @@ public final class BAPPresentationContextTest {
         if(!value)throw new RuntimeException(message);
     }
     private static final class Calls implements InvocationHandler {
-        int rgOn,rgOff,rgType,descriptor,nextDistance,exitView,lane,maneuverState,fct22;
+        int rgStatus,rgType,descriptor,nextDistance,exitView,lane,maneuverState;
+        int fct19,fct21,fct22;
         int lastTimeType=-1;
         public Object invoke(Object p,Method m,Object[] a){
             String n=m.getName();
-            if(n.equals("updateRGStatus")){
-                int v=((Integer)a[0]).intValue();
-                if(v==1)rgOn++; else if(v==0)rgOff++;
-            } else if(n.equals("updateActiveRGType")) rgType++;
+            if(n.equals("updateRGStatus")) rgStatus++;
+            else if(n.equals("updateActiveRGType")) rgType++;
             else if(n.equals("updateManeuverDescriptor")) descriptor++;
             else if(n.equals("updateDistanceToNextManeuver")) nextDistance++;
             else if(n.equals("updateExitView")) exitView++;
             else if(n.equals("updateLaneGuidance")) lane++;
             else if(n.equals("updateManeuverState")) maneuverState++;
+            else if(n.equals("updateCurrentPositionInfo")) fct19++;
+            else if(n.equals("updateDistanceToDestination")) fct21++;
             else if(n.equals("updateTimeToDestination")){
                 fct22++; lastTimeType=((Integer)a[0]).intValue();
             }
@@ -45,51 +46,52 @@ public final class BAPPresentationContextTest {
         require(bridge.init(raw),"init failed");
         bridge.onStart();
 
-        require(cluster.getTestDsiContainer().isRgActive(),"OEM rgActive not forced");
-        require(cluster.isRgiDataValidForTest(),"OEM rgiDataValid not forced");
-        require(cluster.getCombiBAPListenerCombiService() instanceof GatedCombiService,
-            "presentation gate missing");
-        GatedCombiService gate=(GatedCombiService)cluster.getCombiBAPListenerCombiService();
-        require(gate.isPresentationContextBlocked(),"presentation fields not blocked");
-        require(calls.rgOn>=1&&calls.rgType>=1,"RGStatus/ActiveRGType sync missing");
-        require(calls.descriptor>=1&&calls.nextDistance>=1&&calls.exitView>=1,
-            "sync(0) neutral group incomplete");
-        require(calls.lane>=1&&calls.maneuverState>=1,
-            "neutral lane/maneuver state missing");
+        require(!cluster.getTestDsiContainer().isRgActive(),
+            "wrong-window regression: rgActive must remain untouched");
+        require(!cluster.isRgiDataValidForTest(),
+            "wrong-window regression: rgiDataValid must remain untouched");
+        require(cluster.getCombiBAPListenerCombiService()==raw,
+            "gate should stay lazy until a lower-bar field is owned");
 
-        RouteGuidance.State eta=new RouteGuidance.State();
-        eta.dirtyMask=RouteGuidance.State.DIRTY_ETA;
-        eta.etaSeconds=2000000000;
-        bridge.update(eta);
-        require(calls.fct22>=1,"Fct22 not published");
+        RouteGuidance.State s=new RouteGuidance.State();
+        s.dirtyMask=RouteGuidance.State.DIRTY_CURRENT_ROAD
+            |RouteGuidance.State.DIRTY_DIST_DEST
+            |RouteGuidance.State.DIRTY_ETA;
+        s.currentRoad="CarPlay Road";
+        s.distDestM=3200;
+        s.etaSeconds=2000000000;
+        bridge.update(s);
+
+        require("CarPlay Road".equals(cluster.getTestCurrentStreet()),
+            "KOMO current street not updated");
+        require(cluster.getTestDistanceMeters()==3200,
+            "KOMO distance not updated");
+        require(cluster.isTestArrivalValid(),
+            "KOMO ETA not marked valid");
+        require(cluster.getTestArrivalMillis()==2000000000L*1000L,
+            "KOMO ETA must receive UTC milliseconds");
+        require(cluster.getTestFollowInfoFlushCount()>=2,
+            "KOMO follow-info not flushed");
+        require(calls.fct19>=1&&calls.fct21>=1&&calls.fct22>=1,
+            "BAP lower-bar fields not retained");
         require(calls.lastTimeType==1,"Fct22 must remain absolute ETA Type1");
 
-        bridge.onShutdown();
-        require(!cluster.getTestDsiContainer().isRgActive(),"OEM rgActive not restored");
-        require(!cluster.isRgiDataValidForTest(),"OEM rgiDataValid not restored");
-        require(cluster.getCombiBAPListenerCombiService()==raw,"stock listener not restored");
-        require(calls.rgOff>=1,"RGStatus(0) teardown missing");
+        require(calls.rgStatus==0&&calls.rgType==0&&calls.descriptor==0
+            &&calls.nextDistance==0&&calls.exitView==0
+            &&calls.lane==0&&calls.maneuverState==0,
+            "wrong-window regression: RGI/maneuver presentation call emitted");
+        require(!cluster.getTestDsiContainer().isRgActive(),
+            "rgActive changed after gray-bar update");
+        require(!cluster.isRgiDataValidForTest(),
+            "rgiDataValid changed after gray-bar update");
 
-        /*
-         * Preserve an OEM route that was already active before CarPlay.
-         * The final state must be restored, not forced inactive.
-         */
-        ClusterService cluster2=new ClusterService(raw);
-        cluster2.getTestDsiContainer().setRgActive(true);
-        cluster2.updateRGIString(new short[]{7});
-        Navigation.setInstance(new Navigation(cluster2));
-        BAPBridge bridge2=new BAPBridge();
-        require(bridge2.init(raw),"second init failed");
-        bridge2.onStart();
-        bridge2.onShutdown();
-        require(cluster2.getTestDsiContainer().isRgActive(),
-            "pre-existing OEM rgActive was not restored");
-        require(cluster2.isRgiDataValidForTest(),
-            "pre-existing OEM rgiDataValid was not restored");
-        require(cluster2.getCombiBAPListenerCombiService()==raw,
-            "second stock listener not restored");
+        bridge.onShutdown();
+        require(cluster.getCombiBAPListenerCombiService()==raw,
+            "stock listener not restored");
+        require(calls.rgStatus==0,"shutdown must not synthesize RGStatus");
 
         Navigation.setInstance(null);
-        System.out.println("BAP_PRESENTATION_CONTEXT=PASS policy=MINIMAL_NEUTRAL_SYNC_F17_39_23_18_49 restore_previous_oem=YES");
+        System.out.println(
+            "BAP_PRESENTATION_CONTEXT=PASS policy=KOMO_GRAY_BAR_NO_RGI_PRESENTATION wrong_window=BLOCKED");
     }
 }

@@ -1,3 +1,5 @@
+> **V3.4 实车修正（2026-09-24）**：上一版通过 `rgActive/rgiDataValid + Fct17/Fct39` 激活 OEM Route Guidance，实车会错误拉起 maneuver/箭头小窗。当前 V3.4 已撤销该 presentation 激活路径，改为直接镜像 CarPlay 的当前道路、剩余距离和 ETA 到 `ClusterService/KOMO follow-info`，目标仅更新地图底部灰色 route-info 条；不写 RGStatus/ActiveRGType，不置 RGI valid，不主动激活箭头窗。
+
 <!-- BRANCH_STATUS_BEGIN -->
 > [!IMPORTANT]
 > **分支用途：** 当前候选实验主线。继承 V3.1 后期 `OEM_TARGET_FOLLOW_V1` 滚轮逻辑，重点修复 V3.1 的纵向几何：保留 OEM 横向安全范围，同时把纵向 safeArea 从局部 `y=49,h=300` 放开到地图有效高度 `y=0,h=455`；另修复 future frame timestamp 可能误报 stall 的边缘问题。

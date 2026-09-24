@@ -7,6 +7,11 @@ public class ClusterService {
     private CombiBAPServiceNavi service;
     private boolean rgiDataValid;
     private final TestDsiContainer dsi = new TestDsiContainer();
+    private String testCurrentStreet = null;
+    private int testDistanceMeters = -1;
+    private long testArrivalMillis = -1L;
+    private boolean testArrivalValid;
+    private int testFollowInfoFlushCount;
 
     public ClusterService() {}
     public ClusterService(CombiBAPServiceNavi value) { service = value; }
@@ -19,7 +24,21 @@ public class ClusterService {
         rgiDataValid = value != null && value.length > 0;
     }
     public void updateRgActive(boolean value) {}
+    public void updateCurrentStreet(String value) { testCurrentStreet = value; }
+    protected void updateDistanceToDestination(int meters, boolean stopover) {
+        testDistanceMeters = meters;
+    }
+    protected void updateArrivalTime(boolean valid, long millis, boolean timezoneOffset) {
+        testArrivalValid = valid;
+        testArrivalMillis = millis;
+    }
+    public void updateKOMOFollowInfo() { testFollowInfoFlushCount++; }
     public boolean isRgiDataValidForTest() { return rgiDataValid; }
+    public String getTestCurrentStreet() { return testCurrentStreet; }
+    public int getTestDistanceMeters() { return testDistanceMeters; }
+    public long getTestArrivalMillis() { return testArrivalMillis; }
+    public boolean isTestArrivalValid() { return testArrivalValid; }
+    public int getTestFollowInfoFlushCount() { return testFollowInfoFlushCount; }
     public TestDsiContainer getTestDsiContainer() { return dsi; }
 
     public static final class TestDsiContainer {
