@@ -12,6 +12,8 @@ public class ClusterService {
     private long testArrivalMillis = -1L;
     private boolean testArrivalValid;
     private int testFollowInfoFlushCount;
+    /* Test-only observation state. The vehicle class is not replaced by this stub. */
+    private boolean komoFollowMode;
 
     public ClusterService() {}
     public ClusterService(CombiBAPServiceNavi value) { service = value; }
@@ -39,6 +41,7 @@ public class ClusterService {
     public long getTestArrivalMillis() { return testArrivalMillis; }
     public boolean isTestArrivalValid() { return testArrivalValid; }
     public int getTestFollowInfoFlushCount() { return testFollowInfoFlushCount; }
+    public void setTestKomoFollowMode(boolean value) { komoFollowMode = value; }
     public TestDsiContainer getTestDsiContainer() { return dsi; }
 
     public static final class TestDsiContainer {
