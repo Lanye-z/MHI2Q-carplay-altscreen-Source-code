@@ -226,3 +226,65 @@ MMI-Cockpit-Carplay/backup/
 ```
 
 与这个 rescue backup 完全分开，最终删除不会修改 OEM backup。
+
+## 2026-09-24 上车前收口：V3.4 RESTORE readiness gate
+
+当前版本不再把旧的 `backup/ORIGINAL/` 视为可直接进入急救流程的正式恢复介质。
+最新 V3.4 的 recovery route 使用：
+
+```text
+MMI-Cockpit-Carplay/backup/original/
+```
+
+所以如果 CHECK 只发现旧的大写目录，会明确拒绝并记录：
+
+```text
+BACKUP_TRUST=FAIL
+reason=CANONICAL_ORIGINAL_MISSING
+found_legacy_uppercase=YES
+action=RENAME_ORIGINAL_TO_original_ON_PC
+```
+
+在执行 **2) QUARANTINE OLD RUNTIME** 前/期间，救援脚本会校验：
+
+- canonical `backup/original` 的 5 个 native 成员、manifest、每个 cksum；
+- overlay_dir / overlay_present；
+- firewall original + cksum；
+- universal-hook original 的 present/path/cksum 状态；
+- HMI backup 的 target、present/absent 唯一性和 cksum；
+- boot-diagnostics COMPLETE；
+- 当前 live HMI 是否与可信 backup 冲突；
+- startup.sh 去掉项目自启动块后的 shell 语法。
+
+旧 runtime 移入 quarantine 后，还会直接调用**当前 SD 卡上的 V3.4 `altscreen_chain_test.sh restore-precheck`**。
+这个 precheck 是非破坏性的，会再检查 V3.4 universal recovery set、runtime cleanup 和 persistent diagnostics cleanup。
+
+只有看到：
+
+```text
+RESTORE_READINESS=PASS ...
+QUARANTINE=PASS ... restore_preflight=PASS
+```
+
+隔离才正式成功。
+
+如果移动后的 V3.4 preflight 失败，脚本会自动把：
+
+```text
+/mnt/app/root/.carplay-altscreen.rescue-v1
+```
+
+移回：
+
+```text
+/mnt/app/root/carplay-altscreen
+```
+
+并记录：
+
+```text
+QUARANTINE_POSTCHECK=FAIL action=ROLLBACK_TO_ORIGINAL_PATH
+QUARANTINE_ROLLBACK=PASS ... production_state=PRE_QUARANTINE
+```
+
+因此，不应在只看到目录被移动后就继续 RESTORE；以最终的 `QUARANTINE=PASS ... restore_preflight=PASS` 为准。
