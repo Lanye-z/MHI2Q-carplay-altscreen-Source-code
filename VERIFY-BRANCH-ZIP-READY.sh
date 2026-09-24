@@ -132,15 +132,15 @@ if grep -Fq 'branch=experiment/oem-layout-second-screen_v3.5' "$READY"; then
         fail "V3.5 ready marker RGI SHA mismatch"
     grep -Fq 'oem_lower_bar_map_scale=FCT45_STOCK_PASSTHROUGH' "$HMI_INFO" ||
         fail "V3.5 OEM map-scale passthrough missing"
-    grep -Fq 'safearea_policy=V35_OEM_X_VERTICAL_75_450' "$HMI_INFO" ||
-        fail "V3.5 HMI safeArea policy is not top75/bottom450"
-    grep -Fq 'geometry_safearea_space=OEM_X_VERTICAL_75_450' "$HMI_INFO" ||
+    grep -Fq 'safearea_policy=V35_OEM_X_VERTICAL_72_450' "$HMI_INFO" ||
+        fail "V3.5 HMI safeArea policy is not top72/bottom450"
+    grep -Fq 'geometry_safearea_space=OEM_X_VERTICAL_72_450' "$HMI_INFO" ||
         fail "V3.5 HMI safeArea coordinate-space marker missing"
-    grep -Fq 'safearea_policy=V3_5_OEM_X_VERTICAL_75_450' "$READY" ||
+    grep -Fq 'safearea_policy=V3_5_OEM_X_VERTICAL_72_450' "$READY" ||
         fail "V3.5 ready safeArea policy mismatch"
-    grep -Fq 'safearea_full=370,75,700,375' "$READY" ||
+    grep -Fq 'safearea_full=370,72,700,378' "$READY" ||
         fail "V3.5 FULL safeArea ready marker mismatch"
-    grep -Fq 'safearea_small=490,75,460,375' "$READY" ||
+    grep -Fq 'safearea_small=490,72,460,378' "$READY" ||
         fail "V3.5 SMALL safeArea ready marker mismatch"
     grep -Fq 'lower_bar_observability=KOMO_FOLLOW_RG_RGI_BEFORE_AFTER_V35' "$HMI_INFO" ||
         fail "V3.5 HMI gray-bar observability metadata missing"
