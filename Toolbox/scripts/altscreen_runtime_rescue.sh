@@ -34,9 +34,13 @@ ROOT="$(p /mnt/app/root/carplay-altscreen)"
 QUARANTINE="$(p /mnt/app/root/.carplay-altscreen.rescue-v1)"
 OWNER=".mmi-cockpit-carplay-runtime-owner"
 SD_ROOT="$VOLUME/MMI-Cockpit-Carplay"
-LOG_DIR="$SD_ROOT/logs"
-LOG="$LOG_DIR/runtime-residue-rescue.log"
-LOG_PREV="$LOG_DIR/runtime-residue-rescue.previous.log"
+LOG_DIR="$SD_ROOT/logs/rescue"
+LOG="$LOG_DIR/runtime-residue-rescue-$ACTION.log"
+LOG_PREV="$LOG_DIR/runtime-residue-rescue-$ACTION.previous.log"
+RESCUE_BACKUP_ROOT="$SD_ROOT/rescue-backup"
+RESCUE_FINAL_BACKUP="$RESCUE_BACKUP_ROOT/runtime-residue-v1"
+RESCUE_FINAL_STAGE="$RESCUE_BACKUP_ROOT/.runtime-residue-v1.new"
+QUARANTINE_STAGE="$(p /mnt/app/root/.carplay-altscreen.rescue-v1.new)"
 LOWER_ORIGINAL="$SD_ROOT/backup/original"
 UPPER_ORIGINAL="$SD_ROOT/backup/ORIGINAL"
 UNIVERSAL_BACKUP="$SD_ROOT/backup/universal-hook-original"
@@ -293,6 +297,247 @@ fingerprint_score(){
     printf '%s\n' "$score"
 }
 
+dir_file_manifest(){
+    src=$1
+    out=$2
+    [ -d "$src" ] || return 1
+    (
+        cd "$src" || exit 1
+        find . -type f -print 2>/dev/null | sort | while IFS= read -r rel; do
+            [ -f "$rel" ] || continue
+            set -- $(cksum < "$rel" 2>/dev/null) || exit 1
+            printf '%s|%s|%s\n' "$rel" "${1:-0}" "${2:-0}"
+        done
+    ) > "$out"
+}
+
+dir_tree_manifest(){
+    src=$1
+    out=$2
+    [ -d "$src" ] || return 1
+    (
+        cd "$src" || exit 1
+        find . -type d -print 2>/dev/null | sort
+    ) > "$out"
+}
+
+verify_rescue_backup_internal(){
+    base=$RESCUE_FINAL_BACKUP
+    [ -f "$base/COMPLETE" ] &&
+    [ -d "$base/payload" ] &&
+    [ -f "$base/meta/files.manifest" ] &&
+    [ -f "$base/meta/dirs.manifest" ] &&
+    [ -f "$base/meta/source_path" ] || {
+        log "RESCUE_BACKUP_VERIFY=FAIL reason=STRUCTURE_INCOMPLETE path=$base"
+        return 1
+    }
+
+    [ "$(cat "$base/meta/source_path" 2>/dev/null || true)" = "/mnt/app/root/.carplay-altscreen.rescue-v1" ] || {
+        log "RESCUE_BACKUP_VERIFY=FAIL reason=SOURCE_PATH_MISMATCH"
+        return 1
+    }
+
+    no_symlinks "$base/payload" || {
+        log "RESCUE_BACKUP_VERIFY=FAIL reason=PAYLOAD_SYMLINK"
+        return 1
+    }
+
+    tmp_files="$base/meta/.verify.files"
+    tmp_dirs="$base/meta/.verify.dirs"
+    rm -f "$tmp_files" "$tmp_dirs" 2>/dev/null || true
+
+    dir_file_manifest "$base/payload" "$tmp_files" &&
+    dir_tree_manifest "$base/payload" "$tmp_dirs" &&
+    cmp -s "$base/meta/files.manifest" "$tmp_files" &&
+    cmp -s "$base/meta/dirs.manifest" "$tmp_dirs"
+    rc=$?
+    rm -f "$tmp_files" "$tmp_dirs" 2>/dev/null || true
+
+    [ "$rc" = 0 ] || {
+        log "RESCUE_BACKUP_VERIFY=FAIL reason=MANIFEST_MISMATCH"
+        return 1
+    }
+
+    file_count=$(wc -l < "$base/meta/files.manifest" 2>/dev/null || echo 0)
+    dir_count=$(wc -l < "$base/meta/dirs.manifest" 2>/dev/null || echo 0)
+    set -- $file_count; file_count=${1:-0}
+    set -- $dir_count; dir_count=${1:-0}
+    log "RESCUE_BACKUP_VERIFY=PASS path=$base files=$file_count dirs=$dir_count"
+    return 0
+}
+
+backup_matches_quarantine(){
+    verify_rescue_backup_internal || return 1
+    [ -d "$QUARANTINE" ] || return 1
+
+    tmp_files="$RESCUE_FINAL_BACKUP/meta/.source.files"
+    tmp_dirs="$RESCUE_FINAL_BACKUP/meta/.source.dirs"
+    rm -f "$tmp_files" "$tmp_dirs" 2>/dev/null || true
+
+    dir_file_manifest "$QUARANTINE" "$tmp_files" &&
+    dir_tree_manifest "$QUARANTINE" "$tmp_dirs" &&
+    cmp -s "$RESCUE_FINAL_BACKUP/meta/files.manifest" "$tmp_files" &&
+    cmp -s "$RESCUE_FINAL_BACKUP/meta/dirs.manifest" "$tmp_dirs"
+    rc=$?
+    rm -f "$tmp_files" "$tmp_dirs" 2>/dev/null || true
+
+    [ "$rc" = 0 ] || {
+        log "RESCUE_BACKUP_MATCH=FAIL reason=QUARANTINE_DIFFERS_FROM_SD_BACKUP"
+        return 1
+    }
+    log "RESCUE_BACKUP_MATCH=PASS quarantine=/mnt/app/root/.carplay-altscreen.rescue-v1"
+    return 0
+}
+
+backup_quarantine_to_sd(){
+    recognized_unowned "$QUARANTINE" || {
+        log "RESCUE_BACKUP=REFUSED reason=QUARANTINE_NOT_RECOGNIZED"
+        return 1
+    }
+
+    ensure_dirs "$RESCUE_BACKUP_ROOT" || {
+        log "RESCUE_BACKUP=FAIL reason=BACKUP_ROOT_CREATE_FAILED"
+        return 1
+    }
+
+    if [ -e "$RESCUE_FINAL_BACKUP" ]; then
+        if backup_matches_quarantine; then
+            log "RESCUE_BACKUP=REUSED path=$RESCUE_FINAL_BACKUP overwrite=NO"
+            return 0
+        fi
+        log "RESCUE_BACKUP=REFUSED reason=EXISTING_BACKUP_DIFFERS overwrite=NO path=$RESCUE_FINAL_BACKUP"
+        return 1
+    fi
+
+    rm -rf "$RESCUE_FINAL_STAGE" 2>/dev/null || {
+        log "RESCUE_BACKUP=FAIL reason=STALE_STAGE_REMOVE_FAILED"
+        return 1
+    }
+
+    ensure_dirs "$RESCUE_FINAL_STAGE/payload" "$RESCUE_FINAL_STAGE/meta" || {
+        rm -rf "$RESCUE_FINAL_STAGE" 2>/dev/null || true
+        log "RESCUE_BACKUP=FAIL reason=STAGE_CREATE_FAILED"
+        return 1
+    }
+
+    log "RESCUE_BACKUP=START source=/mnt/app/root/.carplay-altscreen.rescue-v1 destination=$RESCUE_FINAL_BACKUP"
+    cp -R "$QUARANTINE/." "$RESCUE_FINAL_STAGE/payload/" || {
+        rm -rf "$RESCUE_FINAL_STAGE" 2>/dev/null || true
+        log "RESCUE_BACKUP=FAIL reason=COPY_FAILED"
+        return 1
+    }
+
+    dir_file_manifest "$QUARANTINE" "$RESCUE_FINAL_STAGE/meta/files.manifest" &&
+    dir_tree_manifest "$QUARANTINE" "$RESCUE_FINAL_STAGE/meta/dirs.manifest" || {
+        rm -rf "$RESCUE_FINAL_STAGE" 2>/dev/null || true
+        log "RESCUE_BACKUP=FAIL reason=SOURCE_MANIFEST_FAILED"
+        return 1
+    }
+
+    dir_file_manifest "$RESCUE_FINAL_STAGE/payload" "$RESCUE_FINAL_STAGE/meta/copied.files" &&
+    dir_tree_manifest "$RESCUE_FINAL_STAGE/payload" "$RESCUE_FINAL_STAGE/meta/copied.dirs" &&
+    cmp -s "$RESCUE_FINAL_STAGE/meta/files.manifest" "$RESCUE_FINAL_STAGE/meta/copied.files" &&
+    cmp -s "$RESCUE_FINAL_STAGE/meta/dirs.manifest" "$RESCUE_FINAL_STAGE/meta/copied.dirs" || {
+        rm -rf "$RESCUE_FINAL_STAGE" 2>/dev/null || true
+        log "RESCUE_BACKUP=FAIL reason=COPY_VERIFY_FAILED"
+        return 1
+    }
+
+    rm -f "$RESCUE_FINAL_STAGE/meta/copied.files" "$RESCUE_FINAL_STAGE/meta/copied.dirs" 2>/dev/null || true
+    printf '%s\n' "/mnt/app/root/.carplay-altscreen.rescue-v1" > "$RESCUE_FINAL_STAGE/meta/source_path" || return 1
+    printf '%s\n' "${delete_mode:-UNKNOWN}" > "$RESCUE_FINAL_STAGE/meta/target_state" || return 1
+    printf '%s\n' "MMI-Cockpit-Carplay runtime residue rescue v1" > "$RESCUE_FINAL_STAGE/meta/purpose" || return 1
+    touch "$RESCUE_FINAL_STAGE/COMPLETE" || return 1
+    sync >/dev/null 2>&1 || {
+        log "RESCUE_BACKUP=FAIL reason=SYNC_FAILED"
+        return 1
+    }
+
+    mv "$RESCUE_FINAL_STAGE" "$RESCUE_FINAL_BACKUP" || {
+        log "RESCUE_BACKUP=FAIL reason=PUBLISH_FAILED"
+        return 1
+    }
+    sync >/dev/null 2>&1 || {
+        log "RESCUE_BACKUP=FAIL reason=PUBLISH_SYNC_FAILED"
+        return 1
+    }
+
+    backup_matches_quarantine || {
+        log "RESCUE_BACKUP=FAIL reason=POST_PUBLISH_VERIFY_FAILED"
+        return 1
+    }
+    log "RESCUE_BACKUP=PASS path=$RESCUE_FINAL_BACKUP deletion_gate=OPEN"
+    return 0
+}
+
+restore_sd_backup_to_quarantine(){
+    [ ! -e "$QUARANTINE" ] || {
+        log "RESTORE_SD_BACKUP=REFUSED reason=QUARANTINE_ALREADY_EXISTS production_changed=NO"
+        return 1
+    }
+    verify_rescue_backup_internal || {
+        log "RESTORE_SD_BACKUP=REFUSED reason=SD_BACKUP_INVALID production_changed=NO"
+        return 1
+    }
+
+    mount_app_rw || {
+        log "RESTORE_SD_BACKUP=REFUSED reason=MOUNT_APP_RW_FAILED production_changed=NO"
+        return 1
+    }
+
+    rm -rf "$QUARANTINE_STAGE" 2>/dev/null || {
+        mount_app_ro >/dev/null 2>&1 || true
+        log "RESTORE_SD_BACKUP=FAIL reason=STAGE_REMOVE_FAILED"
+        return 1
+    }
+    ensure_dirs "$QUARANTINE_STAGE" || {
+        mount_app_ro >/dev/null 2>&1 || true
+        log "RESTORE_SD_BACKUP=FAIL reason=STAGE_CREATE_FAILED"
+        return 1
+    }
+
+    cp -R "$RESCUE_FINAL_BACKUP/payload/." "$QUARANTINE_STAGE/" || {
+        rm -rf "$QUARANTINE_STAGE" 2>/dev/null || true
+        mount_app_ro >/dev/null 2>&1 || true
+        log "RESTORE_SD_BACKUP=FAIL reason=COPY_FAILED"
+        return 1
+    }
+
+    tmp_files="$RESCUE_FINAL_BACKUP/meta/.rehydrate.files"
+    tmp_dirs="$RESCUE_FINAL_BACKUP/meta/.rehydrate.dirs"
+    dir_file_manifest "$QUARANTINE_STAGE" "$tmp_files" &&
+    dir_tree_manifest "$QUARANTINE_STAGE" "$tmp_dirs" &&
+    cmp -s "$RESCUE_FINAL_BACKUP/meta/files.manifest" "$tmp_files" &&
+    cmp -s "$RESCUE_FINAL_BACKUP/meta/dirs.manifest" "$tmp_dirs"
+    rc=$?
+    rm -f "$tmp_files" "$tmp_dirs" 2>/dev/null || true
+    if [ "$rc" != 0 ]; then
+        rm -rf "$QUARANTINE_STAGE" 2>/dev/null || true
+        mount_app_ro >/dev/null 2>&1 || true
+        log "RESTORE_SD_BACKUP=FAIL reason=REHYDRATE_VERIFY_FAILED"
+        return 1
+    fi
+
+    mv "$QUARANTINE_STAGE" "$QUARANTINE" || {
+        rm -rf "$QUARANTINE_STAGE" 2>/dev/null || true
+        mount_app_ro >/dev/null 2>&1 || true
+        log "RESTORE_SD_BACKUP=FAIL reason=PUBLISH_FAILED"
+        return 1
+    }
+    sync >/dev/null 2>&1 || true
+    mount_app_ro || {
+        log "RESTORE_SD_BACKUP=FAIL reason=REMOUNT_APP_RO_FAILED production_changed=YES"
+        return 1
+    }
+
+    backup_matches_quarantine || {
+        log "RESTORE_SD_BACKUP=FAIL reason=POST_RESTORE_VERIFY_FAILED production_changed=YES"
+        return 1
+    }
+    log "RESTORE_SD_BACKUP=PASS destination=/mnt/app/root/.carplay-altscreen.rescue-v1 active_runtime_unchanged=YES"
+    return 0
+}
+
 recognized_unowned(){
     dir=$1
     [ -d "$dir" ] && [ ! -L "$dir" ] || {
@@ -425,8 +670,13 @@ do_delete(){
 
     log "DELETE_PREFLIGHT=PASS target_state=$delete_mode quarantine=LEGACY_UNOWNED_RECOGNIZED backup=TRUSTED"
     log "DELETE_SCOPE=/mnt/app/root/.carplay-altscreen.rescue-v1 only"
-    log "DELETE_BACKUPS=NO"
     log "DELETE_CURRENT_RUNTIME=NO"
+
+    backup_quarantine_to_sd || {
+        log "DELETE_QUARANTINE=REFUSED reason=FINAL_SD_BACKUP_FAILED production_changed=NO"
+        return 1
+    }
+    log "DELETE_BACKUP_GATE=PASS backup=$RESCUE_FINAL_BACKUP"
 
     mount_app_rw || {
         log "DELETE_QUARANTINE=REFUSED reason=MOUNT_APP_RW_FAILED production_changed=NO"
@@ -465,7 +715,13 @@ do_delete(){
         log "OEM_RUNTIME_STATE=PRESERVED"
     fi
 
-    log "DELETE_QUARANTINE=PASS path=/mnt/app/root/.carplay-altscreen.rescue-v1 irreversible=YES target_state=$delete_mode"
+    verify_rescue_backup_internal || {
+        log "DELETE_QUARANTINE=FAIL reason=FINAL_SD_BACKUP_INVALID_AFTER_DELETE production_changed=YES"
+        return 1
+    }
+
+    log "DELETE_QUARANTINE=PASS path=/mnt/app/root/.carplay-altscreen.rescue-v1 irreversible_on_unit=YES target_state=$delete_mode"
+    log "RESCUE_SD_BACKUP=PRESERVED path=$RESCUE_FINAL_BACKUP recoverable=YES"
     log "OEM_BACKUPS=PRESERVED"
     return 0
 }
@@ -508,12 +764,17 @@ do_restore(){
 }
 
 log "===== runtime residue rescue v1 action=$ACTION ====="
+log "RESCUE_LOG=$LOG"
+log "RESCUE_VOLUME=$VOLUME"
+log "RUNTIME_PATH=/mnt/app/root/carplay-altscreen"
+log "QUARANTINE_PATH=/mnt/app/root/.carplay-altscreen.rescue-v1"
 case "$ACTION" in
     check) check_state ;;
     quarantine) do_quarantine ;;
     restore) do_restore ;;
     delete) do_delete ;;
-    *) log "usage: $0 {check|quarantine|restore|delete}"; exit 2 ;;
+    restore-backup) restore_sd_backup_to_quarantine ;;
+    *) log "usage: $0 {check|quarantine|restore|delete|restore-backup}"; exit 2 ;;
 esac
 rc=$?
 log "RESCUE_RESULT action=$ACTION rc=$rc"
