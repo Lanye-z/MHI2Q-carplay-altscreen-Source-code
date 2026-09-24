@@ -1,5 +1,5 @@
 /*
- * V3.4 OEM lower-bar + local KOMO gray-bar bridge.
+ * V3.5 OEM lower-bar + local KOMO gray-bar bridge with read-only diagnostics.
  *
  * Partial takeover only:
  *   FctID 19 CurrentPositionInfo      -> CarPlay only while a valid road exists
@@ -359,26 +359,47 @@ public final class BAPBridge {
             Log.w(TAG, "OEM_GRAY_BAR_CONTEXT rg_active_snapshot=UNKNOWN"
                 + " presentation_mutation=NO");
         }
+        /*
+         * V3.5 diagnostics are observation-only.  Do not turn any of these
+         * reads into an activation gate: their purpose is to distinguish
+         * "KOMO data reached an already-following strip" from "KOMO data was
+         * accepted while the cluster remained outside Follow mode".
+         */
+        logGrayBarObservation("BEFORE", cs, "SESSION_START");
     }
 
     private void publishKomoCurrentStreet(String road) {
         ClusterService cs = currentClusterService();
+        logGrayBarObservation("BEFORE", cs, "CURRENT_STREET");
         if (cs == null) {
+            Log.w(TAG, "SET_CURRENT_STREET=FAIL reason=KOMO_SERVICE_NULL");
+            Log.i(TAG, "ROUTE_INFO_FLUSH=NOT_ATTEMPTED field=CURRENT_STREET behavior_preserved=YES");
+            logGrayBarObservation("AFTER", cs, "CURRENT_STREET");
             Log.w(TAG, "OEM_GRAY_BAR field=ROAD result=SKIP reason=cluster_unavailable");
             return;
         }
         try {
             invokeCluster(cs, "updateCurrentStreet",
                 new Class[]{String.class}, new Object[]{road});
+            Log.i(TAG, "SET_CURRENT_STREET=PASS");
+            /* V3.4 did not flush after CurrentStreet; keep that exact behavior. */
+            Log.i(TAG, "ROUTE_INFO_FLUSH=NOT_ATTEMPTED field=CURRENT_STREET behavior_preserved=YES");
             Log.i(TAG, "OEM_GRAY_BAR field=ROAD result=PASS value=" + road);
         } catch (Throwable t) {
+            Log.w(TAG, "SET_CURRENT_STREET=FAIL error=" + t);
             Log.w(TAG, "OEM_GRAY_BAR field=ROAD result=FAIL error=" + t);
+        } finally {
+            logGrayBarObservation("AFTER", cs, "CURRENT_STREET");
         }
     }
 
     private void publishKomoDistance(int meters) {
         ClusterService cs = currentClusterService();
+        logGrayBarObservation("BEFORE", cs, "DISTANCE");
         if (cs == null) {
+            Log.w(TAG, "SET_DISTANCE=FAIL reason=KOMO_SERVICE_NULL");
+            Log.i(TAG, "ROUTE_INFO_FLUSH=NOT_ATTEMPTED field=DISTANCE reason=KOMO_SERVICE_NULL");
+            logGrayBarObservation("AFTER", cs, "DISTANCE");
             Log.w(TAG, "OEM_GRAY_BAR field=DISTANCE result=SKIP reason=cluster_unavailable");
             return;
         }
@@ -386,16 +407,24 @@ public final class BAPBridge {
             invokeCluster(cs, "updateDistanceToDestination",
                 new Class[]{Integer.TYPE, Boolean.TYPE},
                 new Object[]{new Integer(meters), Boolean.FALSE});
-            flushKomoFollowInfo(cs);
+            Log.i(TAG, "SET_DISTANCE=PASS");
+            flushKomoFollowInfo(cs, "DISTANCE");
             Log.i(TAG, "OEM_GRAY_BAR field=DISTANCE result=PASS meters=" + meters);
         } catch (Throwable t) {
+            Log.w(TAG, "SET_DISTANCE=FAIL_OR_FLUSH_FAIL error=" + t);
             Log.w(TAG, "OEM_GRAY_BAR field=DISTANCE result=FAIL error=" + t);
+        } finally {
+            logGrayBarObservation("AFTER", cs, "DISTANCE");
         }
     }
 
     private void publishKomoArrival(long utcSeconds) {
         ClusterService cs = currentClusterService();
+        logGrayBarObservation("BEFORE", cs, "ETA");
         if (cs == null) {
+            Log.w(TAG, "SET_ETA=FAIL reason=KOMO_SERVICE_NULL");
+            Log.i(TAG, "ROUTE_INFO_FLUSH=NOT_ATTEMPTED field=ETA reason=KOMO_SERVICE_NULL");
+            logGrayBarObservation("AFTER", cs, "ETA");
             Log.w(TAG, "OEM_GRAY_BAR field=ETA result=SKIP reason=cluster_unavailable");
             return;
         }
@@ -404,11 +433,15 @@ public final class BAPBridge {
             invokeCluster(cs, "updateArrivalTime",
                 new Class[]{Boolean.TYPE, Long.TYPE, Boolean.TYPE},
                 new Object[]{Boolean.TRUE, new Long(utcMillis), Boolean.FALSE});
-            flushKomoFollowInfo(cs);
+            Log.i(TAG, "SET_ETA=PASS");
+            flushKomoFollowInfo(cs, "ETA");
             Log.i(TAG, "OEM_GRAY_BAR field=ETA result=PASS utc_ms=" + utcMillis
                 + " timezone_offset_flag=0");
         } catch (Throwable t) {
+            Log.w(TAG, "SET_ETA=FAIL_OR_FLUSH_FAIL error=" + t);
             Log.w(TAG, "OEM_GRAY_BAR field=ETA result=FAIL error=" + t);
+        } finally {
+            logGrayBarObservation("AFTER", cs, "ETA");
         }
     }
 
@@ -440,12 +473,12 @@ public final class BAPBridge {
                 invokeCluster(cs, "updateDistanceToDestination",
                     new Class[]{Integer.TYPE, Boolean.TYPE},
                     new Object[]{new Integer(0), Boolean.FALSE});
-                flushKomoFollowInfo(cs);
+                flushKomoFollowInfo(cs, "CLEAR_FCT21");
             } else if (fct == FCT22) {
                 invokeCluster(cs, "updateArrivalTime",
                     new Class[]{Boolean.TYPE, Long.TYPE, Boolean.TYPE},
                     new Object[]{Boolean.FALSE, new Long(0L), Boolean.FALSE});
-                flushKomoFollowInfo(cs);
+                flushKomoFollowInfo(cs, "CLEAR_FCT22");
             }
             Log.i(TAG, "OEM_GRAY_BAR_CLEAR field=FCT" + fct
                 + " result=PASS reason=" + reason);
@@ -455,8 +488,150 @@ public final class BAPBridge {
         }
     }
 
-    private static void flushKomoFollowInfo(ClusterService cs) throws Exception {
+    private static void flushKomoFollowInfo(ClusterService cs, String field)
+            throws Exception {
+        Log.i(TAG, "ROUTE_INFO_FLUSH=ATTEMPTED field=" + field
+            + " behavior_change=NO");
         invokeCluster(cs, "updateKOMOFollowInfo", new Class[0], new Object[0]);
+        Log.i(TAG, "ROUTE_INFO_FLUSH=PASS field=" + field);
+    }
+
+    private static void logGrayBarObservation(
+            String edge, ClusterService cs, String field) {
+        Log.i(TAG, "KOMO_SERVICE=" + (cs != null ? "AVAILABLE" : "NULL")
+            + " edge=" + edge + " field=" + field);
+
+        Boolean follow = readKomoFollowMode(cs);
+        if (follow == null) {
+            Log.i(TAG, "KOMO_FOLLOW_MODE=UNKNOWN edge=" + edge + " field=" + field);
+            Log.i(TAG, "ROUTE_INFO_MODE=UNKNOWN edge=" + edge + " field=" + field);
+        } else {
+            Log.i(TAG, "KOMO_FOLLOW_MODE="
+                + (follow.booleanValue() ? "YES" : "NO")
+                + " edge=" + edge + " field=" + field);
+            Log.i(TAG, "ROUTE_INFO_MODE="
+                + (follow.booleanValue() ? "FOLLOW" : "NOT_FOLLOW")
+                + " edge=" + edge + " field=" + field);
+        }
+
+        Boolean rgActive = readBooleanMethod(findDsiContainer(cs), "isRgActive");
+        Boolean rgiValid = readRgiDataValid(cs);
+        Log.i(TAG, "RG_ACTIVE_" + edge + "=" + booleanBit(rgActive)
+            + " field=" + field);
+        Log.i(TAG, "RGI_VALID_" + edge + "=" + booleanBit(rgiValid)
+            + " field=" + field);
+    }
+
+    private static String booleanBit(Boolean value) {
+        if (value == null) return "UNKNOWN";
+        return value.booleanValue() ? "1" : "0";
+    }
+
+    private static Boolean readRgiDataValid(ClusterService cs) {
+        if (cs == null) return null;
+        Boolean value = readBooleanFieldExact(cs, new String[]{
+            "rgiDataValid", "RGIDataValid", "mRgiDataValid", "mRGIDataValid"
+        }, "RGI_VALID");
+        if (value != null) return value;
+        return readBooleanFieldByHints(cs,
+            new String[]{"rgi", "valid"}, "RGI_VALID");
+    }
+
+    private static Boolean readKomoFollowMode(ClusterService cs) {
+        if (cs == null) return null;
+        Boolean value = readBooleanFieldExact(cs, new String[]{
+            "komoFollowMode", "KOMOFollowMode", "followMode",
+            "routeInfoFollowMode", "routeInfoModeFollow"
+        }, "KOMO_FOLLOW");
+        if (value != null) return value;
+
+        value = readBooleanFieldByHints(cs,
+            new String[]{"follow"}, "KOMO_FOLLOW");
+        if (value != null) return value;
+
+        Object container = findDsiContainer(cs);
+        value = readBooleanFieldExact(container, new String[]{
+            "komoFollowMode", "KOMOFollowMode", "followMode",
+            "routeInfoFollowMode", "routeInfoModeFollow"
+        }, "KOMO_FOLLOW_CONTAINER");
+        if (value != null) return value;
+        return readBooleanFieldByHints(container,
+            new String[]{"follow"}, "KOMO_FOLLOW_CONTAINER");
+    }
+
+    private static Boolean readBooleanFieldExact(
+            Object target, String[] names, String probe) {
+        if (target == null || names == null) return null;
+        for (int i = 0; i < names.length; ++i) {
+            Field f = findField(target.getClass(), names[i]);
+            if (f == null) continue;
+            Boolean value = readBooleanField(target, f);
+            if (value != null) {
+                Log.i(TAG, probe + "_PROBE=FIELD_EXACT"
+                    + " owner=" + target.getClass().getName()
+                    + " field=" + f.getName()
+                    + " value=" + booleanBit(value));
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private static Boolean readBooleanFieldByHints(
+            Object target, String[] hints, String probe) {
+        if (target == null || hints == null) return null;
+        Field candidate = null;
+        Class c = target.getClass();
+        while (c != null) {
+            Field[] fields;
+            try { fields = c.getDeclaredFields(); }
+            catch (Throwable t) { fields = null; }
+            if (fields != null) {
+                for (int i = 0; i < fields.length; ++i) {
+                    Field f = fields[i];
+                    String name = f.getName().toLowerCase();
+                    boolean matches = true;
+                    for (int h = 0; h < hints.length; ++h) {
+                        if (name.indexOf(hints[h].toLowerCase()) < 0) {
+                            matches = false;
+                            break;
+                        }
+                    }
+                    if (!matches) continue;
+                    Class type = f.getType();
+                    if (type != Boolean.TYPE && type != Boolean.class) continue;
+                    Boolean value = readBooleanField(target, f);
+                    if (value == null) continue;
+                    Log.i(TAG, probe + "_PROBE=FIELD_CANDIDATE"
+                        + " owner=" + c.getName()
+                        + " field=" + f.getName()
+                        + " value=" + booleanBit(value));
+                    if (candidate != null) {
+                        Log.w(TAG, probe + "_PROBE=AMBIGUOUS"
+                            + " first=" + candidate.getName()
+                            + " second=" + f.getName()
+                            + " classification=UNKNOWN");
+                        return null;
+                    }
+                    candidate = f;
+                }
+            }
+            c = c.getSuperclass();
+        }
+        return candidate != null ? readBooleanField(target, candidate) : null;
+    }
+
+    private static Boolean readBooleanField(Object target, Field field) {
+        if (target == null || field == null) return null;
+        try {
+            field.setAccessible(true);
+            Object value = field.get(target);
+            return value instanceof Boolean ? (Boolean)value : null;
+        } catch (Throwable t) {
+            Log.w(TAG, "OEM_GRAY_BAR read field failed "
+                + field.getName() + ": " + t);
+            return null;
+        }
     }
 
     private static ClusterService currentClusterService() {
