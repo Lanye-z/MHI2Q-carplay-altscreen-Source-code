@@ -15,7 +15,7 @@ keyValue
 
 keyValue
     value   String sys 0x00000000 0
-    label   "SafeArea: Y 75..450 / FULL+SMALL dynamic; Window58 readback disabled"
+    label   "SafeArea: Y 72..450 / FULL+SMALL dynamic; Window58 readback disabled"
     poll    0
 
 script
