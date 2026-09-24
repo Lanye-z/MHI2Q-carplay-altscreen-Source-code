@@ -184,11 +184,17 @@ static int cf_dict_set_cstr_obj(cf_obj dict, const char *key, cf_obj value) {
 }
 
 void p1404_airplay_load_flags(void) {
-    alt_flag_info      = altscreen_marker_present("ARMED_INFO");
-    alt_flag_feature   = altscreen_marker_present("ARMED_FEATURE");
-    alt_flag_create111 = altscreen_marker_present("ARMED_CREATE111");
-    alt_flag_iap2      = altscreen_marker_present("ARMED_IAP2");
-    altscreen_log("PHASE=FLAGS_LOADED mutate=%d info=%d feature=%d create111=%d iap2=%d",
+    /*
+     * V3.4: AltScreen is a normal capability of every CarPlay session while
+     * this preload is installed.  INFO/FEATURE/CREATE111 are therefore not
+     * controlled by SD-resident test markers.  Keep the legacy iAP2
+     * ThemeAssets mutation disabled; V3.3 proved private111 without it.
+     */
+    alt_flag_info      = 1;
+    alt_flag_feature   = 1;
+    alt_flag_create111 = 1;
+    alt_flag_iap2      = 0;
+    altscreen_log("PHASE=FLAGS_LOADED policy=V34_ALWAYS_ON mutate=%d info=%d feature=%d create111=%d iap2=%d",
                   p1404_mutate_armed, alt_flag_info, alt_flag_feature,
                   alt_flag_create111, alt_flag_iap2);
 }
