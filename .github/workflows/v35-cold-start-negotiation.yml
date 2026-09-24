@@ -106,14 +106,23 @@ jobs:
           grep -Fq '"updateDistanceToDestination"' "$SRC/BAPBridge.java"
           grep -Fq '"updateArrivalTime"' "$SRC/BAPBridge.java"
           grep -Fq '"updateKOMOFollowInfo"' "$SRC/BAPBridge.java"
+          grep -Fq 'KOMO_SERVICE=' "$SRC/BAPBridge.java"
+          grep -Fq 'KOMO_FOLLOW_MODE=' "$SRC/BAPBridge.java"
+          grep -Fq 'SET_CURRENT_STREET=PASS' "$SRC/BAPBridge.java"
+          grep -Fq 'SET_DISTANCE=PASS' "$SRC/BAPBridge.java"
+          grep -Fq 'SET_ETA=PASS' "$SRC/BAPBridge.java"
+          grep -Fq 'ROUTE_INFO_FLUSH=ATTEMPTED' "$SRC/BAPBridge.java"
+          grep -Fq 'ROUTE_INFO_MODE=' "$SRC/BAPBridge.java"
+          grep -Fq 'RG_ACTIVE_' "$SRC/BAPBridge.java"
+          grep -Fq 'RGI_VALID_' "$SRC/BAPBridge.java"
           grep -Fq 'appConnectorNavi.updateTimeToDestination(1, timeFormat, localSeconds)' "$SRC/BAPBridge.java"
           for forbidden in 'updateRGStatus(' 'updateActiveRGType(' 'updateManeuverDescriptor(' 'updateDistanceToNextManeuver(' 'invokeRgiString' 'updateRGIString'; do
             if grep -Fq "$forbidden" "$SRC/BAPBridge.java"; then
-              echo "ERROR: V3.4 gray-bar bridge must not drive RGI presentation: $forbidden" >&2
+              echo "ERROR: V3.5 gray-bar bridge must not drive RGI presentation: $forbidden" >&2
               exit 1
             fi
           done
-          if grep -Fq 'updateMapScale(' "$SRC/BAPBridge.java"; then echo 'ERROR: V3.4 gray-bar bridge must not synthesize Fct45' >&2; exit 1; fi
+          if grep -Fq 'updateMapScale(' "$SRC/BAPBridge.java"; then echo 'ERROR: V3.5 gray-bar bridge must not synthesize Fct45' >&2; exit 1; fi
           JAR_SIZE="$(wc -c < "$BASE" | tr -d ' ')"
           JAR_CKSUM="$(cksum < "$BASE" | awk '{print $1}')"
           JAR_SHA="$(sha256sum "$BASE" | awk '{print tolower($1)}')"
@@ -179,7 +188,7 @@ jobs:
           strings "$OUT/libcarplay_altscreen.so" | grep -Fq 'policy=V34_ALWAYS_ON'
           strings "$OUT/libcarplay_altscreen.so" | grep -Fq 'PHASE=PRIVATE111_STREAM_READY'
           strings "$OUT/libcarplay_altscreen.so" | grep -Fq '/tmp/altscreen-private111.stream-ready'
-          strings "$OUT/libcarplay_altscreen.so" | grep -Fq 'safearea_revision=V33_OEM_X_VERTICAL_68_450'
+          strings "$OUT/libcarplay_altscreen.so" | grep -Fq 'safearea_revision=V35_OEM_X_VERTICAL_75_450'
           if strings "$OUT/libcarplay_altscreen.so" | grep -Fq 'PHASE=STATE_ROOT_WAIT result='; then
             echo 'ERROR: rebuilt V3.4 hook still contains removable-SD startup gate' >&2
             exit 1
@@ -305,14 +314,16 @@ jobs:
               "v35_sidecar_attach_policy": "RECOVER_CURRENT_SESSION",
               "v35_display_demand_owner": "stream_supervisor",
               "v35_persistent_runtime_growth": "NONE",
-              "hook_safearea_policy": "V33_OEM_X_VERTICAL_68_450",
-              "oem_layout_full_safearea_reference_455": "370,68,700,382",
-              "oem_layout_small_safearea_reference_455": "490,68,460,382",
-              "oem_layout_safearea_canvas_yh_mapping": "vertical_inset_top68_bottom450",
-              "oem_layout_classic_full_safearea_physical": "370,68,700,382",
-              "oem_layout_classic_small_safearea_physical": "490,68,460,382",
-              "oem_layout_sport_full_safearea_physical": "370,68,700,382",
-              "oem_layout_sport_small_safearea_physical": "14,68,460,382",
+              "v35_lower_bar_observability": "KOMO_SERVICE,FOLLOW_MODE,SETTERS,FLUSH,RG_ACTIVE,RGI_VALID",
+              "v35_lower_bar_observability_policy": "READ_ONLY_NO_FCT17_FCT39_ACTIVATION",
+              "hook_safearea_policy": "V35_OEM_X_VERTICAL_75_450",
+              "oem_layout_full_safearea_reference_455": "370,75,700,375",
+              "oem_layout_small_safearea_reference_455": "490,75,460,375",
+              "oem_layout_safearea_canvas_yh_mapping": "vertical_inset_top75_bottom450",
+              "oem_layout_classic_full_safearea_physical": "370,75,700,375",
+              "oem_layout_classic_small_safearea_physical": "490,75,460,375",
+              "oem_layout_sport_full_safearea_physical": "370,75,700,375",
+              "oem_layout_sport_small_safearea_physical": "14,75,460,375",
           }.items():
               text = replace_key(text, k, v)
           mirror_info.write_text(text)
@@ -330,16 +341,18 @@ jobs:
               "lower_bar_context_policy": "KOMO_FOLLOW_INFO_NO_RGI_PRESENTATION",
               "lower_bar_context_cluster_state": "DO_NOT_TOUCH_RGACTIVE_OR_RGI_VALID",
               "lower_bar_context_maneuver_policy": "NO_RGSTATUS_NO_MANEUVER_WINDOW",
+              "lower_bar_observability": "KOMO_FOLLOW_RG_RGI_BEFORE_AFTER_V35",
+              "lower_bar_observability_behavior": "READ_ONLY_NO_PRESENTATION_MUTATION",
               "direct_display_revision": "experiment-oem-layout-second-screen-v3.5-cold-start-negotiation",
               "startup_revision": "V3_5_EARLY_PROTOCOL_READY_ASYNC_GEOMETRY",
               "startup_sd_runtime_gate": "DISABLED",
               "startup_fixed_display_delay": "NONE",
               "startup_stream_ready_marker": "/tmp/altscreen-private111.stream-ready",
               "startup_stream_ready_stable_decoded_frames": "2",
-              "safearea_policy": "V33_OEM_X_VERTICAL_68_450",
+              "safearea_policy": "V35_OEM_X_VERTICAL_75_450",
               "geometry_safearea_space": "OEM_X_VERTICAL_68_450",
-              "safearea_full": "370,68,700,382",
-              "safearea_small": "490,68,460,382",
+              "safearea_full": "370,75,700,375",
+              "safearea_small": "490,75,460,375",
               "cold_start_policy": "EARLY_NEGOTIATION_READY",
               "cold_start_capability_wait_ms": "500",
               "cold_start_geometry_gate": "ASYNC",
@@ -362,6 +375,8 @@ jobs:
               "universal_runtime_sha256": hook_sha,
               "oem_lower_bar": "CARPLAY_RGI_FCT19_21_22_PLUS_KOMO_GRAY_BAR_V4",
               "lower_bar_context_policy": "KOMO_FOLLOW_INFO_NO_RGI_PRESENTATION",
+              "lower_bar_observability": "KOMO_FOLLOW_RG_RGI_BEFORE_AFTER_V35",
+              "lower_bar_observability_policy": "READ_ONLY_NO_PRESENTATION_MUTATION",
               "rebuild_required": "none",
               "vehicle_zip_status": "READY_FOR_V3_5_VEHICLE_TEST",
               "negotiation_policy": "V35_EARLY_PROTOCOL_READY",
@@ -371,9 +386,9 @@ jobs:
               "stream_ready_stable_decoded_frames": "2",
               "fixed_display_delay": "NONE",
               "sidecar_attach_policy": "RECOVER_CURRENT_SESSION",
-              "safearea_policy": "V3_3_OEM_X_VERTICAL_68_450",
-              "safearea_full": "370,68,700,382",
-              "safearea_small": "490,68,460,382",
+              "safearea_policy": "V3_5_OEM_X_VERTICAL_75_450",
+              "safearea_full": "370,75,700,375",
+              "safearea_small": "490,75,460,375",
           }.items():
               text = replace_key(text, k, v)
           ready.write_text(text)
@@ -463,6 +478,11 @@ jobs:
           grep -Fq 'display_start_policy=STREAM_DRIVEN' BRANCH-ZIP-READY.txt
           grep -Fq 'fixed_display_delay=NONE' BRANCH-ZIP-READY.txt
           grep -Fq 'lower_bar_context_policy=KOMO_FOLLOW_INFO_NO_RGI_PRESENTATION' BRANCH-ZIP-READY.txt
+          grep -Fq 'lower_bar_observability=KOMO_FOLLOW_RG_RGI_BEFORE_AFTER_V35' BRANCH-ZIP-READY.txt
+          grep -Fq 'lower_bar_observability_policy=READ_ONLY_NO_PRESENTATION_MUTATION' BRANCH-ZIP-READY.txt
+          grep -Fq 'safearea_policy=V3_5_OEM_X_VERTICAL_75_450' BRANCH-ZIP-READY.txt
+          grep -Fq 'safearea_full=370,75,700,375' BRANCH-ZIP-READY.txt
+          grep -Fq 'safearea_small=490,75,460,375' BRANCH-ZIP-READY.txt
           grep -Fq 'oem_lower_bar=CARPLAY_RGI_FCT19_21_22_PLUS_KOMO_GRAY_BAR_V4' BRANCH-ZIP-READY.txt
           echo 'V35_BRANCH_ZIP_CONTRACT=PASS'
 
