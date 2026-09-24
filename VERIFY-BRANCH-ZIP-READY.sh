@@ -59,7 +59,7 @@ grep -Fq 'branch_zip_policy=GITHUB_BRANCH_ZIP_INSTALLABLE' "$HMI_INFO" ||
     fail "HMI BUILD_INFO direct-download policy missing"
 mode=$(sed -n 's/^mode=//p' "$HMI_INFO")
 case "$mode" in
-  PRIVATE111_DIRECT_DISPLAY_V3_WHEEL_ZOOM|PRIVATE111_DIRECT_DISPLAY_V3_3_OEM_LOWER_BAR) ;;
+  PRIVATE111_DIRECT_DISPLAY_V3_WHEEL_ZOOM|PRIVATE111_DIRECT_DISPLAY_V3_3_OEM_LOWER_BAR|PRIVATE111_DIRECT_DISPLAY_V3_4_STREAM_DRIVEN) ;;
   *) fail "unsupported HMI mode: $mode" ;;
 esac
 grep -Fq 'wheel_zoom_build_status=COMPILED_READY_FOR_VEHICLE_TEST' "$HMI_INFO" ||
@@ -112,6 +112,24 @@ if [ "$mode" = PRIVATE111_DIRECT_DISPLAY_V3_3_OEM_LOWER_BAR ]; then
 fi
 
 if grep -Fq 'branch=experiment/oem-layout-second-screen_v3.4' "$READY"; then
+    [ "$mode" = PRIVATE111_DIRECT_DISPLAY_V3_4_STREAM_DRIVEN ] ||
+        fail "V3.4 HMI mode mismatch"
+    [ -s "$RGI_META" ] || fail "V3.4 RGI metadata hook missing"
+    actual_rgi_sha=$(sha256_file "$RGI_META")
+    [ "$actual_rgi_sha" = 87d10f67fbb3dc142642d899977bab0a6eb4009f61d3bcd873d0cce9e01511f7 ] ||
+        fail "V3.4 RGI metadata hook identity mismatch"
+    grep -Fq "rgi_metadata_sha256=$actual_rgi_sha" "$READY" ||
+        fail "V3.4 ready marker RGI SHA mismatch"
+    grep -Fq 'oem_lower_bar_map_scale=FCT45_STOCK_PASSTHROUGH' "$HMI_INFO" ||
+        fail "V3.4 OEM map-scale passthrough missing"
+    grep -Fq 'safearea_policy=V33_OEM_X_VERTICAL_68_450' "$HMI_INFO" ||
+        fail "V3.4 HMI safeArea policy is not top68/bottom450"
+    grep -Fq 'geometry_safearea_space=OEM_X_VERTICAL_68_450' "$HMI_INFO" ||
+        fail "V3.4 HMI safeArea coordinate-space marker missing"
+    grep -Fq 'safearea_full=370,68,700,382' "$READY" ||
+        fail "V3.4 FULL safeArea ready marker mismatch"
+    grep -Fq 'safearea_small=490,68,460,382' "$READY" ||
+        fail "V3.4 SMALL safeArea ready marker mismatch"
     grep -Fq 'mode=PRIVATE111_DIRECT_DISPLAY_V3_4_STREAM_DRIVEN' "$READY" ||
         fail "V3.4 ready marker mode mismatch"
     grep -Fq 'vehicle_zip_status=READY_FOR_V3_4_VEHICLE_TEST' "$READY" ||

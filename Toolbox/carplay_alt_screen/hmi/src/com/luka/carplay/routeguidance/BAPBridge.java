@@ -250,19 +250,29 @@ public final class BAPBridge {
             if (current == null) return false;
 
             if (current == gate) {
+                /*
+                 * Keep the raw publisher aligned with the listener currently
+                 * wrapped by the gate.  This matters after HMI service
+                 * replacement: Fct19/21/22 and the presentation sync must not
+                 * keep writing to an old detached CombiBAPServiceNavi.
+                 */
+                if (gate != null && gate.real != null)
+                    appConnectorNavi = gate.real;
                 syncGateBlocks();
                 return true;
             }
 
             if (current instanceof GatedCombiService) {
                 gate = (GatedCombiService)current;
+                appConnectorNavi = gate.real;
                 syncGateBlocks();
                 if (presentationContextActive) presentationResyncPending = true;
-                Log.w(TAG, "LOWER_BAR_GATE=ADOPTED existing_gate=YES");
+                Log.w(TAG, "LOWER_BAR_GATE=ADOPTED existing_gate=YES service=REFRESHED");
                 return true;
             }
 
             boolean replacingDetachedGate = gate != null;
+            appConnectorNavi = current;
             gate = new GatedCombiService(current);
             syncGateBlocks();
             cs.setCombiBAPListenerCombiService(gate);
@@ -402,6 +412,13 @@ public final class BAPBridge {
         if (!presentationContextActive && !previousPresentationStateKnown) return;
 
         if (presentationContextActive) {
+            /*
+             * Re-resolve the current Audi listener before the final inactive
+             * sync.  A listener replacement can happen even when no lower-bar
+             * field changed after the replacement.
+             */
+            if (!ensureGateInstalled())
+                Log.w(TAG, "OEM_RG_CONTEXT shutdown listener refresh unavailable");
             try { publishPresentationSync(false); }
             catch (Throwable t) {
                 Log.w(TAG, "OEM_RG_CONTEXT BAP deactivate sync failed: " + t);
