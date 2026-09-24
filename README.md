@@ -1,10 +1,12 @@
-> **V3.5 冷启动 + 观测增强（2026-09-24）**：基于 V3.4，保留 Context80、Sport Small、滚轮和动态 ViewArea；本轮仅把 safeArea 纵向由 `68..450` 调为 `75..450`（横向不变），并新增只读 KOMO/Follow/RG/RGI 日志。V3.5 将 AirPlay **NEGOTIATION_READY** 与 Screen **DISPLAY_GEOMETRY_READY** 解耦：ABI/CF/private111 backend 就绪后即可参与首次 capability transaction；早到的 capability 最多进行 500 ms 条件等待而不是固定 sleep；若 /info 先于 Screen display-1 可读，则仅用已实车测得的 1440×542 作为 negotiation bootstrap，真正 private renderer attach 前必须重新读取 live Screen geometry 并严格匹配，否则拒绝接管。当前分支待 CI promotion 与实车冷启动验证。\n\n> **V3.4 实车修正（2026-09-24）**：上一版通过 `rgActive/rgiDataValid + Fct17/Fct39` 激活 OEM Route Guidance，实车会错误拉起 maneuver/箭头小窗。当前 V3.4 已撤销该 presentation 激活路径，改为直接镜像 CarPlay 的当前道路、剩余距离和 ETA 到 `ClusterService/KOMO follow-info`，目标仅更新地图底部灰色 route-info 条；不写 RGStatus/ActiveRGType，不置 RGI valid，不主动激活箭头窗。
+> **V3.5 冷启动 + 观测增强（2026-09-24）**：基于 V3.4，保留 Context80、Sport Small、滚轮和动态 ViewArea；本轮仅把 safeArea 纵向由 `68..450` 调为 `75..450`（横向不变），并新增只读 KOMO/Follow/RG/RGI 日志。V3.5 将 AirPlay **NEGOTIATION_READY** 与 Screen **DISPLAY_GEOMETRY_READY** 解耦：ABI/CF/private111 backend 就绪后即可参与首次 capability transaction；早到的 capability 最多进行 500 ms 条件等待而不是固定 sleep；若 /info 先于 Screen display-1 可读，则仅用已实车测得的 1440×542 作为 negotiation bootstrap，真正 private renderer attach 前必须重新读取 live Screen geometry 并严格匹配，否则拒绝接管。当前分支已完成 CI promotion/整包静态校验，状态为 `READY_FOR_V3_5_VEHICLE_TEST`，仍待实车冷启动与灰条 Follow Mode 验证。
+
+> **V3.4 实车修正（2026-09-24）**：上一版通过 `rgActive/rgiDataValid + Fct17/Fct39` 激活 OEM Route Guidance，实车会错误拉起 maneuver/箭头小窗。当前 V3.4 已撤销该 presentation 激活路径，改为直接镜像 CarPlay 的当前道路、剩余距离和 ETA 到 `ClusterService/KOMO follow-info`，目标仅更新地图底部灰色 route-info 条；不写 RGStatus/ActiveRGType，不置 RGI valid，不主动激活箭头窗。
 
 <!-- BRANCH_STATUS_BEGIN -->
 > [!IMPORTANT]
-> **分支用途：** V3.5 冷启动专项候选主线。继承 V3.4 全部显示/布局能力与 V3.1 后期 `OEM_TARGET_FOLLOW_V1` 滚轮逻辑，重点修复 V3.1 的纵向几何：保留 OEM 横向安全范围，同时把纵向 safeArea 从局部 `y=49,h=300` 放开到地图有效高度 `y=0,h=455`；另修复 future frame timestamp 可能误报 stall 的边缘问题。
+> **分支用途：** V3.5 冷启动 + 灰条观测候选主线。继承 V3.4 全部显示/布局能力与 V3.1 后期 `OEM_TARGET_FOLLOW_V1` 滚轮逻辑；当前 CarPlay safeArea 保留 OEM 横向范围，纵向为 `top=75,bottom=450`（FULL=`370,75,700,375`，SMALL=`490,75,460,375`），并保留动态 ViewArea 与 future-frame stall 修正。
 >
-> **上车测试结论：** V3.5 尚未实车；当前修改目标仅为消除首次 AirPlay capability transaction 早于 Screen geometry READY 时的冷启动竞态。CI promotion 完成前状态为 `PENDING_V3_5_BUILD`，完成后仍需实车分别验证“先插手机再启动车机 / 车机完全启动后再插手机 / 快速重连”三类冷启动时序。
+> **上车测试结论：** V3.5 尚未实车；当前 HEAD 已完成 HMI/JAR、universal hook、事务回归、完整 ZIP verifier 与 promotion，静态状态为 `READY_FOR_V3_5_VEHICLE_TEST`。仍需分别验证“先插手机再启动车机 / 车机完全启动后再插手机 / 快速重连”，并核对 KOMO Follow Mode 灰条日志。
 >
 > **当前定位：** V3.5 保留 V3.4 的显示链，仅把纵向 safeArea 上边界调到 75；同时记录 `KOMO_SERVICE`、`KOMO_FOLLOW_MODE`、三项 setter、route-info flush、`RG_ACTIVE` 与 `RGI_VALID` 的 before/after。日志探针只读，不重新引入 Fct17/Fct39 或 RGI presentation 激活。上车重点同时验证冷启动和灰条 Follow Mode。
 <!-- BRANCH_STATUS_END -->
