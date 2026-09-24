@@ -1,6 +1,6 @@
 #!/bin/sh
 # Internal V3 restore APPLY step. Do not invoke directly; use altscreen_restore_transaction.sh.
-# Releases Java80 demand, restores the exact pre-install carplay_hook.jar, then
+# Releases Java80 demand, removes the project-owned carplay_hook.jar, then
 # restores the native AltScreen/preload transaction. No MMI Mirror is involved.
 set -u
 
@@ -32,14 +32,12 @@ fi
 
 CONTROLLER="$SCRIPTDIR/altscreen_chain_test.sh"
 [ -f "$CONTROLLER" ] || { echo "FAIL: installed chain controller missing"; exit 127; }
-[ -n "$VOLUME" ] || { echo "FAIL: SD card required to restore original Java HMI JAR"; exit 1; }
+[ -n "$VOLUME" ] || { echo "FAIL: SD card required to restore original system files"; exit 1; }
 
 RUNTIME="$DEVICE_ROOT/mnt/app/root/carplay-altscreen"
 TXN_DIR="$VOLUME/MMI-Cockpit-Carplay/staging/restore-apply"
 ENABLED="$RUNTIME/state/basevideo3.enabled"
 JAR="$DEVICE_ROOT/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar"
-JAR_DIR=$(dirname -- "$JAR")
-BACKUP="$VOLUME/MMI-Cockpit-Carplay/backup/basevideo3-hmi-original"
 ACTIVE="$DEVICE_ROOT/tmp/mmi-mirror-active"
 READY="$DEVICE_ROOT/tmp/mmi-mirror-basevideo.ready"
 STARTED="$DEVICE_ROOT/tmp/mmi-mirror-controller.started"
@@ -68,50 +66,7 @@ cleanup_txn(){ [ ! -e "$TXN_DIR" ] || rm -rf "$TXN_DIR" 2>/dev/null || true; }
 trap cleanup_txn 0
 trap 'cleanup_txn; exit 130' 1 2 15
 
-hmi_backup_project_managed(){
-    jar=$1
-    [ -f "$jar" ] || return 1
-    grep -Fq 'com/luka/carplay/cluster/ClusterStateController.class' "$jar" 2>/dev/null && return 0
-    grep -Fq 'com/luka/carplay/cluster/WheelZoomBridge.class' "$jar" 2>/dev/null && return 0
-    grep -Fq 'com/luka/carplay/cluster/ClusterLayerController.class' "$jar" 2>/dev/null && return 0
-    set -- $(cksum < "$jar" 2>/dev/null || echo "0 0")
-    sum=${1:-0}
-    bytes=${2:-0}
-    case "$bytes:$sum" in
-      143072:1515795662|149510:180684234|149979:2362627699|150026:3028143795) return 0 ;;
-      *) return 1 ;;
-    esac
-}
 
-verify_backup(){
-    [ -f "$BACKUP/COMPLETE" ] && [ -f "$BACKUP/target" ] || return 1
-    [ "$(cat "$BACKUP/target" 2>/dev/null)" = "/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar" ] || return 1
-    bp=0; ba=0
-    [ ! -f "$BACKUP/present" ] || bp=1
-    [ ! -f "$BACKUP/absent" ] || ba=1
-    [ $((bp + ba)) -eq 1 ] || return 1
-    if [ "$bp" = 1 ]; then
-        [ -s "$BACKUP/carplay_hook.jar" ] || return 1
-        [ -f "$BACKUP/cksum" ] || return 1
-        [ "$(cksum < "$BACKUP/carplay_hook.jar")" = "$(cat "$BACKUP/cksum")" ] || return 1
-        if hmi_backup_project_managed "$BACKUP/carplay_hook.jar"; then
-            echo "RESTORE_APPLY_PREFLIGHT=FAIL reason=HMI_BACKUP_PROJECT_MANAGED production_changed=NO"
-            return 1
-        fi
-        if [ -f "$JAR" ] && ! hmi_backup_project_managed "$JAR" && ! cmp -s "$BACKUP/carplay_hook.jar" "$JAR"; then
-            echo "RESTORE_APPLY_PREFLIGHT=FAIL reason=LIVE_HMI_CONFLICT_WITH_TRUSTED_BACKUP production_changed=NO"
-            return 1
-        fi
-    else
-        [ ! -e "$BACKUP/carplay_hook.jar" ] || return 1
-        [ ! -e "$BACKUP/cksum" ] || return 1
-        if [ -f "$JAR" ] && ! hmi_backup_project_managed "$JAR"; then
-            echo "RESTORE_APPLY_PREFLIGHT=FAIL reason=ABSENT_BACKUP_LIVE_JAR_NOT_PROJECT_MANAGED production_changed=NO"
-            return 1
-        fi
-    fi
-    return 0
-}
 
 strip_blocks(){
     awk '
@@ -151,15 +106,6 @@ strip_blocks(){
     ' "$1"
 }
 
-# Recheck the HMI recovery source immediately before the first APPLY mutation.
-# The outer transaction wrapper already performed the same trust check; this
-# closes the SD-card TOCTOU window between PREPARED and APPLY.
-verify_backup || {
-    echo "RESTORE_APPLY_PREFLIGHT=FAIL reason=HMI_BACKUP_CHANGED_OR_UNTRUSTED production_changed=NO"
-    exit 1
-}
-echo "RESTORE_APPLY_PREFLIGHT=PASS hmi_backup=TRUSTED production_changed=NO"
-
 # Stop the pixel sidecar first. It has no context writer in this branch.
 [ ! -x "$MIRROR_STOP" ] || /bin/sh "$MIRROR_STOP" >/dev/null 2>&1 || true
 # Release demand while the current Java controller is still resident. It will
@@ -197,27 +143,13 @@ if [ -n "$STARTUP" ]; then
     system_space_snapshot restore_after_publish
 fi
 
-verify_backup || { echo "FAIL: original Java HMI backup unavailable or damaged: $BACKUP"; exit 1; }
-mount_app_rw || { echo "FAIL: cannot mount /mnt/app to restore Java HMI"; exit 1; }
-ensure_dirs "$JAR_DIR" || { mount_app_ro >/dev/null 2>&1 || true; echo "FAIL: cannot create JAR directory"; exit 1; }
+mount_app_rw || { echo "FAIL: cannot mount /mnt/app to remove Java HMI"; exit 1; }
 TMP="$JAR.basevideo3.restore.tmp"
-rm -f "$TMP" 2>/dev/null || true
-if [ -f "$BACKUP/present" ]; then
-    cp "$BACKUP/carplay_hook.jar" "$TMP" && chmod 644 "$TMP" && mv "$TMP" "$JAR" || {
-        mount_app_ro >/dev/null 2>&1 || true
-        echo "FAIL: cannot restore original carplay_hook.jar"; exit 1; }
-    if command -v cksum >/dev/null 2>&1 && [ -f "$BACKUP/cksum" ]; then
-        [ "$(cksum < "$JAR")" = "$(cat "$BACKUP/cksum")" ] || {
-            mount_app_ro >/dev/null 2>&1 || true
-            echo "FAIL: restored carplay_hook.jar checksum mismatch"; exit 1; }
-    fi
-    echo "HMI_CONTROL_PLANE=RESTORED original=present"
-else
-    rm -f "$JAR" "$TMP" || {
-        mount_app_ro >/dev/null 2>&1 || true
-        echo "FAIL: cannot remove standalone carplay_hook.jar"; exit 1; }
-    echo "HMI_CONTROL_PLANE=RESTORED original=absent"
-fi
+rm -f "$JAR" "$TMP" || {
+    mount_app_ro >/dev/null 2>&1 || true
+    echo "FAIL: cannot remove project-owned carplay_hook.jar"; exit 1; }
+[ ! -e "$JAR" ] || { mount_app_ro >/dev/null 2>&1 || true; echo "FAIL: carplay_hook.jar remains after removal"; exit 1; }
+echo "HMI_CONTROL_PLANE=REMOVED project_owned=YES permanent_oem_backup=NOT_USED"
 sync >/dev/null 2>&1 || true
 mount_app_ro || { echo "FAIL: cannot remount /mnt/app read-only"; exit 1; }
 
