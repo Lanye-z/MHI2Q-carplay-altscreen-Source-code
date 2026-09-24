@@ -2061,8 +2061,18 @@ int p1404_cockpit_native_attach(void *receiver, void *stream) {
         return 0;
     }
     if (!p1404_cockpit_native_get_geometry(&width, &height) &&
-        !p1404_cockpit_native_refresh_geometry()) return 0;
-    (void)p1404_cockpit_native_get_geometry(&width, &height);
+        !p1404_cockpit_native_refresh_geometry()) {
+        altscreen_log("ERROR PHASE=NATIVE_111_ATTACH_GEOMETRY result=REFUSED reason=live_screen_geometry_unavailable bootstrap_not_used_for_renderer=1");
+        return 0;
+    }
+    if (!p1404_cockpit_native_get_geometry(&width, &height)) {
+        altscreen_log("ERROR PHASE=NATIVE_111_ATTACH_GEOMETRY result=REFUSED reason=geometry_not_published_after_refresh");
+        return 0;
+    }
+    if (!alt_airplay_validate_runtime_geometry(width, height)) {
+        altscreen_log("ERROR PHASE=NATIVE_111_ATTACH_GEOMETRY result=REFUSED reason=negotiated_runtime_geometry_mismatch source59_fallthrough_blocked=1");
+        return 0;
+    }
     video_impl = read_ptr_at(stream, SCREEN_STREAM_VIDEO_IMPL_OFF);
     renderer = read_ptr_at(video_impl, OMX_VIDEO_RENDERER_OFF);
     if (!video_impl) {
