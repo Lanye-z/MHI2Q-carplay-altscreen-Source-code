@@ -580,7 +580,7 @@ cmd_install(){
 cmd_start(){
     lock_acquire
     if [ "$TESTING" != 1 ] && [ "${ALTSCREEN_INTEGRATED_START:-0}" != 1 ]; then
-        say "FAIL: direct controller START is disabled; use start_mmi_cockpit_carplay_rx_test.sh so type111 and standalone BaseVideo3/Java80 start as one transaction"
+        say "FAIL: direct controller START is disabled; use start_mmi_cockpit_carplay_rx_test.sh so native negotiation and stream-driven display start as one transaction"
         lock_release
         return 1
     fi
@@ -590,27 +590,24 @@ cmd_start(){
     [ -s "$UNIVERSAL_DST" ] || { say "FAIL: universal preload missing"; lock_release; return 1; }
     awk -v query="$UNIVERSAL_REL" -f "$PRELOAD_AWK" "$(p "$LIVE_JSON_SI")" >/dev/null || {
         say "FAIL: universal preload is not armed in carplay env"; lock_release; return 1; }
-    if [ -f "$STATE_DIR/ACTIVE" ]; then
-        lock_release || return 1
-        say "START=ALREADY_ACTIVE reboot_required=YES"
-        return 0
-    fi
-    run_id="$(date +%Y%m%d_%H%M%S)_$$"; session="$LOG_ROOT/sessions/$run_id"
+
+    run_id="$(date +%Y%m%d_%H%M%S)_$"; session="$LOG_ROOT/sessions/$run_id"
     ensure_dirs "$session" "$STATE_DIR" || { lock_release; return 1; }
     echo "$run_id" > "$STATE_DIR/run_id"; echo "$session" > "$STATE_DIR/session_path"
-    echo observe > "$STATE_DIR/IAP2_PROFILE"; rm -f "$STATE_DIR/ARMED_IAP2"
-    for m in ARMED ARMED_MUTATE ARMED_INFO ARMED_FEATURE ARMED_CREATE111 ACTIVE FORCE_START; do
-        touch "$STATE_DIR/$m" || { lock_release; return 1; }
-    done
-    # Java/HMI is the sole context owner in private111 direct-display V2.
-    rm -f "$STATE_DIR/FULL_CHAIN_MODE" "$STATE_DIR/NATIVE_DISPLAY_MODE"
-    mount_rw "$(p /mnt/app)" || { lock_release; return 1; }; MR_APP=1
-    ensure_dirs "$(dirname -- "$PROBE_MARKER")" || { finish_mounts; lock_release; return 1; }
-    echo "$run_id" > "$PROBE_MARKER" || { finish_mounts; lock_release; return 1; }
-    finish_mounts || { lock_release; return 1; }
-    say "AUTH_PRIVATE111_CORE=UNCHANGED resolver=dynamic"
+
+    # V3.4 production policy: preload installation is the persistent enable
+    # contract. SD markers remain diagnostics/rollback metadata only and may not
+    # gate a CarPlay session. Remove legacy arming files so an old card cannot
+    # accidentally reintroduce V3.3 authorization semantics.
+    rm -f "$STATE_DIR/ARMED" "$STATE_DIR/ARMED_MUTATE" "$STATE_DIR/ARMED_IAP2" \
+          "$STATE_DIR/ARMED_INFO" "$STATE_DIR/ARMED_FEATURE" "$STATE_DIR/ARMED_CREATE111" \
+          "$STATE_DIR/FORCE_START" "$STATE_DIR/FULL_CHAIN_MODE" "$STATE_DIR/NATIVE_DISPLAY_MODE"
+    touch "$STATE_DIR/ACTIVE" || { lock_release; return 1; }
+
+    say "AUTH_PRIVATE111_CORE=V34_ALWAYS_ON authority=installed_preload sd_runtime_gate=DISABLED"
+    say "NEGOTIATION_POLICY=ONE_CARPLAY_SESSION automatic_main110_then_private111 no_display_gate=YES"
     say "DISPLAY_PATH=PRIVATE111_DIRECT source=ScreenStreamProcessData h264_shm=/carplay111_h264 decoder_backend=stock_omx_screen_linearized_shm decoded_shm=/carplay111_decoded sink=displayable3_gles context_owner=JAVA80 window58_readback=0"
-    say "IAP2_PROFILE=observe ARMED_IAP2=ABSENT policy=owner_corrected_no_themeassets_synthesis"
+    say "IAP2_THEMEASSETS_MUTATION=DISABLED policy=V33_PROVEN_PRIVATE111_WITHOUT_THEMEASSETS"
     lock_release || return 1
     say "START=PASS profile=UNIVERSAL run_id=$run_id reboot_required=YES"
 }
@@ -669,7 +666,9 @@ cmd_status(){
     else
         echo "UNIVERSAL_PRELOAD_CONFIG=NOT_ARMED"
     fi
-    for m in ARMED ACTIVE FORCE_START ARMED_IAP2; do [ -e "$STATE_DIR/$m" ] && echo "MARKER $m=PRESENT" || echo "MARKER $m=ABSENT"; done
+    for m in ACTIVE ARMED FORCE_START ARMED_IAP2; do [ -e "$STATE_DIR/$m" ] && echo "MARKER $m=PRESENT" || echo "MARKER $m=ABSENT"; done
+    echo "NEGOTIATION_POLICY=V34_ALWAYS_ON_WHILE_PRELOAD_INSTALLED sd_runtime_gate=DISABLED"
+    echo "DISPLAY_START_POLICY=STREAM_DRIVEN stable_decoded_frames=2 fixed_delay=NONE"
     echo "FIRMWARE_PROFILE=UNIVERSAL"
     echo "RESOLVER_POLICY=dynamic_symbols_plus_ELF_relocations fail_open=YES"
     echo "FIREWALL_TYPE111=RUNTIME_EXACT_PORT persistent_high_port_range=ABSENT"
