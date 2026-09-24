@@ -141,15 +141,15 @@ grep -Fq 'oem_geometry_build_status=COMPILED_OBSERVER_READY' "$HMI_INFO" 2>/dev/
     echo "ACTION=RUN_OEM_LAYOUT_OBSERVER_BUILD_BEFORE_INSTALL"
     exit 1
 }
-grep -Eq '^mode=(PRIVATE111_DIRECT_DISPLAY_V3_WHEEL_ZOOM|PRIVATE111_DIRECT_DISPLAY_V3_3_OEM_LOWER_BAR|PRIVATE111_DIRECT_DISPLAY_V3_4_STREAM_DRIVEN)$' "$HMI_INFO" 2>/dev/null &&
+grep -Eq '^mode=(PRIVATE111_DIRECT_DISPLAY_V3_WHEEL_ZOOM|PRIVATE111_DIRECT_DISPLAY_V3_3_OEM_LOWER_BAR|PRIVATE111_DIRECT_DISPLAY_V3_4_STREAM_DRIVEN|PRIVATE111_DIRECT_DISPLAY_V3_5_COLD_START)$' "$HMI_INFO" 2>/dev/null &&
 grep -Fq 'wheel_zoom_build_status=COMPILED_READY_FOR_VEHICLE_TEST' "$HMI_INFO" 2>/dev/null || {
-    echo "FAIL: V3/V3.3/V3.4 HMI artifact is not the compiled vehicle-test build"
+    echo "FAIL: V3/V3.3/V3.4/V3.5 HMI artifact is not the compiled vehicle-test build"
     grep -E '^(mode|wheel_zoom_build_status|jar_size|jar_cksum|jar_sha256)=' "$HMI_INFO" 2>/dev/null || true
     echo "ACTION=RUN_WHEEL_ZOOM_V3_BUILD"
     exit 1
 }
 [ -s "$MIRROR_INFO" ] || { echo "FAIL: V2 Mirror BUILD_INFO missing: $MIRROR_INFO"; exit 1; }
-grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V3_4' "$MIRROR_INFO" 2>/dev/null &&
+grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V3_5' "$MIRROR_INFO" 2>/dev/null &&
 grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$MIRROR_INFO" 2>/dev/null || {
     echo "FAIL: this package is not an approved rebuilt V2 vehicle release"
     grep -E '^(release_binary_status|vehicle_zip_status)=' "$MIRROR_INFO" 2>/dev/null || true
@@ -331,7 +331,7 @@ jar_valid "$JAR_SOURCE" || {
     exit 1
 }
 
-echo "PACKAGE_MODE=CARPLAY_PRIVATE111_DIRECT_DISPLAY_V3_4_STREAM_DRIVEN"
+echo "PACKAGE_MODE=CARPLAY_PRIVATE111_DIRECT_DISPLAY_V3_5_COLD_START"
 echo "NATIVE_SOURCE=private111_ScreenStreamProcessData h264_shm=/carplay111_h264"
 echo "DECODER_BACKEND=stock_omx_screen_linearized_shm decoded_shm=/carplay111_decoded"
 echo "PIXEL_BRIDGE=Screen_linearized_NV12_to_existing_MMI_GLES"
@@ -348,7 +348,7 @@ CHAIN_RC=$?
 MIRROR_RUNTIME="$DEVICE_ROOT/mnt/app/root/carplay-altscreen/bin/mirror"
 [ -x "$MIRROR_RUNTIME/carplay-alt111-mirror-display" ] || { echo "FAIL: integrated direct-display binary was not staged"; exit 1; }
 [ -x "$MIRROR_RUNTIME/start_vehicle.sh" ] || { echo "FAIL: integrated direct-display launcher was not staged"; exit 1; }
-[ -x "$MIRROR_RUNTIME/stream_supervisor.sh" ] || { echo "FAIL: V3.4 stream supervisor was not staged"; exit 1; }
+[ -x "$MIRROR_RUNTIME/stream_supervisor.sh" ] || { echo "FAIL: V3.5 stream supervisor was not staged"; exit 1; }
 
 APP_RW=0
 rollback(){
@@ -382,6 +382,6 @@ APP_RW=0
 
 echo "HMI_CONTROL_PLANE=INSTALLED target=/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar size=$EXPECTED_SIZE cksum=$EXPECTED_CKSUM"
 echo "HMI_CONTRACT=JAVA80 ctx80=98,101,102,3 basevideo=3"
-echo "V34_STARTUP_POLICY=private111_always_on display_stream_driven fixed_delay=NONE sd_runtime_gate=DISABLED"
+echo "V35_STARTUP_POLICY=early_negotiation_ready display_stream_driven fixed_delay=NONE sd_runtime_gate=DISABLED geometry_gate=ASYNC"
 echo "INSTALL=PASS integrated=AltScreen+H264Tap+DecoderTap+StreamSupervisor+Displayable3+Java80 reboot_required=YES"
 exit 0
