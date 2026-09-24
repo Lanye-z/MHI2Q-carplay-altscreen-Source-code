@@ -153,8 +153,12 @@ STARTED="$DEVICE_ROOT/tmp/mmi-mirror-controller.started"
 MIRROR="$RUNTIME/bin/mirror"
 MIRROR_START="$MIRROR/start_vehicle.sh"
 MIRROR_STOP="$MIRROR/stop_vehicle.sh"
+MIRROR_SUPERVISOR="$MIRROR/stream_supervisor.sh"
 MIRROR_PID="$DEVICE_ROOT/tmp/altscreen_mirror.pid"
 MIRROR_LOG="$DEVICE_ROOT/tmp/altscreen_mirror.log"
+SUPERVISOR_PID="$DEVICE_ROOT/tmp/altscreen_stream_supervisor.pid"
+SUPERVISOR_LOG="$DEVICE_ROOT/tmp/altscreen_stream_supervisor.log"
+STREAM_READY="$DEVICE_ROOT/tmp/altscreen-private111.stream-ready"
 
 file_size(){ n=$(wc -c < "$1" 2>/dev/null) || { echo 0; return; }; set -- $n; echo "${1:-0}"; }
 file_cksum(){ if command -v cksum >/dev/null 2>&1; then cksum < "$1" 2>/dev/null | awk '{print $1}'; else echo unavailable; fi; }
@@ -221,6 +225,7 @@ fi
 stage PRECHECK_SIDECAR
 [ -x "$MIRROR/carplay-alt111-mirror-display" ] || pre_fail "direct-display sidecar binary missing"
 [ -x "$MIRROR_START" ] || pre_fail "direct-display sidecar launcher missing"
+[ -x "$MIRROR_SUPERVISOR" ] || pre_fail "V3.4 stream supervisor missing"
 
 stage LOCATE_STARTUP
 STARTUP=""
@@ -275,7 +280,7 @@ verify_autostart_contract(){
       $0 == "# BEGIN ALT111 MIRROR AUTOSTART" { begin_old++ }
       $0 == "# END ALT111 MIRROR AUTOSTART" { end_old++ }
       /\/mnt\/app\/root\/carplay-altscreen\/state\/basevideo3.enabled/ { enabled++ }
-      /\/mnt\/app\/root\/carplay-altscreen\/bin\/mirror\/start_vehicle.sh/ { launcher++ }
+      /\/mnt\/app\/root\/carplay-altscreen\/bin\/mirror\/stream_supervisor.sh/ { launcher++ }
       /\/tmp\/altscreen_autostart.log/ { autolog++ }
       END {
         if (begin_new != 1 || end_new != 1 || begin_old != 0 || end_old != 0 ||
@@ -456,15 +461,14 @@ cat > "$BLOCK" <<'BASEVIDEO3_BOOT'
 if [ -f /mnt/app/root/carplay-altscreen/state/basevideo3.enabled ]; then
     (
         AUTOLOG=/tmp/altscreen_autostart.log
-        echo "AUTOSTART_BEGIN component=private111_direct_display" >>"$AUTOLOG" 2>&1 || true
-        rm -f /tmp/mmi-mirror-basevideo.ready >/dev/null 2>&1 || true
-        touch /tmp/mmi-mirror-active >/dev/null 2>&1 || true
-        if [ -x /mnt/app/root/carplay-altscreen/bin/mirror/start_vehicle.sh ]; then
-            /bin/sh /mnt/app/root/carplay-altscreen/bin/mirror/start_vehicle.sh >>"$AUTOLOG" 2>&1
-            MIRROR_START_RC=$?
-            echo "MIRROR_START_RC=$MIRROR_START_RC" >>"$AUTOLOG" 2>&1 || true
+        echo "AUTOSTART_BEGIN component=private111_stream_supervisor policy=stream_driven_no_fixed_delay" >>"$AUTOLOG" 2>&1 || true
+        rm -f /tmp/mmi-mirror-basevideo.ready /tmp/mmi-mirror-active >/dev/null 2>&1 || true
+        if [ -x /mnt/app/root/carplay-altscreen/bin/mirror/stream_supervisor.sh ]; then
+            /bin/sh /mnt/app/root/carplay-altscreen/bin/mirror/stream_supervisor.sh >>"$AUTOLOG" 2>&1
+            SUPERVISOR_RC=$?
+            echo "STREAM_SUPERVISOR_RC=$SUPERVISOR_RC" >>"$AUTOLOG" 2>&1 || true
         else
-            echo "MIRROR_START_RC=127 reason=launcher_missing" >>"$AUTOLOG" 2>&1 || true
+            echo "STREAM_SUPERVISOR_RC=127 reason=launcher_missing" >>"$AUTOLOG" 2>&1 || true
         fi
     ) &
 fi
@@ -495,17 +499,10 @@ else
 fi
 system_space_snapshot start_after_publish
 
-stage CURRENT_BOOT_DEMAND
-if [ "$CURRENT_ACTIVE_WAS_PRESENT" != 1 ] || [ "$MIRROR_WAS_RUNNING" != 1 ]; then
-    rm -f "$READY" 2>/dev/null || true
-    READY_CLEARED=1
-fi
-if [ "$CURRENT_ACTIVE_WAS_PRESENT" != 1 ]; then
-    touch "$ACTIVE" || fail "cannot publish current-boot BaseVideo demand"
-    ACTIVE_CREATED=1
-else
-    echo "START_COMPAT=CURRENT_BOOT_DEMAND_ALREADY_ACTIVE"
-fi
+stage CURRENT_BOOT_DISPLAY_RESET
+rm -f "$READY" "$ACTIVE" 2>/dev/null || true
+READY_CLEARED=1
+echo "DISPLAY_DEMAND_POLICY=STREAM_DRIVEN active_marker_owner=stream_supervisor fixed_delay=NONE"
 
 stage CONTROLLER_START
 CONTROLLER_ATTEMPTED=1
@@ -513,10 +510,13 @@ ALTSCREEN_INTEGRATED_START=1 /bin/sh "$CONTROLLER" start
 RC=$?
 [ "$RC" -eq 0 ] || fail_rc "$RC" "integrated AltScreen controller START failed"
 
-stage SIDECAR_START
-/bin/sh "$MIRROR_START"
-MIRROR_RC=$?
-[ "$MIRROR_RC" -eq 0 ] || fail_rc "$MIRROR_RC" "direct-display sidecar START failed"
+stage STREAM_SUPERVISOR_START
+/bin/sh "$MIRROR_SUPERVISOR" >/dev/null 2>&1 &
+sleep 1
+SUP_PID=$(cat "$SUPERVISOR_PID" 2>/dev/null || true)
+case "$SUP_PID" in ''|*[!0-9]*) fail "stream supervisor pid unavailable" ;; esac
+kill -0 "$SUP_PID" 2>/dev/null || fail "stream supervisor exited during startup"
+echo "STREAM_SUPERVISOR=RUNNING pid=$SUP_PID marker=$STREAM_READY"
 
 stage COMPLETE
 
@@ -525,9 +525,12 @@ trap - 0 1 2 15
 echo "DISPLAY_PATH=PRIVATE111_DIRECT source=ScreenStreamProcessData h264_shm=/carplay111_h264 decoder_backend=stock_omx_screen_linearized_shm decoded_shm=/carplay111_decoded sink=displayable3_gles window58_readback=0"
 echo "HMI_CONTROL_PLANE=JAVA80 context=80 composite=98,101,102,3"
 echo "CONTEXT_POLICY=JAVA_ONLY native_dmdt=0 sidecar_dmdt=0"
-echo "BASEVIDEO3_BOOT_DEMAND=ENABLED marker=/tmp/mmi-mirror-active"
+echo "PRIVATE111_NEGOTIATION_POLICY=ALWAYS_ON_WHILE_PRELOAD_INSTALLED sd_runtime_gate=DISABLED"
+echo "DISPLAY_START_POLICY=STREAM_DRIVEN marker=/tmp/altscreen-private111.stream-ready stable_decoded_frames=2 fixed_delay=NONE"
+echo "DYNAMIC_JAVA80_DEMAND=/tmp/mmi-mirror-active owner=stream_supervisor"
 echo "READY_MARKER=/tmp/mmi-mirror-basevideo.ready meaning=destination_first_successful_gles_present"
 if [ -f "$STARTED" ]; then echo "JAVA_CONTROLLER=OBSERVED current_boot=YES"; else echo "JAVA_CONTROLLER=NOT_YET_OBSERVED current_boot=NO_or_reboot_pending"; fi
-echo "DIRECT_DISPLAY_SIDECAR=RUNNING_OR_WAITING_FOR_PHONE_REQUEST_111 pidfile=$MIRROR_PID log=$MIRROR_LOG"
+echo "STREAM_SUPERVISOR=RUNNING pidfile=$SUPERVISOR_PID log=$SUPERVISOR_LOG"
+echo "DIRECT_DISPLAY_SIDECAR=STARTS_ONLY_AFTER_PRIVATE111_STREAM_READY pidfile=$MIRROR_PID log=$MIRROR_LOG"
 echo "START=PASS integrated=AltScreen+H264Tap+DecoderTap+Displayable3+Java80 reboot_required=YES"
 exit 0
