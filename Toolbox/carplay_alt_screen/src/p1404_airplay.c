@@ -579,28 +579,28 @@ static int alt_load_measured_k1004_safe_area(uint32_t display_w,
     memset(&r, 0, sizeof(r));
 
     /*
-     * ListModel176 remains the source for the OEM horizontal bounds. V3.3
+     * ListModel176 remains the source for the OEM horizontal bounds. V3.5
      * preserves X/W and applies the vehicle-tuned vertical safe region
-     * y=68,h=382 (bottom=450). The Audi layout may translate the whole map
+     * y=75,h=375 (bottom=450). The Audi layout may translate the whole map
      * plane afterwards; that compositor operation remains separate and must
      * not be cancelled here.
      */
     if (!strcmp(view, "SMALL")) {
         r.x = 490u;
-        r.y = 68u;
+        r.y = 75u;
         r.w = 460u;
-        r.h = 382u;
+        r.h = 375u;
         r.physical_w = 460u;
-        r.physical_h = 382u;
+        r.physical_h = 375u;
         r.renderer_dx = small_dx;
         r.renderer_dy = small_dy;
     } else if (!strcmp(view, "FULL")) {
         r.x = 370u;
-        r.y = 68u;
+        r.y = 75u;
         r.w = 700u;
-        r.h = 382u;
+        r.h = 375u;
         r.physical_w = 700u;
-        r.physical_h = 382u;
+        r.physical_h = 375u;
         r.renderer_dx = 0;
         r.renderer_dy = 0;
     } else {
@@ -610,13 +610,13 @@ static int alt_load_measured_k1004_safe_area(uint32_t display_w,
 
     /*
      * Horizontal safe bounds retain the measured OEM map-local geometry.
-     * Vertically, V3.3 uses the tuned 68..450 visible-map range. The whole-map
+     * Vertically, V3.3 uses the tuned 75..450 visible-map range. The whole-map
      * renderer translation is still applied afterwards (Sport SMALL contributes
      * -476 on X and normally 0 on Y).
      */
     physical_x = (int64_t)(!strcmp(view, "SMALL") ? 490u : 370u) +
                  (int64_t)r.renderer_dx;
-    physical_y = 68 + (int64_t)r.renderer_dy;
+    physical_y = 75 + (int64_t)r.renderer_dy;
     if (physical_x < -8192 || physical_x > 8192 ||
         physical_y < -8192 || physical_y > 8192) {
         return 0;
@@ -628,7 +628,7 @@ static int alt_load_measured_k1004_safe_area(uint32_t display_w,
     r.view[sizeof(r.view) - 1u] = 0;
     strncpy(r.layout, layout, sizeof(r.layout) - 1u);
     r.layout[sizeof(r.layout) - 1u] = 0;
-    strncpy(r.source, "k1004-oem-x-vertical-68-450-v33", sizeof(r.source) - 1u);
+    strncpy(r.source, "k1004-oem-x-vertical-75-450-v35", sizeof(r.source) - 1u);
     r.source[sizeof(r.source) - 1u] = 0;
     *out = r;
     return 1;
@@ -660,14 +660,14 @@ static void alt_resolve_cluster_safe_area(uint32_t display_w,
      */
     if (alt_is_measured_b9_canvas(display_w, display_h)) {
         out->x = 370u;
-        out->y = 68u;
+        out->y = 75u;
         out->w = 700u;
-        out->h = 382u;
+        out->h = 375u;
         out->physical_x = 370;
-        out->physical_y = 68;
+        out->physical_y = 75;
         out->physical_w = 700u;
-        out->physical_h = 382u;
-        strncpy(out->source, "k1004-default-v33-68-450-before-hmi",
+        out->physical_h = 375u;
+        strncpy(out->source, "k1004-default-v35-75-450-before-hmi",
                 sizeof(out->source) - 1u);
     } else {
         out->w = display_w;
@@ -750,9 +750,9 @@ static cf_obj make_cluster_layout_view_areas(uint32_t w, uint32_t h,
 
     memset(&full, 0, sizeof(full));
     full.x = 370u;
-    full.y = 68u;
+    full.y = 75u;
     full.w = 700u;
-    full.h = 382u;
+    full.h = 375u;
     if (!full.h || !alt_safe_rect_valid(&full, w, h)) goto fail;
 
     v = rect_dict(w, h, 0u, 0u);
@@ -766,9 +766,9 @@ static cf_obj make_cluster_layout_view_areas(uint32_t w, uint32_t h,
 
     memset(&small, 0, sizeof(small));
     small.x = 490u;
-    small.y = 68u;
+    small.y = 75u;
     small.w = 460u;
-    small.h = 382u;
+    small.h = 375u;
     if (!small.h || !alt_safe_rect_valid(&small, w, h)) goto fail;
 
     v = rect_dict(w, h, 0u, 0u);
@@ -929,8 +929,8 @@ void *alt_build_cluster_display(void) {
         "initialViewArea=%d adjacent=%d predeclared_even_if_hmi_late=%d "
         "view=full:%ux%u safe_source=%u,%u,%ux%u "
         "safe_physical=%d,%d,%ux%u renderer_offset=%d,%d "
-        "safe_yh_mapping=vertical_inset_top68_bottom450 "
-        "safearea_revision=V33_OEM_X_VERTICAL_68_450 "
+        "safe_yh_mapping=vertical_inset_top75_bottom450 "
+        "safearea_revision=V35_OEM_X_VERTICAL_75_450 "
         "renderer_geometry_revision=V31_ONE_TO_ONE_CLIP "
         "map_plane_terminal_y=26 map_plane_terminal_y_policy=metadata_only_not_renderer_offset "
         "mode=%s layout=%s source=%s renderer_scale=0 "
