@@ -1,0 +1,10 @@
+BRANCH_FROZEN=YES
+branch=experiment/oem-layout-second-screen_v3.4
+freeze_date=2026-09-24
+freeze_reason=COLD_START_EARLY_PHONE_CONNECT_HMI_FREEZE_DIO_RESTART_LOOP
+runtime_baseline_commit=a907419037d8508871cdf49ff4c5c17a10aac75c
+successor_branch=experiment/oem-layout-second-screen_v3.5
+development_policy=NO_FURTHER_RUNTIME_CHANGES
+allowed_changes=DOCUMENTATION_ONLY
+vehicle_status=HISTORICAL_BASELINE_NOT_RECOMMENDED_FOR_COLD_START_TEST
+notes=Cold-start failure occurred before normal AirPlay Session/private111/Context80 display activation. Preserve V3.4 for regression and comparison only.
