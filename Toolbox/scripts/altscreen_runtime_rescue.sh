@@ -77,6 +77,17 @@ valid_owner(){
     return 0
 }
 
+current_v34_runtime(){
+    dir=$1
+    valid_owner "$dir" || return 1
+    marker="$dir/$OWNER"
+    grep -Fxq 'runtime=carplay-altscreen' "$marker" 2>/dev/null || return 1
+    [ -f "$dir/bin/mirror/BUILD_INFO.txt" ] || return 1
+    grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V3_4' "$dir/bin/mirror/BUILD_INFO.txt" 2>/dev/null || return 1
+    [ -f "$dir/state/diagnostics.enabled" ] || return 1
+    return 0
+}
+
 trusted_backup(){
     original=""
     if [ -f "$LOWER_ORIGINAL/COMPLETE" ]; then
@@ -239,6 +250,62 @@ do_quarantine(){
     return 0
 }
 
+do_delete(){
+    [ -d "$QUARANTINE" ] && [ ! -L "$QUARANTINE" ] || {
+        log "DELETE_QUARANTINE=REFUSED reason=QUARANTINE_ABSENT_OR_UNSAFE production_changed=NO"
+        return 1
+    }
+
+    current_v34_runtime "$ROOT" || {
+        log "DELETE_QUARANTINE=REFUSED reason=CURRENT_V3_4_RUNTIME_NOT_VERIFIED production_changed=NO"
+        log "ACTION=REBOOT_AND_VERIFY_V3_4_FIRST"
+        return 1
+    }
+
+    recognized_unowned "$QUARANTINE" || {
+        log "DELETE_QUARANTINE=REFUSED reason=QUARANTINE_NOT_RECOGNIZED production_changed=NO"
+        return 1
+    }
+
+    log "DELETE_PREFLIGHT=PASS current_runtime=V3_4_OWNED quarantine=LEGACY_UNOWNED_RECOGNIZED backup=TRUSTED"
+    log "DELETE_SCOPE=/mnt/app/root/.carplay-altscreen.rescue-v1 only"
+    log "DELETE_BACKUPS=NO"
+    log "DELETE_CURRENT_RUNTIME=NO"
+
+    mount_app_rw || {
+        log "DELETE_QUARANTINE=REFUSED reason=MOUNT_APP_RW_FAILED production_changed=NO"
+        return 1
+    }
+
+    if rm -rf "$QUARANTINE"; then
+        sync >/dev/null 2>&1 || true
+    else
+        mount_app_ro >/dev/null 2>&1 || true
+        log "DELETE_QUARANTINE=FAIL reason=REMOVE_FAILED production_changed=UNKNOWN"
+        return 1
+    fi
+
+    if ! mount_app_ro; then
+        log "DELETE_QUARANTINE=FAIL reason=REMOUNT_APP_RO_FAILED production_changed=YES quarantine_removed=$([ ! -e "$QUARANTINE" ] && echo YES || echo NO)"
+        return 1
+    fi
+
+    [ ! -e "$QUARANTINE" ] || {
+        log "DELETE_QUARANTINE=FAIL reason=POST_DELETE_VERIFY_FAILED production_changed=YES"
+        return 1
+    }
+
+    current_v34_runtime "$ROOT" || {
+        log "DELETE_QUARANTINE=FAIL reason=CURRENT_V3_4_RUNTIME_CHANGED_AFTER_DELETE production_changed=YES"
+        return 1
+    }
+
+    log "DELETE_QUARANTINE=PASS path=/mnt/app/root/.carplay-altscreen.rescue-v1 irreversible=YES"
+    log "CURRENT_V3_4_RUNTIME=PRESERVED"
+    log "OEM_BACKUPS=PRESERVED"
+    return 0
+}
+
 do_restore(){
     [ -d "$QUARANTINE" ] && [ ! -L "$QUARANTINE" ] || {
         log "RESTORE_QUARANTINE=REFUSED reason=QUARANTINE_ABSENT_OR_UNSAFE production_changed=NO"
@@ -281,7 +348,8 @@ case "$ACTION" in
     check) check_state ;;
     quarantine) do_quarantine ;;
     restore) do_restore ;;
-    *) log "usage: $0 {check|quarantine|restore}"; exit 2 ;;
+    delete) do_delete ;;
+    *) log "usage: $0 {check|quarantine|restore|delete}"; exit 2 ;;
 esac
 rc=$?
 log "RESCUE_RESULT action=$ACTION rc=$rc"
