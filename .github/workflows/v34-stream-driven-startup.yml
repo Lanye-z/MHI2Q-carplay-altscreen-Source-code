@@ -50,7 +50,7 @@ jobs:
           strings "$OUT/libcarplay_altscreen.so" | grep -Fq 'policy=V34_ALWAYS_ON'
           strings "$OUT/libcarplay_altscreen.so" | grep -Fq 'PHASE=PRIVATE111_STREAM_READY'
           strings "$OUT/libcarplay_altscreen.so" | grep -Fq '/tmp/altscreen-private111.stream-ready'
-          strings "$OUT/libcarplay_altscreen.so" | grep -Fq 'safearea_revision=V33_OEM_X_VERTICAL_60_450'
+          strings "$OUT/libcarplay_altscreen.so" | grep -Fq 'safearea_revision=V33_OEM_X_VERTICAL_68_450'
           if strings "$OUT/libcarplay_altscreen.so" | grep -Fq 'PHASE=STATE_ROOT_WAIT result='; then
             echo 'ERROR: rebuilt V3.4 hook still contains removable-SD startup gate' >&2
             exit 1
@@ -166,6 +166,14 @@ jobs:
               "v34_sidecar_attach_policy": "RECOVER_CURRENT_SESSION",
               "v34_display_demand_owner": "stream_supervisor",
               "v34_persistent_runtime_growth": "NONE",
+              "hook_safearea_policy": "V33_OEM_X_VERTICAL_68_450",
+              "oem_layout_full_safearea_reference_455": "370,68,700,382",
+              "oem_layout_small_safearea_reference_455": "490,68,460,382",
+              "oem_layout_safearea_canvas_yh_mapping": "vertical_inset_top68_bottom450",
+              "oem_layout_classic_full_safearea_physical": "370,68,700,382",
+              "oem_layout_classic_small_safearea_physical": "490,68,460,382",
+              "oem_layout_sport_full_safearea_physical": "370,68,700,382",
+              "oem_layout_sport_small_safearea_physical": "14,68,460,382",
           }.items():
               text = replace_key(text, k, v)
           mirror_info.write_text(text)
@@ -181,6 +189,10 @@ jobs:
               "startup_fixed_display_delay": "NONE",
               "startup_stream_ready_marker": "/tmp/altscreen-private111.stream-ready",
               "startup_stream_ready_stable_decoded_frames": "2",
+              "safearea_policy": "V33_OEM_X_VERTICAL_68_450",
+              "geometry_safearea_space": "OEM_X_VERTICAL_68_450",
+              "safearea_full": "370,68,700,382",
+              "safearea_small": "490,68,460,382",
           }.items():
               text = replace_key(text, k, v)
           hmi_info.write_text(text)
@@ -202,6 +214,9 @@ jobs:
               "stream_ready_stable_decoded_frames": "2",
               "fixed_display_delay": "NONE",
               "sidecar_attach_policy": "RECOVER_CURRENT_SESSION",
+              "safearea_policy": "V3_3_OEM_X_VERTICAL_68_450",
+              "safearea_full": "370,68,700,382",
+              "safearea_small": "490,68,460,382",
           }.items():
               text = replace_key(text, k, v)
           ready.write_text(text)
