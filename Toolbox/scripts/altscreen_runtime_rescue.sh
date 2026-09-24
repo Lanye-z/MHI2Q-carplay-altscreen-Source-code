@@ -40,6 +40,12 @@ LOG_PREV="$LOG_DIR/runtime-residue-rescue.previous.log"
 LOWER_ORIGINAL="$SD_ROOT/backup/original"
 UPPER_ORIGINAL="$SD_ROOT/backup/ORIGINAL"
 UNIVERSAL_BACKUP="$SD_ROOT/backup/universal-hook-original"
+HMI_BACKUP="$SD_ROOT/backup/basevideo3-hmi-original"
+FIREWALL_BACKUP="$SD_ROOT/backup/firewall-original"
+STATE_DIR="$SD_ROOT/state"
+SI="$(p /mnt/system/etc/eso/production/smartphone_integrator.json)"
+PF="$(p /mnt/system/etc/pf.conf)"
+JAR="$(p /mnt/app/eso/hmi/lsd/jars/carplay_hook.jar)"
 
 mount_app_rw(){ [ "$TESTING" = 1 ] || mount -uw /mnt/app; }
 mount_app_ro(){ [ "$TESTING" = 1 ] || mount -ur /mnt/app; }
@@ -85,6 +91,141 @@ current_v34_runtime(){
     [ -f "$dir/bin/mirror/BUILD_INFO.txt" ] || return 1
     grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V3_4' "$dir/bin/mirror/BUILD_INFO.txt" 2>/dev/null || return 1
     [ -f "$dir/state/diagnostics.enabled" ] || return 1
+    return 0
+}
+
+same_bytes(){
+    [ -f "$1" ] && [ -f "$2" ] || return 1
+    cmp -s "$1" "$2" 2>/dev/null
+}
+
+find_original_backup(){
+    if [ -f "$LOWER_ORIGINAL/COMPLETE" ]; then
+        printf '%s\n' "$LOWER_ORIGINAL"
+        return 0
+    fi
+    if [ -f "$UPPER_ORIGINAL/COMPLETE" ]; then
+        printf '%s\n' "$UPPER_ORIGINAL"
+        return 0
+    fi
+    return 1
+}
+
+find_startup(){
+    for rel in /mnt/system/etc/boot/startup.sh /etc/boot/startup.sh; do
+        f="$(p "$rel")"
+        [ -f "$f" ] && { printf '%s\n' "$f"; return 0; }
+    done
+    return 1
+}
+
+oem_restore_verified(){
+    [ ! -e "$ROOT" ] || {
+        log "OEM_VERIFY=FAIL reason=MANAGED_RUNTIME_PRESENT"
+        return 1
+    }
+    [ -f "$STATE_DIR/RESTORE_PENDING_REBOOT" ] || {
+        log "OEM_VERIFY=FAIL reason=RESTORE_PENDING_REBOOT_MARKER_MISSING"
+        return 1
+    }
+    [ ! -f "$STATE_DIR/INSTALLED" ] || {
+        log "OEM_VERIFY=FAIL reason=INSTALLED_MARKER_STILL_PRESENT"
+        return 1
+    }
+
+    native=$(find_original_backup) || {
+        log "OEM_VERIFY=FAIL reason=ORIGINAL_BACKUP_MISSING"
+        return 1
+    }
+    [ -f "$native/manifest.txt" ] || {
+        log "OEM_VERIFY=FAIL reason=ORIGINAL_MANIFEST_MISSING"
+        return 1
+    }
+
+    count=0
+    while IFS= read -r rel; do
+        [ -n "$rel" ] || continue
+        case "$rel" in
+          /eso/bin/apps/dio_manager|/mnt/app/eso/bin/apps/dio_manager|/eso/lib/libairplay.so|/armle/usr/lib/libNmeBaseClasses.so|/mnt/app/armle/usr/lib/libNmeBaseClasses.so|/eso/lib/libNmeBaseClasses.so|/mnt/system/etc/eso/production/smartphone_integrator.json|/mnt/system/etc/eso/production/dio_manager.json) ;;
+          *) log "OEM_VERIFY=FAIL reason=UNEXPECTED_MANIFEST_PATH path=$rel"; return 1 ;;
+        esac
+        src="$native/files/$(echo "$rel" | tr '/' '_')"
+        dst="$(p "$rel")"
+        same_bytes "$src" "$dst" || {
+            log "OEM_VERIFY=FAIL reason=NATIVE_FILE_MISMATCH path=$rel"
+            return 1
+        }
+        count=$((count + 1))
+    done < "$native/manifest.txt"
+    [ "$count" = 5 ] || {
+        log "OEM_VERIFY=FAIL reason=NATIVE_MANIFEST_COUNT count=$count expected=5"
+        return 1
+    }
+
+    ! grep -Fq 'libcarplay_altscreen.so' "$SI" 2>/dev/null || {
+        log "OEM_VERIFY=FAIL reason=ALTSCREEN_PRELOAD_STILL_ARMED"
+        return 1
+    }
+
+    [ -f "$FIREWALL_BACKUP/COMPLETE" ] &&
+    [ -f "$FIREWALL_BACKUP/pf.conf" ] &&
+    same_bytes "$FIREWALL_BACKUP/pf.conf" "$PF" || {
+        log "OEM_VERIFY=FAIL reason=FIREWALL_NOT_RESTORED"
+        return 1
+    }
+
+    [ -f "$UNIVERSAL_BACKUP/COMPLETE" ] || {
+        log "OEM_VERIFY=FAIL reason=UNIVERSAL_BACKUP_MISSING"
+        return 1
+    }
+    hook_present=$(cat "$UNIVERSAL_BACKUP/present" 2>/dev/null || echo invalid)
+    hook_rel=$(cat "$UNIVERSAL_BACKUP/path" 2>/dev/null || echo /mnt/app/root/hooks/libcarplay_altscreen.so)
+    case "$hook_rel" in
+      /mnt/app/root/carplay-altscreen/lib/libcarplay_altscreen.so|/mnt/app/root/hooks/libcarplay_altscreen.so) ;;
+      *) log "OEM_VERIFY=FAIL reason=UNIVERSAL_BACKUP_PATH_INVALID path=$hook_rel"; return 1 ;;
+    esac
+    hook_dst="$(p "$hook_rel")"
+    case "$hook_present" in
+      0) [ ! -e "$hook_dst" ] || {
+           log "OEM_VERIFY=FAIL reason=UNIVERSAL_HOOK_SHOULD_BE_ABSENT"
+           return 1
+         } ;;
+      1) same_bytes "$UNIVERSAL_BACKUP/libcarplay_altscreen.so" "$hook_dst" || {
+           log "OEM_VERIFY=FAIL reason=ORIGINAL_UNIVERSAL_HOOK_MISMATCH"
+           return 1
+         } ;;
+      *) log "OEM_VERIFY=FAIL reason=UNIVERSAL_BACKUP_STATE_INVALID"; return 1 ;;
+    esac
+
+    [ -f "$HMI_BACKUP/COMPLETE" ] && [ -f "$HMI_BACKUP/target" ] || {
+        log "OEM_VERIFY=FAIL reason=HMI_BACKUP_MISSING"
+        return 1
+    }
+    if [ -f "$HMI_BACKUP/present" ] && [ ! -f "$HMI_BACKUP/absent" ]; then
+        same_bytes "$HMI_BACKUP/carplay_hook.jar" "$JAR" || {
+            log "OEM_VERIFY=FAIL reason=HMI_JAR_MISMATCH"
+            return 1
+        }
+    elif [ -f "$HMI_BACKUP/absent" ] && [ ! -f "$HMI_BACKUP/present" ]; then
+        [ ! -e "$JAR" ] || {
+            log "OEM_VERIFY=FAIL reason=HMI_JAR_SHOULD_BE_ABSENT"
+            return 1
+        }
+    else
+        log "OEM_VERIFY=FAIL reason=HMI_BACKUP_STATE_INVALID"
+        return 1
+    fi
+
+    startup=$(find_startup) || {
+        log "OEM_VERIFY=FAIL reason=STARTUP_NOT_FOUND"
+        return 1
+    }
+    ! grep -E 'BEGIN ALT111 (MIRROR|BASEVIDEO3) AUTOSTART|BEGIN ALTSCREEN DIAGNOSTICS' "$startup" >/dev/null 2>&1 || {
+        log "OEM_VERIFY=FAIL reason=ALTSCREEN_STARTUP_BLOCK_REMAINS"
+        return 1
+    }
+
+    log "OEM_VERIFY=PASS restored_originals=5 preload=ABSENT firewall=OEM hmi=OEM runtime=ABSENT"
     return 0
 }
 
@@ -181,6 +322,10 @@ check_state(){
         return 0
     fi
     if [ ! -e "$ROOT" ] && [ -e "$QUARANTINE" ]; then
+        if oem_restore_verified && recognized_unowned "$QUARANTINE"; then
+            log "RESCUE_STATE=OEM_RESTORED_WITH_QUARANTINE current_runtime=ABSENT safe_to_delete=YES"
+            return 0
+        fi
         if recognized_unowned "$QUARANTINE"; then
             log "RESCUE_STATE=QUARANTINED path=/mnt/app/root/.carplay-altscreen.rescue-v1 safe_to_install=YES"
             return 0
@@ -260,18 +405,25 @@ do_delete(){
         return 1
     }
 
-    current_v34_runtime "$ROOT" || {
-        log "DELETE_QUARANTINE=REFUSED reason=CURRENT_V3_4_RUNTIME_NOT_VERIFIED production_changed=NO"
-        log "ACTION=REBOOT_AND_VERIFY_V3_4_FIRST"
+    delete_mode=""
+    if current_v34_runtime "$ROOT"; then
+        delete_mode=V3_4
+        log "DELETE_TARGET_STATE=V3_4_RUNTIME_VERIFIED"
+    elif oem_restore_verified; then
+        delete_mode=OEM_RESTORED
+        log "DELETE_TARGET_STATE=OEM_RESTORE_VERIFIED"
+    else
+        log "DELETE_QUARANTINE=REFUSED reason=NEITHER_V3_4_NOR_OEM_RESTORE_VERIFIED production_changed=NO"
+        log "ACTION=REBOOT_AND_VERIFY_TARGET_STATE_FIRST"
         return 1
-    }
+    fi
 
     recognized_unowned "$QUARANTINE" || {
         log "DELETE_QUARANTINE=REFUSED reason=QUARANTINE_NOT_RECOGNIZED production_changed=NO"
         return 1
     }
 
-    log "DELETE_PREFLIGHT=PASS current_runtime=V3_4_OWNED quarantine=LEGACY_UNOWNED_RECOGNIZED backup=TRUSTED"
+    log "DELETE_PREFLIGHT=PASS target_state=$delete_mode quarantine=LEGACY_UNOWNED_RECOGNIZED backup=TRUSTED"
     log "DELETE_SCOPE=/mnt/app/root/.carplay-altscreen.rescue-v1 only"
     log "DELETE_BACKUPS=NO"
     log "DELETE_CURRENT_RUNTIME=NO"
@@ -299,13 +451,21 @@ do_delete(){
         return 1
     }
 
-    current_v34_runtime "$ROOT" || {
-        log "DELETE_QUARANTINE=FAIL reason=CURRENT_V3_4_RUNTIME_CHANGED_AFTER_DELETE production_changed=YES"
-        return 1
-    }
+    if [ "$delete_mode" = V3_4 ]; then
+        current_v34_runtime "$ROOT" || {
+            log "DELETE_QUARANTINE=FAIL reason=CURRENT_V3_4_RUNTIME_CHANGED_AFTER_DELETE production_changed=YES"
+            return 1
+        }
+        log "CURRENT_V3_4_RUNTIME=PRESERVED"
+    else
+        oem_restore_verified || {
+            log "DELETE_QUARANTINE=FAIL reason=OEM_RESTORE_STATE_CHANGED_AFTER_DELETE production_changed=YES"
+            return 1
+        }
+        log "OEM_RUNTIME_STATE=PRESERVED"
+    fi
 
-    log "DELETE_QUARANTINE=PASS path=/mnt/app/root/.carplay-altscreen.rescue-v1 irreversible=YES"
-    log "CURRENT_V3_4_RUNTIME=PRESERVED"
+    log "DELETE_QUARANTINE=PASS path=/mnt/app/root/.carplay-altscreen.rescue-v1 irreversible=YES target_state=$delete_mode"
     log "OEM_BACKUPS=PRESERVED"
     return 0
 }
