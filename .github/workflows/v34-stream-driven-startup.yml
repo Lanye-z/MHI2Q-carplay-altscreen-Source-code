@@ -154,6 +154,17 @@ jobs:
             grep -Fq "EXPECTED_CKSUM=$JAR_CKSUM" "$s"
           done
 
+          INSTALL=Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh
+          grep -Fq 'PRIVATE111_DIRECT_DISPLAY_V3_4_STREAM_DRIVEN' "$INSTALL"
+          grep -Fq 'PACKAGE_MODE=CARPLAY_PRIVATE111_DIRECT_DISPLAY_V3_4_STREAM_DRIVEN' "$INSTALL"
+          if grep -Fq 'PACKAGE_MODE=CARPLAY_PRIVATE111_DIRECT_DISPLAY_V2' "$INSTALL"; then
+            echo 'ERROR: dead legacy V2 installer tail returned' >&2
+            exit 1
+          fi
+          test "$(grep -c '^echo "PACKAGE_MODE=' "$INSTALL")" -eq 1
+          test "$(grep -c '^echo "INSTALL=PASS integrated=AltScreen+H264Tap+DecoderTap+StreamSupervisor+Displayable3+Java80 reboot_required=YES"' "$INSTALL")" -eq 1
+          echo 'V34_INSTALLER_CONTRACT=PASS mode=V3_4_STREAM_DRIVEN dead_legacy_tail=NO'
+
           echo "V34_PRESENTATION_CONTEXT=PASS jar_sha256=$JAR_SHA identity_scripts=SYNCED"
 
       - name: Build V3.4 universal hook
@@ -193,9 +204,10 @@ jobs:
           RESOLVE=Toolbox/carplay_alt_screen/src/p1404_resolve.c
           AIRPLAY=Toolbox/carplay_alt_screen/src/p1404_airplay.c
           HOOKSRC=Toolbox/carplay_alt_screen/src/altscreen_hook.c
+          INSTALL=Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh
 
           for s in "$START" "$CTRL" "$SUP" "$LAUNCH" "$STOP" \
-                   Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh \
+                   "$INSTALL" \
                    Toolbox/scripts/status_mmi_cockpit_carplay_test.sh; do
             sh -n "$s"
           done
@@ -208,6 +220,10 @@ jobs:
           grep -Fq 'alt_flag_iap2      = 0;' "$AIRPLAY"
           grep -Fq 'PHASE=RUNTIME_AUTHORITY policy=INSTALLED_PRELOAD' "$HOOKSRC"
           ! grep -Fq 'PHASE=STATE_ROOT_WAIT result=' "$HOOKSRC"
+
+          grep -Eq "^grep -Eq '\^mode=\(PRIVATE111_DIRECT_DISPLAY_V3_WHEEL_ZOOM\|PRIVATE111_DIRECT_DISPLAY_V3_3_OEM_LOWER_BAR\|PRIVATE111_DIRECT_DISPLAY_V3_4_STREAM_DRIVEN\)\$'" "$INSTALL"
+          ! grep -Fq 'PACKAGE_MODE=CARPLAY_PRIVATE111_DIRECT_DISPLAY_V2' "$INSTALL"
+          test "$(grep -c '^echo "PACKAGE_MODE=' "$INSTALL")" -eq 1
 
           grep -Fq '#define P111_STREAM_READY_PATH "/tmp/altscreen-private111.stream-ready"' "$TAP"
           grep -Fq 'g_frame->frame_count < 2u' "$TAP"
