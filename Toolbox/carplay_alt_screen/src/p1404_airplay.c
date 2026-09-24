@@ -589,18 +589,18 @@ static int alt_load_measured_k1004_safe_area(uint32_t display_w,
         r.x = 490u;
         r.y = 72u;
         r.w = 460u;
-        r.h = 372u;
+        r.h = 378u;
         r.physical_w = 460u;
-        r.physical_h = 372u;
+        r.physical_h = 378u;
         r.renderer_dx = small_dx;
         r.renderer_dy = small_dy;
     } else if (!strcmp(view, "FULL")) {
         r.x = 370u;
         r.y = 72u;
         r.w = 700u;
-        r.h = 372u;
+        r.h = 378u;
         r.physical_w = 700u;
-        r.physical_h = 372u;
+        r.physical_h = 378u;
         r.renderer_dx = 0;
         r.renderer_dy = 0;
     } else {
@@ -662,11 +662,11 @@ static void alt_resolve_cluster_safe_area(uint32_t display_w,
         out->x = 370u;
         out->y = 72u;
         out->w = 700u;
-        out->h = 372u;
+        out->h = 378u;
         out->physical_x = 370;
         out->physical_y = 75;
         out->physical_w = 700u;
-        out->physical_h = 372u;
+        out->physical_h = 378u;
         strncpy(out->source, "k1004-default-v35-72-450-before-hmi",
                 sizeof(out->source) - 1u);
     } else {
@@ -752,7 +752,7 @@ static cf_obj make_cluster_layout_view_areas(uint32_t w, uint32_t h,
     full.x = 370u;
     full.y = 72u;
     full.w = 700u;
-    full.h = 372u;
+    full.h = 378u;
     if (!full.h || !alt_safe_rect_valid(&full, w, h)) goto fail;
 
     v = rect_dict(w, h, 0u, 0u);
@@ -768,7 +768,7 @@ static cf_obj make_cluster_layout_view_areas(uint32_t w, uint32_t h,
     small.x = 490u;
     small.y = 72u;
     small.w = 460u;
-    small.h = 372u;
+    small.h = 378u;
     if (!small.h || !alt_safe_rect_valid(&small, w, h)) goto fail;
 
     v = rect_dict(w, h, 0u, 0u);
