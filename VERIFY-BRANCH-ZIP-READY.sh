@@ -10,6 +10,8 @@ SUMS="$ROOT/SHA256SUMS.txt"
 MAP="$ROOT/PACKAGE_SOURCE_MAP.json"
 SD_RW="$ROOT/Toolbox/scripts/altscreen_sd_writable.sh"
 SUPERVISOR="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stream_supervisor.sh"
+GEM_CARPLAY="$ROOT/Toolbox/GEM/mqb-carplayAltScreen.esd"
+README="$ROOT/README.md"
 
 fail(){ echo "BRANCH_ZIP_VERIFY=FAIL: $*" >&2; exit 1; }
 check_unique_keys(){
@@ -38,8 +40,10 @@ file_cksum(){ cksum < "$1" | awk '{print $1}'; }
 [ -s "$SUMS" ] || fail "SHA256SUMS.txt missing"
 [ -s "$MAP" ] || fail "PACKAGE_SOURCE_MAP.json missing"
 [ -s "$SD_RW" ] || fail "shared SD writable helper missing"
-[ -s "$SUPERVISOR" ] || fail "V3.4 stream supervisor missing"
-sh -n "$SUPERVISOR" || fail "V3.4 stream supervisor shell syntax"
+[ -s "$SUPERVISOR" ] || fail "stream supervisor missing"
+[ -s "$GEM_CARPLAY" ] || fail "CarPlay GEM page missing"
+[ -s "$README" ] || fail "README missing"
+sh -n "$SUPERVISOR" || fail "stream supervisor shell syntax"
 grep -Fq 'altscreen_sd_ensure_writable()' "$SD_RW" || fail "SD writable helper contract missing"
 grep -Fq 'AFTER_REMOUNT' "$SD_RW" || fail "SD remount re-probe contract missing"
 grep -Fq 'Toolbox/scripts/altscreen_sd_writable.sh' "$MAP" || fail "SD writable helper missing from PACKAGE_SOURCE_MAP"
@@ -47,7 +51,13 @@ grep -Fq 'Toolbox/scripts/altscreen_sd_writable.sh' "$SUMS" || fail "SD writable
 grep -Fq 'Toolbox/carplay_alt_screen/mirror_display/release/stream_supervisor.sh' "$MAP" ||
     fail "V3.4 stream supervisor missing from PACKAGE_SOURCE_MAP"
 grep -Fq 'Toolbox/carplay_alt_screen/mirror_display/release/stream_supervisor.sh' "$SUMS" ||
-    fail "V3.4 stream supervisor missing from SHA256SUMS"
+    fail "stream supervisor missing from SHA256SUMS"
+grep -Fq 'Toolbox/GEM/mqb-carplayAltScreen.esd' "$MAP" ||
+    fail "CarPlay GEM page missing from PACKAGE_SOURCE_MAP"
+grep -Fq 'Toolbox/GEM/mqb-carplayAltScreen.esd' "$SUMS" ||
+    fail "CarPlay GEM page missing from SHA256SUMS"
+grep -Fq 'README.md' "$MAP" || fail "README missing from PACKAGE_SOURCE_MAP"
+grep -Fq 'README.md' "$SUMS" || fail "README missing from SHA256SUMS"
 
 check_unique_keys "$READY"
 check_unique_keys "$HMI_INFO"
@@ -170,6 +180,19 @@ if grep -Fq 'branch=experiment/oem-layout-second-screen_v3.5' "$READY"; then
         fail "V3.5 OEM gray-bar contract missing"
     grep -Fq 'lower_bar_context_policy=KOMO_FOLLOW_INFO_NO_RGI_PRESENTATION' "$READY" ||
         fail "V3.5 KOMO gray-bar context contract missing"
+    grep -Fq 'Version: V3.5 - cold-start + dynamic ViewArea' "$GEM_CARPLAY" ||
+        fail "V3.5 GEM version label missing"
+    grep -Fq 'type111 -> H264 tap -> stock OMX -> decoded SHM -> displayable3 -> Java Context80' "$GEM_CARPLAY" ||
+        fail "V3.5 GEM display flow is stale"
+    if grep -Fq 'Context80 Readback V1' "$GEM_CARPLAY" ||
+       grep -Fq 'type111 -> Window58 -> screen_read_window' "$GEM_CARPLAY"; then
+        fail "V3.5 GEM still advertises retired Window58/readback architecture"
+    fi
+    if grep -Fq '\n\n>' "$README"; then
+        fail "README contains literal escaped newlines"
+    fi
+    grep -Fq 'READY_FOR_V3_5_VEHICLE_TEST' "$README" ||
+        fail "README V3.5 branch status is stale"
 fi
 
 if grep -Fq 'branch=experiment/oem-layout-second-screen_v3.4' "$READY"; then
