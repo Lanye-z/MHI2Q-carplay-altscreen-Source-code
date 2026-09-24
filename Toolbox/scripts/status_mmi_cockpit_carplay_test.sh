@@ -46,8 +46,8 @@ EXPECTED_CKSUM=3164421977
 file_size(){ n=$(wc -c < "$1" 2>/dev/null) || { echo 0; return; }; set -- $n; echo "${1:-0}"; }
 file_cksum(){ if command -v cksum >/dev/null 2>&1; then cksum < "$1" 2>/dev/null | awk '{print $1}'; else echo unavailable; fi; }
 
-echo "=== CarPlay private111 Direct Display V3.4 ==="
-echo "PRIVATE111_NEGOTIATION_POLICY=ALWAYS_ON_WHILE_PRELOAD_INSTALLED sd_runtime_gate=DISABLED"
+echo "=== CarPlay private111 Direct Display V3.5 ==="
+echo "PRIVATE111_NEGOTIATION_POLICY=V35_EARLY_PROTOCOL_READY sd_runtime_gate=DISABLED geometry_gate=ASYNC"
 echo "DISPLAY_START_POLICY=STREAM_DRIVEN stable_decoded_frames=2 fixed_delay=NONE"
 echo "V3_CONTROL_PLANE=changeMapZoomLevel wheel_zoom=enabled display_baseline=V2_UNCHANGED"
 echo "SOURCE_PATH=private111_ScreenStreamProcessData"
