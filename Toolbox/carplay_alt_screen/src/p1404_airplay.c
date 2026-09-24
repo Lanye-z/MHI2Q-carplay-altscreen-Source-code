@@ -610,7 +610,7 @@ static int alt_load_measured_k1004_safe_area(uint32_t display_w,
 
     /*
      * Horizontal safe bounds retain the measured OEM map-local geometry.
-     * Vertically, V3.3 uses the tuned 75..450 visible-map range. The whole-map
+     * Vertically, V3.5 uses the tuned 75..450 visible-map range. The whole-map
      * renderer translation is still applied afterwards (Sport SMALL contributes
      * -476 on X and normally 0 on Y).
      */
