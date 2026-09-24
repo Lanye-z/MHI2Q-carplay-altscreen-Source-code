@@ -15,6 +15,16 @@
  * fixtures and legacy preload builds). */
 extern void *p1404_direct_stock_symbol_named(const char *name)
     __attribute__((weak));
+extern int altscreen_runtime_wait_ready(unsigned timeout_ms)
+    __attribute__((weak));
+
+#define ALTSCREEN_NEGOTIATION_WAIT_MS 500u
+#define ALT111_BOOTSTRAP_WIDTH 1440u
+#define ALT111_BOOTSTRAP_HEIGHT 542u
+
+static volatile uint32_t g_alt_advertised_width;
+static volatile uint32_t g_alt_advertised_height;
+static volatile int g_alt_advertised_geometry_provisional;
 
 int alt_flag_info;
 int alt_flag_feature;
@@ -27,6 +37,45 @@ void *alt_real_screen_stream_create;
 void alt_note_displays_container(const char *tag, void *container);
 static void bind_real(void);
 static void bind_cf(void);
+
+static int alt_runtime_negotiation_ready(const char *phase) {
+    if (!altscreen_runtime_is_ready || altscreen_runtime_is_ready()) return 1;
+    if (altscreen_runtime_wait_ready &&
+        altscreen_runtime_wait_ready(ALTSCREEN_NEGOTIATION_WAIT_MS)) {
+        altscreen_log("PHASE=COLD_START_NEGOTIATION_WAIT result=READY phase=%s max_wait_ms=%u fixed_delay=0",
+                      phase ? phase : "unknown", ALTSCREEN_NEGOTIATION_WAIT_MS);
+        return 1;
+    }
+    altscreen_log("WARN PHASE=COLD_START_NEGOTIATION_WAIT result=TIMEOUT phase=%s max_wait_ms=%u action=STOCK_PASSTHROUGH",
+                  phase ? phase : "unknown", ALTSCREEN_NEGOTIATION_WAIT_MS);
+    return 0;
+}
+
+int alt_airplay_negotiation_geometry_ready(void) {
+    uint32_t width = 0, height = 0;
+    if (p1404_cockpit_native_get_geometry(&width, &height)) return 1;
+    return ALT111_BOOTSTRAP_WIDTH > 0u && ALT111_BOOTSTRAP_HEIGHT > 0u;
+}
+
+int alt_airplay_validate_runtime_geometry(uint32_t width, uint32_t height) {
+    uint32_t advertised_width =
+        __sync_fetch_and_add(&g_alt_advertised_width, 0u);
+    uint32_t advertised_height =
+        __sync_fetch_and_add(&g_alt_advertised_height, 0u);
+    int provisional =
+        __sync_fetch_and_add(&g_alt_advertised_geometry_provisional, 0);
+
+    if (!advertised_width || !advertised_height) return 1;
+    if (advertised_width == width && advertised_height == height) {
+        if (provisional)
+            altscreen_log("PHASE=ALT111_BOOTSTRAP_GEOMETRY_CONFIRMED advertised=%ux%u runtime=%ux%u",
+                          advertised_width, advertised_height, width, height);
+        return 1;
+    }
+    altscreen_log("ERROR PHASE=ALT111_GEOMETRY_CONTRACT_MISMATCH advertised=%ux%u runtime=%ux%u provisional=%d action=REFUSE_PRIVATE_RENDERER reconnect_required=1",
+                  advertised_width, advertised_height, width, height, provisional);
+    return 0;
+}
 
 /* QNX libairplay does not supply the ARM EABI division helpers. Keep geometry
  * arithmetic self-contained so the overlay has no hidden loader dependency. */
@@ -762,26 +811,48 @@ void *alt_build_cluster_display(void) {
     int layout_known = 0;
     int two_area_capable = 0;
     int initial_view_area = 0;
-    /* Refresh on every display-info build so the request follows the current
-     * target mode. If Screen temporarily refuses a second context, retain only
-     * the display-1 geometry already proved by the worker's mandatory READY
-     * gate; this is measured runtime state, never a fixed-size fallback. */
+    int geometry_provisional = 0;
+    /*
+     * V3.5 cold-start policy: /info must not permanently miss AltScreen just
+     * because Screen display-1 appears a few hundred milliseconds later than
+     * the first CarPlay capability transaction. Prefer live measured geometry;
+     * if it is not queryable yet, advertise the already vehicle-proven
+     * 1440x542 B9 Type111 canvas as a negotiation-only bootstrap contract.
+     * The private renderer later re-queries Screen and refuses activation on
+     * any mismatch, so this is not a silent renderer-size fallback.
+     */
     if (!p1404_cockpit_native_refresh_geometry()) {
         if (!p1404_cockpit_native_get_geometry(&width, &height)) {
-            altscreen_log("ERROR ALTINFO target display geometry unavailable fixed_fallback=0 type111_not_advertised=1");
-            return NULL;
+            width = ALT111_BOOTSTRAP_WIDTH;
+            height = ALT111_BOOTSTRAP_HEIGHT;
+            geometry_provisional = 1;
+            (void)altscreen_set_cluster_geometry(width, height);
+            altscreen_log("PHASE=ALT111_NEGOTIATION_GEOMETRY source=BOOTSTRAP size=%ux%u provisional=1 renderer_verified=0",
+                          width, height);
+        } else {
+            altscreen_log("PHASE=ALT111_NEGOTIATION_GEOMETRY source=CACHED_SCREEN size=%ux%u provisional=0",
+                          width, height);
         }
-        altscreen_log("WARN ALTINFO live geometry refresh failed; using READY-preflight display1=%ux%u fixed_fallback=0",
-                      width, height);
     } else if (!p1404_cockpit_native_get_geometry(&width, &height)) {
-        altscreen_log("ERROR ALTINFO refreshed display geometry was not published fixed_fallback=0 type111_not_advertised=1");
+        altscreen_log("ERROR ALTINFO refreshed display geometry was not published type111_not_advertised=1");
         return NULL;
+    } else {
+        altscreen_log("PHASE=ALT111_NEGOTIATION_GEOMETRY source=LIVE_SCREEN size=%ux%u provisional=0",
+                      width, height);
     }
     d = altscreen_cluster_display();
     if (!d || !d->width_pixels || !d->height_pixels) {
         altscreen_log("ERROR ALTINFO target display geometry unpublished type111_not_advertised=1");
         return NULL;
     }
+    __sync_lock_test_and_set(&g_alt_advertised_width, d->width_pixels);
+    __sync_lock_test_and_set(&g_alt_advertised_height, d->height_pixels);
+    __sync_lock_test_and_set(&g_alt_advertised_geometry_provisional,
+                             geometry_provisional ? 1 : 0);
+    __sync_synchronize();
+    altscreen_log("PHASE=ALT111_INFO_GEOMETRY_CONTRACT advertised=%ux%u provisional=%d live_geometry=%d renderer_must_match=1",
+                  d->width_pixels, d->height_pixels, geometry_provisional,
+                  geometry_provisional ? 0 : 1);
     /* Match LIVI getInfo.displayEntry when physical panel size is unavailable. */
     physical_width = d->width_mm ? d->width_mm : 200u;
     physical_height = d->height_mm;
@@ -1717,7 +1788,7 @@ void *AirPlayReceiverServerPlatformCopyProperty(void *a0, unsigned a1, void *a2,
                           (unsigned long long)stock, a0);
         else
             altscreen_log("INFO_STOCK features not an int64 object=%p", r);
-        if ((altscreen_runtime_is_ready && !altscreen_runtime_is_ready()) ||
+        if (!alt_runtime_negotiation_ready("server-features") ||
             !p1404_armed || !p1404_mutate_armed || !alt_flag_feature) return r;
         {
             void *patched = alt_advertise_features(r);
@@ -1748,7 +1819,7 @@ void *AirPlayReceiverSessionPlatformCopyProperty(void *a0, unsigned a1, void *a2
     obs_call("SessionPlatformCopyProperty", a0, lr, (long)r);
     if (name_is((cf_obj)a2, "displays", scratch, sizeof(scratch)) && r) {
         alt_note_displays_container("info-stock", r);
-        if ((!altscreen_runtime_is_ready || altscreen_runtime_is_ready()) &&
+        if (alt_runtime_negotiation_ready("session-displays") &&
             p1404_armed && p1404_mutate_armed && alt_flag_info) {
             r = alt_info_add_cluster_display(r);
             alt_note_displays_container("info-final", r);
@@ -1767,7 +1838,7 @@ void *AirPlayReceiverSessionScreen_CopyDisplaysInfo(void *a0, int *a1) {
     if (!p1404_identity_ok) return r;
     obs_call("Screen_CopyDisplaysInfo", a0, lr, (long)r);
     alt_note_displays_container("stock", r);
-    if ((!altscreen_runtime_is_ready || altscreen_runtime_is_ready()) &&
+    if (alt_runtime_negotiation_ready("screen-displays") &&
         p1404_armed && p1404_mutate_armed && alt_flag_info && r) {
         r = alt_info_add_cluster_display(r);
         alt_note_displays_container("final", r);
@@ -1817,7 +1888,7 @@ int AirPlayReceiverSessionPlatformControl(void *a0, unsigned a1, void *a2,
                       r, (a5 ? *a5 : NULL), wants_alt, alt_desc);
         if (a5 && *a5) probe_container("setup-response-stock", (cf_obj)*a5, 0);
         if (r == 0 && wants_alt && a5 && *a5 &&
-            (!altscreen_runtime_is_ready || altscreen_runtime_is_ready()) &&
+            alt_runtime_negotiation_ready("legacy-setup-response") &&
             p1404_armed && p1404_mutate_armed &&
             alt_flag_feature) {
             if (!accept_alt_in_setup_response((cf_obj)*a5))
