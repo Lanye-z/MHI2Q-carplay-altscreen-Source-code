@@ -350,7 +350,7 @@ jobs:
               "startup_stream_ready_marker": "/tmp/altscreen-private111.stream-ready",
               "startup_stream_ready_stable_decoded_frames": "2",
               "safearea_policy": "V35_OEM_X_VERTICAL_75_450",
-              "geometry_safearea_space": "OEM_X_VERTICAL_68_450",
+              "geometry_safearea_space": "OEM_X_VERTICAL_75_450",
               "safearea_full": "370,75,700,375",
               "safearea_small": "490,75,460,375",
               "cold_start_policy": "EARLY_NEGOTIATION_READY",
