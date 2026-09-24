@@ -40,6 +40,7 @@ public final class BAPPresentationContextTest {
             BAPPresentationContextTest.class.getClassLoader(),
             new Class[]{CombiBAPServiceNavi.class},calls);
         ClusterService cluster=new ClusterService(raw);
+        cluster.setTestKomoFollowMode(true);
         Navigation.setInstance(new Navigation(cluster));
 
         BAPBridge bridge=new BAPBridge();
@@ -84,6 +85,8 @@ public final class BAPPresentationContextTest {
             "rgActive changed after gray-bar update");
         require(!cluster.isRgiDataValidForTest(),
             "rgiDataValid changed after gray-bar update");
+        require(cluster.getTestDsiContainer().isRgActive()==false,
+            "read-only diagnostics must not mutate rgActive");
 
         bridge.onShutdown();
         require(cluster.getCombiBAPListenerCombiService()==raw,
