@@ -740,12 +740,12 @@ if [ "$SAFEAREA_V33" = 1 ]; then
         fail "V3.3 tuned safeArea coordinate-space diagnostic missing"
     grep -Fq 'renderer_geometry_revision=V31_ONE_TO_ONE_CLIP' "$AIRPLAY_SRC" ||
         fail "V3.3 must retain the V3.1 renderer geometry revision"
-    grep -Fq 'r.y = 60u;' "$AIRPLAY_SRC" ||
-        fail "V3.3 FULL/SMALL safeArea Y must be 60"
-    grep -Fq 'r.h = 390u;' "$AIRPLAY_SRC" ||
-        fail "V3.3 FULL/SMALL safeArea height must be 390"
-    grep -Fq 'physical_y = 60 + (int64_t)r.renderer_dy;' "$AIRPLAY_SRC" ||
-        fail "V3.3 physical safe-region Y must start at 60 before renderer translation"
+    grep -Fq 'r.y = 68u;' "$AIRPLAY_SRC" ||
+        fail "V3.3 FULL/SMALL safeArea Y must be 68"
+    grep -Fq 'r.h = 382u;' "$AIRPLAY_SRC" ||
+        fail "V3.3 FULL/SMALL safeArea height must be 382"
+    grep -Fq 'physical_y = 68 + (int64_t)r.renderer_dy;' "$AIRPLAY_SRC" ||
+        fail "V3.3 physical safe-region Y must start at 68 before renderer translation"
 elif [ "$SAFEAREA_V32" = 1 ]; then
     grep -Fq 'safe_yh_mapping=vertical_full_visible_0_455' "$AIRPLAY_SRC" ||
         fail "V3.2 visible-height safeArea coordinate-space diagnostic missing"
