@@ -82,8 +82,10 @@ grep -Fq 'INSTALL_VERIFY=PASS' "$INSTALL_TXN" ||
     fail "INSTALL final exact-state verifier missing"
 grep -Fq 'restore-precheck' "$INSTALL_TXN" ||
     fail "INSTALL final verifier does not validate native recovery backups"
-grep -Fq 'verify_hmi_backup' "$INSTALL_TXN" ||
-    fail "INSTALL final verifier does not validate HMI recovery backup"
+grep -Fq 'snap_file "$JAR" carplay_hook.jar' "$INSTALL_TXN" ||
+    fail "INSTALL does not snapshot the live HMI JAR for transaction rollback"
+! grep -Fq 'verify_hmi_backup' "$INSTALL_TXN" ||
+    fail "INSTALL still requires a permanent HMI backup"
 grep -Fq 'verify_boot_backup' "$INSTALL_TXN" ||
     fail "INSTALL final verifier does not validate boot diagnostics backup"
 grep -Fq 'INSTALL=PASS transaction=COMMITTED persistent_state=INSTALLED' "$INSTALL_TXN" ||
@@ -112,14 +114,6 @@ grep -Fq 'OP_BEGIN action=RESTORE_ORIGINAL' "$STOP" ||
     fail "RESTORE ORIGINAL does not persist a complete SD operation journal"
 grep -Fq 'OP_BEGIN action=STORE_LOGS_RESTORE' "$FINISH" ||
     fail "STORE LOGS + RESTORE does not persist a complete SD operation journal"
-grep -Fq 'RUNTIME_OWNER_PRESENT=' "$INSTALL" ||
-    fail "INSTALL residual classifier missing runtime-owner reason"
-grep -Fq 'SMARTPHONE_INTEGRATOR_HOOK=' "$INSTALL" ||
-    fail "INSTALL residual classifier missing smartphone_integrator reason"
-grep -Fq 'CURRENT_PACKAGE_JAR_PRESENT=' "$INSTALL" ||
-    fail "INSTALL residual classifier missing current-package JAR reason"
-grep -Fq 'KNOWN_MANAGED_JAR_PRESENT=' "$INSTALL" ||
-    fail "INSTALL residual classifier missing historical managed-JAR reason"
 grep -Fq "printf '%s\\n' 2 > \"\$TXN/FORMAT\"" "$RESTORE_TXN" ||
     fail "RESTORE transaction format version marker missing"
 grep -Fq 'RESTORE_TRANSACTION=PREPARED durable=YES' "$RESTORE_TXN" ||
@@ -150,22 +144,20 @@ grep -Fq 'restore transaction is active; START is blocked' "$CHAIN" ||
     fail "START is not blocked during an incomplete restore transaction"
 grep -Fq 'restore transaction is active; recover/finish RESTORE ORIGINAL before INSTALL' "$CHAIN" ||
     fail "INSTALL is not blocked during an incomplete restore transaction"
-grep -Fq 'RESTORE_HMI_BACKUP=FAIL reason=HMI_BACKUP_PROJECT_MANAGED' "$RESTORE_TXN" ||
-    fail "RESTORE does not reject project-managed HMI backups before APPLY"
+! grep -Fq 'basevideo3-hmi-original' "$RESTORE_TXN" ||
+    fail "RESTORE still requires a permanent HMI backup"
 grep -Fq 'RESTORE_PREFLIGHT_STARTUP=PASS production_changed=NO' "$RESTORE_TXN" ||
     fail "RESTORE startup cleanup is not preflighted before APPLY"
 grep -Fq 'RUNTIME_CLEANUP_PRECHECK=FAIL reason=UNOWNED_NONEMPTY_RUNTIME' "$CHAIN" ||
     fail "RESTORE runtime ownership refusal is not preflighted"
-grep -Fq 'RESTORE_APPLY_PREFLIGHT=PASS hmi_backup=TRUSTED production_changed=NO' "$RESTORE_APPLY" ||
-    fail "RESTORE APPLY does not revalidate the HMI backup before first mutation"
+grep -Fq 'HMI_CONTROL_PLANE=REMOVED project_owned=YES' "$RESTORE_APPLY" ||
+    fail "RESTORE APPLY does not remove the project HMI JAR"
 grep -Fq 'remove-precheck' "$PERSIST_DIAG" ||
     fail "persistent diagnostics removal lacks a non-mutating precheck"
-grep -Fq 'poisoned_hmi_backup_fail_closed=1' "$RESTORE_TX_TEST" ||
-    fail "RESTORE poisoned-HMI regression test missing"
-grep -Fq 'ABSENT_BACKUP_LIVE_JAR_NOT_PROJECT_MANAGED' "$RESTORE_TXN" ||
-    fail "RESTORE absent-backup live-HMI deletion guard missing"
-grep -Fq 'absent_backup_live_conflict_fail_closed=1' "$RESTORE_TX_TEST" ||
-    fail "RESTORE absent-backup live-HMI regression test missing"
+grep -Fq 'project-owned carplay_hook.jar remains after restore' "$RESTORE_TXN" ||
+    fail "RESTORE does not verify project HMI JAR deletion"
+grep -Fq 'missing-runtime recovery left project HMI JAR' "$RESTORE_TX_TEST" ||
+    fail "RESTORE HMI deletion regression test missing"
 grep -Fq 'runtime_cleanup_preflight_fail_closed=1' "$RESTORE_TX_TEST" ||
     fail "RESTORE runtime preflight regression test missing"
 grep -Fq 'STAGING_ROOT/controller-txn' "$CTRL" ||
