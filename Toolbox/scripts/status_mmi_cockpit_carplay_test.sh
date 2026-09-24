@@ -40,8 +40,8 @@ MIRROR_LOG="$DEVICE_ROOT/tmp/altscreen_mirror.log"
 STREAM_READY="$DEVICE_ROOT/tmp/altscreen-private111.stream-ready"
 SUPERVISOR_PID="$DEVICE_ROOT/tmp/altscreen_stream_supervisor.pid"
 SUPERVISOR_LOG="$DEVICE_ROOT/tmp/altscreen_stream_supervisor.log"
-EXPECTED_SIZE=116485
-EXPECTED_CKSUM=3164421977
+EXPECTED_SIZE=118615
+EXPECTED_CKSUM=3201107
 
 file_size(){ n=$(wc -c < "$1" 2>/dev/null) || { echo 0; return; }; set -- $n; echo "${1:-0}"; }
 file_cksum(){ if command -v cksum >/dev/null 2>&1; then cksum < "$1" 2>/dev/null | awk '{print $1}'; else echo unavailable; fi; }
