@@ -353,6 +353,27 @@ elif grep -Fq 'release_binary_status=V3_3_BINARY_STALE_SAFEAREA_REBUILD_REQUIRED
     if binary_strings "$HOOK" | grep -Fq 'safearea_revision=V33_OEM_X_VERTICAL_60_450'; then
         fail "V3.3 BUILD_INFO says hook rebuild pending but rebuilt 60..450 marker is already present"
     fi
+elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V3_4' "$INFO"; then
+    grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$INFO" ||
+        fail "rebuilt V3.4 package is not vehicle-ready"
+    grep -Fq 'hook_runtime_rebuild_required=no' "$INFO" ||
+        fail "vehicle-ready V3.4 package still declares a hook rebuild"
+    grep -Fq 'v34_negotiation_policy=ALWAYS_ON_WHILE_PRELOAD_INSTALLED' "$INFO" ||
+        fail "vehicle-ready V3.4 negotiation metadata missing"
+    grep -Fq 'v34_sd_runtime_gate=DISABLED' "$INFO" ||
+        fail "vehicle-ready V3.4 still declares an SD runtime gate"
+    grep -Fq 'v34_display_start_policy=STREAM_DRIVEN' "$INFO" ||
+        fail "vehicle-ready V3.4 stream-driven display metadata missing"
+    grep -Fq 'v34_fixed_display_delay=NONE' "$INFO" ||
+        fail "vehicle-ready V3.4 unexpectedly declares a fixed display delay"
+    binary_strings "$HOOK" | grep -Fq 'PHASE=RUNTIME_AUTHORITY policy=INSTALLED_PRELOAD' ||
+        fail "promoted V3.4 hook lacks installed-preload authority marker"
+    binary_strings "$HOOK" | grep -Fq 'policy=V34_ALWAYS_ON' ||
+        fail "promoted V3.4 hook lacks always-on negotiation marker"
+    binary_strings "$HOOK" | grep -Fq 'PHASE=PRIVATE111_STREAM_READY' ||
+        fail "promoted V3.4 hook lacks native stream-ready marker"
+    binary_strings "$HOOK" | grep -Fq 'safearea_revision=V33_OEM_X_VERTICAL_60_450' ||
+        fail "promoted V3.4 hook lost V3.3 safeArea behavior"
 elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$INFO"; then
     if grep -Fq 'vehicle_zip_status=NOT_READY_HOOK_REBUILD_REQUIRED' "$INFO"; then
         HOOK_PENDING=1
@@ -934,14 +955,14 @@ if grep -Fq 'mkdir -p "$JAR_TARGET_DIR"' "$INSTALL"; then
 fi
 grep -Fq 'PACKAGE_MODE=CARPLAY_PRIVATE111_DIRECT_DISPLAY_V3_4_STREAM_DRIVEN' "$INSTALL" ||
     fail "integrated installer does not identify V3.4 stream-driven package"
-grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$INSTALL" ||
-    fail "integrated installer does not gate on rebuilt V2 release status"
+grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V3_4' "$INSTALL" ||
+    fail "integrated installer does not gate on rebuilt V3.4 release status"
 grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$INSTALL" ||
     fail "integrated installer does not gate on vehicle-ready release status"
-grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$CHAIN" ||
-    fail "runtime stager does not gate on rebuilt V2 release"
-grep -Fq 'mode=carplay-private111-direct-display-v2' "$CHAIN" ||
-    fail "runtime ownership marker is not V2"
+grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V3_4' "$CHAIN" ||
+    fail "runtime stager does not gate on rebuilt V3.4 release"
+grep -Fq 'mode=carplay-private111-direct-display-v3.4' "$CHAIN" ||
+    fail "runtime ownership marker is not V3.4"
 grep -Fq 'CarPlay private111 Direct Display V3.4' "$STATUS" ||
     fail "STATUS does not identify the V3.4 display path"
 grep -Fq 'DISPLAY_START_POLICY=STREAM_DRIVEN' "$STATUS" ||
