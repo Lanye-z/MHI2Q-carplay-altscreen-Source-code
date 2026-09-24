@@ -30,13 +30,17 @@ public final class BAPGateReinstallTest {
         require(bridge.init(first),"init failed");
         require(cluster.getCombiBAPListenerCombiService()==first,"init installed gate");
         bridge.onStart();
-        require(cluster.getCombiBAPListenerCombiService()==first,"start installed gate");
+        require(cluster.getCombiBAPListenerCombiService() instanceof GatedCombiService,
+            "start did not install presentation gate");
+        GatedCombiService startGate=(GatedCombiService)cluster.getCombiBAPListenerCombiService();
+        require(startGate.isPresentationContextBlocked(),"presentation context not blocked");
 
         RouteGuidance.State road=field(RouteGuidance.State.DIRTY_CURRENT_ROAD);
         road.currentRoad="CarPlay Road"; bridge.update(road);
         GatedCombiService g1=(GatedCombiService)cluster.getCombiBAPListenerCombiService();
         require(g1.isFct19Blocked(),"19 not owned");
         require(!g1.isFct21Blocked()&&!g1.isFct22Blocked(),"unowned fields blocked");
+        require(g1.isPresentationContextBlocked(),"presentation gate lost");
 
         CombiBAPServiceNavi replacement=fakeService();
         cluster.setCombiBAPListenerCombiService(replacement);
@@ -45,6 +49,7 @@ public final class BAPGateReinstallTest {
         GatedCombiService g2=(GatedCombiService)cluster.getCombiBAPListenerCombiService();
         require(g2!=g1&&g2.real==replacement,"replacement listener not wrapped");
         require(g2.isFct19Blocked()&&g2.isFct21Blocked()&&!g2.isFct22Blocked(),"ownership not preserved");
+        require(g2.isPresentationContextBlocked(),"presentation context not preserved");
 
         RouteGuidance.State empty=field(RouteGuidance.State.DIRTY_CURRENT_ROAD);
         empty.currentRoad=""; bridge.update(empty);
@@ -60,7 +65,8 @@ public final class BAPGateReinstallTest {
 
         RouteGuidance.State noe=field(RouteGuidance.State.DIRTY_ETA|RouteGuidance.State.DIRTY_TIME_REMAINING);
         noe.etaSeconds=-1; noe.timeRemainingSeconds=-1L; bridge.update(noe);
-        require(cluster.getCombiBAPListenerCombiService()==replacement,"last release did not unwrap");
+        require(cluster.getCombiBAPListenerCombiService()==g2,
+            "presentation context should keep gate installed");
 
         bridge.update(road);
         require(cluster.getCombiBAPListenerCombiService() instanceof GatedCombiService,"reacquire failed");

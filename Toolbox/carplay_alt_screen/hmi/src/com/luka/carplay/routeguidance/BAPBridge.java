@@ -1,12 +1,17 @@
 /*
- * V3.3 OEM lower-bar bridge.
+ * V3.4 OEM lower-bar + minimal Route Guidance presentation bridge.
  *
  * Partial takeover only:
  *   FctID 19 CurrentPositionInfo      -> CarPlay only while a valid road exists
  *   FctID 21 DistanceToDestination   -> CarPlay only while a valid distance exists
  *   FctID 22 TimeToDestination       -> CarPlay only while a valid ETA exists
  *
- * Invalid/missing CarPlay data always fails open to the stock Audi producer.
+ * Invalid/missing CarPlay lower-bar data always fails open to the stock Audi producer.
+ * V3.4 additionally owns only the minimal OEM RG presentation context required
+ * for the stock menu to render Fct19/Fct21/Fct22:
+ *   Fct17 RGStatus, Fct39 ActiveRGType, Fct23 ManeuverDescriptor,
+ *   Fct18 DistanceToNextManeuver, Fct49 ExitView.
+ * Fct23 is always NO_SYMBOL; no custom maneuver renderer is reintroduced.
  * FctID 45 MapScale is never written here.
  *
  * Java 1.2 compatible.
@@ -17,18 +22,23 @@ import com.luka.carplay.CarPlayHook;
 import com.luka.carplay.framework.Log;
 import de.audi.atip.base.IFrameworkAccess;
 import de.audi.atip.interapp.combi.bap.navi.CombiBAPServiceNavi;
+import de.audi.atip.interapp.combi.bap.navi.data.CombiBAPNaviLaneGuidanceData;
+import de.audi.atip.interapp.combi.bap.navi.data.CombiBAPNaviManeuverDescriptor;
 import de.audi.atip.log.LogChannel;
 import de.audi.atip.metrics.DateMetric;
 import de.audi.atip.metrics.Distance;
 import de.audi.tghu.navi.app.Navigation;
 import de.audi.tghu.navi.app.cluster.BAPDistanceFormatter;
 import de.audi.tghu.navi.app.cluster.ClusterService;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 
 public final class BAPBridge {
     private static final String TAG = "VCOemLowerBar";
     private static final int FCT19 = 19;
     private static final int FCT21 = 21;
     private static final int FCT22 = 22;
+    private static final int ACTIVE_RGTYPE = 0;
 
     private CombiBAPServiceNavi appConnectorNavi;
     private GatedCombiService gate;
@@ -40,6 +50,14 @@ public final class BAPBridge {
     private boolean ownFct19;
     private boolean ownFct21;
     private boolean ownFct22;
+
+    private boolean presentationContextActive;
+    private boolean presentationResyncPending;
+    private boolean previousRgActive;
+    private boolean previousRgiDataValid;
+    private boolean previousPresentationStateKnown;
+    private int exitViewSendCount;
+
     private long lastEtaSeconds = -1L;
     private long lastRemainingSeconds = -1L;
     private long lastRemainingSampleUtcSeconds = -1L;
@@ -65,11 +83,18 @@ public final class BAPBridge {
     public void onStart() {
         releaseAllFields("session_start", true);
         sessionActive = true;
+        presentationContextActive = false;
+        presentationResyncPending = false;
+        previousPresentationStateKnown = false;
+        exitViewSendCount = 0;
         lastEtaSeconds = -1L;
         lastRemainingSeconds = -1L;
         lastRemainingSampleUtcSeconds = -1L;
+
+        boolean contextReady = ensurePresentationContext();
         Log.i(TAG, "LOWER_BAR_SESSION=ACTIVE takeover=LAZY_PER_FIELD"
-            + " stock_passthrough=19,21,22");
+            + " fields=19,21,22"
+            + " presentation_context=" + (contextReady ? "ACTIVE" : "PENDING"));
     }
 
     public void onStop() {
@@ -78,12 +103,15 @@ public final class BAPBridge {
 
     public void onShutdown() {
         sessionActive = false;
+        deactivatePresentationContext();
         releaseAllFields("shutdown", true);
         lastEtaSeconds = -1L;
         lastRemainingSeconds = -1L;
         lastRemainingSampleUtcSeconds = -1L;
+        previousPresentationStateKnown = false;
         Log.i(TAG, "LOWER_BAR_SESSION=INACTIVE synthetic_clear=NO"
-            + " stock_listener_restore=BEST_EFFORT");
+            + " stock_listener_restore=BEST_EFFORT"
+            + " presentation_context=RESTORED");
     }
 
     public void update(RouteGuidance.State s) {
@@ -169,6 +197,12 @@ public final class BAPBridge {
             return false;
         }
 
+        if (!presentationContextActive) {
+            ensurePresentationContext();
+        } else if (presentationResyncPending) {
+            publishPresentationSyncBestEffort("gate_reinstalled");
+        }
+
         boolean wasOwned = isFieldOwned(fct);
         setFieldOwned(fct, true);
         syncGateBlocks();
@@ -187,7 +221,8 @@ public final class BAPBridge {
         Log.i(TAG, "LOWER_BAR_FIELD=FCT" + fct
             + " action=RELEASE reason=" + reason
             + " stock_passthrough=YES synthetic_clear=NO");
-        if (!anyFieldOwned()) restoreStockListenerIfOwned("no_owned_fields");
+        if (!anyFieldOwned() && !presentationContextActive)
+            restoreStockListenerIfOwned("no_owned_fields");
     }
 
     private void releaseAllFields(String reason, boolean restoreListener) {
@@ -200,7 +235,8 @@ public final class BAPBridge {
         if (hadOwnership)
             Log.i(TAG, "LOWER_BAR_FIELDS=19,21,22 action=RELEASE_ALL reason="
                 + reason + " synthetic_clear=NO");
-        if (restoreListener) restoreStockListenerIfOwned(reason);
+        if (restoreListener && !presentationContextActive)
+            restoreStockListenerIfOwned(reason);
     }
 
     private boolean ensureGateInstalled() {
@@ -221,6 +257,7 @@ public final class BAPBridge {
             if (current instanceof GatedCombiService) {
                 gate = (GatedCombiService)current;
                 syncGateBlocks();
+                if (presentationContextActive) presentationResyncPending = true;
                 Log.w(TAG, "LOWER_BAR_GATE=ADOPTED existing_gate=YES");
                 return true;
             }
@@ -229,8 +266,10 @@ public final class BAPBridge {
             gate = new GatedCombiService(current);
             syncGateBlocks();
             cs.setCombiBAPListenerCombiService(gate);
-            if (replacingDetachedGate)
+            if (replacingDetachedGate) {
+                if (presentationContextActive) presentationResyncPending = true;
                 Log.w(TAG, "LOWER_BAR_GATE=REINSTALLED reason=cluster_listener_replaced");
+            }
             else
                 Log.i(TAG, "LOWER_BAR_GATE=INSTALLED mode=LAZY_PER_FIELD");
             return true;
@@ -245,6 +284,7 @@ public final class BAPBridge {
         if (oldGate == null) return;
 
         oldGate.setBlockedFields(false, false, false);
+        oldGate.setPresentationContextBlocked(false);
         try {
             Navigation nav = Navigation.getInstance();
             ClusterService cs = nav != null ? nav.getClusterService() : null;
@@ -272,8 +312,10 @@ public final class BAPBridge {
     }
 
     private void syncGateBlocks() {
-        if (gate != null)
+        if (gate != null) {
             gate.setBlockedFields(ownFct19, ownFct21, ownFct22);
+            gate.setPresentationContextBlocked(presentationContextActive);
+        }
     }
 
     private boolean anyFieldOwned() {
@@ -291,6 +333,234 @@ public final class BAPBridge {
         if (fct == FCT19) ownFct19 = value;
         else if (fct == FCT21) ownFct21 = value;
         else if (fct == FCT22) ownFct22 = value;
+    }
+
+
+    /*
+     * Minimal OEM Route Guidance presentation context.
+     * V3.3 proved that Fct19/21/22 can be written while the stock VC menu
+     * remains hidden. V3.4 therefore activates only the OEM acceptance state
+     * and a neutral sync(0) group; no real maneuver/custom renderer is used.
+     */
+    private boolean ensurePresentationContext() {
+        if (!sessionActive) return false;
+        if (presentationContextActive) {
+            if (presentationResyncPending)
+                publishPresentationSyncBestEffort("pending");
+            return true;
+        }
+        if (!ensureGateInstalled()) {
+            Log.w(TAG, "OEM_RG_CONTEXT action=PENDING reason=gate_unavailable");
+            return false;
+        }
+
+        ClusterService cs = currentClusterService();
+        if (cs == null) {
+            Log.w(TAG, "OEM_RG_CONTEXT action=PENDING reason=cluster_unavailable");
+            return false;
+        }
+
+        Object container = findDsiContainer(cs);
+        Boolean oldRg = readBooleanMethod(container, "isRgActive");
+        Boolean oldRgiValid = readBooleanField(cs, "rgiDataValid");
+        if (container == null || oldRg == null || oldRgiValid == null) {
+            Log.w(TAG, "OEM_RG_CONTEXT action=PENDING reason=state_snapshot_unavailable");
+            if (!anyFieldOwned()) restoreStockListenerIfOwned("context_snapshot_failed");
+            return false;
+        }
+
+        previousRgActive = oldRg.booleanValue();
+        previousRgiDataValid = oldRgiValid.booleanValue();
+        previousPresentationStateKnown = true;
+
+        presentationContextActive = true;
+        syncGateBlocks();
+
+        try {
+            invokeBoolean(container, "setRgActive", true);
+            if (!previousRgiDataValid) invokeRgiString(cs, new short[]{1});
+            invokeBoolean(cs, "updateRgActive", true);
+            publishPresentationSync();
+            presentationResyncPending = false;
+            Log.i(TAG, "OEM_RG_CONTEXT action=ACTIVATE result=PASS"
+                + " previous_rg_active=" + previousRgActive
+                + " previous_rgi_valid=" + previousRgiDataValid
+                + " policy=MINIMAL_NEUTRAL_SYNC");
+            return true;
+        } catch (Throwable t) {
+            Log.e(TAG, "OEM_RG_CONTEXT action=ACTIVATE result=FAIL", t);
+            restorePresentationStateBestEffort(cs, container, "activate_rollback");
+            presentationContextActive = false;
+            presentationResyncPending = false;
+            syncGateBlocks();
+            if (!anyFieldOwned()) restoreStockListenerIfOwned("context_activate_failed");
+            return false;
+        }
+    }
+
+    private void deactivatePresentationContext() {
+        if (!presentationContextActive && !previousPresentationStateKnown) return;
+
+        if (presentationContextActive) {
+            try { publishPresentationSync(false); }
+            catch (Throwable t) {
+                Log.w(TAG, "OEM_RG_CONTEXT BAP deactivate sync failed: " + t);
+            }
+        }
+
+        ClusterService cs = currentClusterService();
+        Object container = findDsiContainer(cs);
+        restorePresentationStateBestEffort(cs, container, "shutdown");
+
+        presentationContextActive = false;
+        presentationResyncPending = false;
+        syncGateBlocks();
+    }
+
+    private void restorePresentationStateBestEffort(
+            ClusterService cs, Object container, String reason) {
+        if (!previousPresentationStateKnown || cs == null || container == null) {
+            Log.w(TAG, "OEM_RG_CONTEXT action=RESTORE result=SKIP reason="
+                + reason + "_state_unavailable");
+            return;
+        }
+        try {
+            if (!previousRgiDataValid) invokeRgiString(cs, null);
+            invokeBoolean(container, "setRgActive", previousRgActive);
+            invokeBoolean(cs, "updateRgActive", previousRgActive);
+            Log.i(TAG, "OEM_RG_CONTEXT action=RESTORE result=PASS reason=" + reason
+                + " rg_active=" + previousRgActive
+                + " rgi_valid=" + previousRgiDataValid);
+        } catch (Throwable t) {
+            Log.w(TAG, "OEM_RG_CONTEXT action=RESTORE result=FAIL reason="
+                + reason + " error=" + t);
+        }
+    }
+
+    private void publishPresentationSyncBestEffort(String reason) {
+        try {
+            publishPresentationSync();
+            presentationResyncPending = false;
+            Log.i(TAG, "OEM_RG_CONTEXT_BAP_SYNC result=PASS reason=" + reason);
+        } catch (Throwable t) {
+            presentationResyncPending = true;
+            Log.w(TAG, "OEM_RG_CONTEXT_BAP_SYNC result=RETRY reason="
+                + reason + " error=" + t);
+        }
+    }
+
+    private void publishPresentationSync() throws Exception {
+        publishPresentationSync(true);
+    }
+
+    private void publishPresentationSync(boolean active) throws Exception {
+        appConnectorNavi.updateRGStatus(active ? 1 : 0);
+        appConnectorNavi.updateActiveRGType(ACTIVE_RGTYPE);
+
+        CombiBAPNaviManeuverDescriptor[] descriptor =
+            new CombiBAPNaviManeuverDescriptor[1];
+        descriptor[0] =
+            new CombiBAPNaviManeuverDescriptor(0, 0, 0, new byte[0]);
+        appConnectorNavi.updateManeuverDescriptor(descriptor);
+        appConnectorNavi.updateDistanceToNextManeuver(0, 0, false, 0);
+
+        exitViewSendCount++;
+        int exitVariant = (exitViewSendCount % 2 == 0) ? 0 : 1;
+        appConnectorNavi.updateExitView(exitVariant, 0);
+
+        appConnectorNavi.updateManeuverState(0);
+        appConnectorNavi.updateLaneGuidance(
+            false, new CombiBAPNaviLaneGuidanceData[0]);
+
+        Log.i(TAG, "OEM_RG_CONTEXT_BAP_SYNC result=PASS"
+            + " rg_status=" + (active ? 1 : 0)
+            + " rg_type=" + ACTIVE_RGTYPE
+            + " descriptor=NO_SYMBOL distance_next=0"
+            + " exit_variant=" + exitVariant);
+    }
+
+    private static ClusterService currentClusterService() {
+        try {
+            Navigation nav = Navigation.getInstance();
+            return nav != null ? nav.getClusterService() : null;
+        } catch (Throwable t) { return null; }
+    }
+
+    private static Object findDsiContainer(ClusterService cs) {
+        if (cs == null) return null;
+        try {
+            Method m = cs.getClass().getMethod(
+                "getDSIResponseContainer", new Class[0]);
+            m.setAccessible(true);
+            return m.invoke(cs, new Object[0]);
+        } catch (Throwable direct) {
+            try {
+                Field envField = findField(cs.getClass(), "env");
+                if (envField == null) return null;
+                envField.setAccessible(true);
+                Object env = envField.get(cs);
+                if (env == null) return null;
+                Method getContainer = env.getClass().getMethod(
+                    "getContainer", new Class[0]);
+                getContainer.setAccessible(true);
+                return getContainer.invoke(env, new Object[0]);
+            } catch (Throwable fallback) {
+                Log.w(TAG, "OEM_RG_CONTEXT container lookup failed: " + fallback);
+                return null;
+            }
+        }
+    }
+
+    private static Field findField(Class type, String name) {
+        Class c = type;
+        while (c != null) {
+            try { return c.getDeclaredField(name); }
+            catch (Throwable t) { c = c.getSuperclass(); }
+        }
+        return null;
+    }
+
+    private static Boolean readBooleanField(Object target, String name) {
+        if (target == null) return null;
+        try {
+            Field f = findField(target.getClass(), name);
+            if (f == null) return null;
+            f.setAccessible(true);
+            return new Boolean(f.getBoolean(target));
+        } catch (Throwable t) {
+            Log.w(TAG, "OEM_RG_CONTEXT read field failed " + name + ": " + t);
+            return null;
+        }
+    }
+
+    private static Boolean readBooleanMethod(Object target, String name) {
+        if (target == null) return null;
+        try {
+            Method m = target.getClass().getMethod(name, new Class[0]);
+            m.setAccessible(true);
+            Object value = m.invoke(target, new Object[0]);
+            return value instanceof Boolean ? (Boolean)value : null;
+        } catch (Throwable t) {
+            Log.w(TAG, "OEM_RG_CONTEXT read method failed " + name + ": " + t);
+            return null;
+        }
+    }
+
+    private static void invokeBoolean(Object target, String name, boolean value)
+            throws Exception {
+        if (target == null) throw new Exception(name + ": target null");
+        Method m = target.getClass().getMethod(
+            name, new Class[]{Boolean.TYPE});
+        m.setAccessible(true);
+        m.invoke(target, new Object[]{new Boolean(value)});
+    }
+
+    private static void invokeRgiString(ClusterService cs, short[] value)
+            throws Exception {
+        Method m = cs.getClass().getMethod(
+            "updateRGIString", new Class[]{short[].class});
+        m.setAccessible(true);
+        m.invoke(cs, new Object[]{value});
     }
 
     private FormattedDistance formatDistanceToDestination(int meters) {

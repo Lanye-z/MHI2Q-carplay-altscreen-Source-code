@@ -7,6 +7,10 @@ on:
       - experiment/oem-layout-second-screen_v3.4
     paths:
       - '.github/workflows/v34-stream-driven-startup.yml'
+      - 'Toolbox/carplay_alt_screen/hmi/src/**'
+      - 'Toolbox/carplay_alt_screen/hmi/stubs/**'
+      - 'Toolbox/carplay_alt_screen/hmi/tests/**'
+      - 'Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar'
       - 'Toolbox/carplay_alt_screen/src/**'
       - 'Toolbox/carplay_alt_screen/build_source_snapshot.sh'
       - 'Toolbox/carplay_alt_screen/mirror_display/release/**'
@@ -34,10 +38,83 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+
       - name: Install ARM inspection tools
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends clang lld binutils-arm-linux-gnueabihf python3-pyelftools
+
+      - name: Build V3.4 HMI OEM presentation context
+        run: |
+          set -euo pipefail
+          BASE=Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar
+          SRC=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance
+          BUS=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/framework/CarplayBus.java
+          TESTS=Toolbox/carplay_alt_screen/hmi/tests
+          CTRL=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java
+          WHEEL=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          STUB=Toolbox/carplay_alt_screen/hmi/stubs
+          BUILD="$RUNNER_TEMP/v34-hmi-presentation"
+          rm -rf "$BUILD"
+          mkdir -p "$BUILD/stubs" "$BUILD/classes" "$BUILD/jar" "$BUILD/test-classes"
+          test -s "$BASE"
+          unzip -t "$BASE" >/dev/null
+          find "$STUB" -name '*.java' -print | sort > "$BUILD/stubs.list"
+          javac -encoding UTF-8 -source 1.3 -target 1.2 -d "$BUILD/stubs" @"$BUILD/stubs.list"
+          javac -encoding UTF-8 -source 1.3 -target 1.2 -cp "$BUILD/stubs:$BASE" -d "$BUILD/classes" "$BUS"
+          javac -encoding UTF-8 -source 1.3 -target 1.2 -cp "$BUILD/classes:$BUILD/stubs:$BASE" -sourcepath "$SRC" -d "$BUILD/classes" "$SRC/RouteGuidance.java" "$SRC/AmapRouteGuidance.java" "$SRC/GatedCombiService.java" "$SRC/BAPBridge.java"
+          javac -encoding UTF-8 -source 1.3 -target 1.2 -cp "$BUILD/stubs:$BASE" -d "$BUILD/classes" "$CTRL" "$WHEEL"
+          python3 - "$BASE" "$BUILD/classes" "$BUILD/jar/carplay_hook-basevideo3.jar" <<'PY'
+          import collections, pathlib, struct, sys, zipfile
+          src=pathlib.Path(sys.argv[1]); classes=pathlib.Path(sys.argv[2]); dst=pathlib.Path(sys.argv[3])
+          with zipfile.ZipFile(src,"r") as zin, zipfile.ZipFile(dst,"w",zipfile.ZIP_DEFLATED) as zout:
+              for info in zin.infolist():
+                  n=info.filename
+                  replace=(n.startswith("com/luka/carplay/routeguidance/") or n=="com/luka/carplay/framework/CarplayBus.class" or n.startswith("com/luka/carplay/framework/CarplayBus$") or n=="com/luka/carplay/cluster/ClusterStateController.class" or n.startswith("com/luka/carplay/cluster/ClusterStateController$") or n=="com/luka/carplay/cluster/WheelZoomBridge.class" or n.startswith("com/luka/carplay/cluster/WheelZoomBridge$")) and n.endswith(".class")
+                  if replace: continue
+                  zout.writestr(info,zin.read(n))
+              roots=[(classes/"com/luka/carplay/framework","com/luka/carplay/framework/"),(classes/"com/luka/carplay/routeguidance","com/luka/carplay/routeguidance/"),(classes/"com/luka/carplay/cluster","com/luka/carplay/cluster/")]
+              for root,prefix in roots:
+                  for path in sorted(root.glob("*.class")):
+                      if prefix.endswith("/framework/") and not path.name.startswith("CarplayBus"): continue
+                      if prefix.endswith("/cluster/") and not (path.name.startswith("ClusterStateController") or path.name.startswith("WheelZoomBridge")): continue
+                      zi=zipfile.ZipInfo(prefix+path.name,date_time=(2026,9,24,0,0,0)); zi.compress_type=zipfile.ZIP_DEFLATED; zi.create_system=3; zi.external_attr=0o100644<<16
+                      zout.writestr(zi,path.read_bytes())
+          with zipfile.ZipFile(dst,"r") as zf:
+              if zf.testzip(): raise SystemExit("corrupt rebuilt JAR")
+              names=zf.namelist()
+              dup=[n for n,c in collections.Counter(names).items() if c!=1]
+              if dup: raise SystemExit("duplicate JAR members: "+repr(dup))
+              for n in ["com/luka/carplay/framework/CarplayBus.class","com/luka/carplay/routeguidance/RouteGuidance.class","com/luka/carplay/routeguidance/AmapRouteGuidance.class","com/luka/carplay/routeguidance/GatedCombiService.class","com/luka/carplay/routeguidance/BAPBridge.class","com/luka/carplay/cluster/WheelZoomBridge.class","com/luka/carplay/cluster/ClusterStateController.class"]:
+                  d=zf.read(n)
+                  if d[:4]!=b"\xca\xfe\xba\xbe" or struct.unpack(">HH",d[4:8])!=(0,46): raise SystemExit("invalid Java 1.2 class: "+n)
+          print("V34_HMI_JAR_REBUILD=PASS presentation_context=MINIMAL_NEUTRAL_SYNC")
+          PY
+          cp "$BUILD/jar/carplay_hook-basevideo3.jar" "$BASE"
+          javac -encoding UTF-8 -cp "$BUILD/classes:$BUILD/stubs:$BASE" -d "$BUILD/test-classes" "$TESTS/CarplayBusStickyReplayTest.java" "$TESTS/RouteGuidanceHardClearTest.java" "$TESTS/AmapSoftInactiveTest.java" "$TESTS/BAPGateReinstallTest.java" "$TESTS/BAPPresentationContextTest.java"
+          java -cp "$BUILD/test-classes:$BUILD/classes:$BUILD/stubs:$BASE" com.luka.carplay.framework.CarplayBusStickyReplayTest
+          java -cp "$BUILD/test-classes:$BUILD/classes:$BUILD/stubs:$BASE" com.luka.carplay.routeguidance.RouteGuidanceHardClearTest
+          java -cp "$BUILD/test-classes:$BUILD/classes:$BUILD/stubs:$BASE" com.luka.carplay.routeguidance.AmapSoftInactiveTest
+          java -cp "$BUILD/test-classes:$BUILD/classes:$BUILD/stubs:$BASE" com.luka.carplay.routeguidance.BAPGateReinstallTest
+          java -cp "$BUILD/test-classes:$BUILD/classes:$BUILD/stubs:$BASE" com.luka.carplay.routeguidance.BAPPresentationContextTest
+          grep -Fq 'OEM_RG_CONTEXT action=ACTIVATE result=PASS' "$SRC/BAPBridge.java"
+          grep -Fq 'updateRGStatus(active ? 1 : 0)' "$SRC/BAPBridge.java"
+          grep -Fq 'new CombiBAPNaviManeuverDescriptor(0, 0, 0, new byte[0])' "$SRC/BAPBridge.java"
+          grep -Fq 'updateDistanceToNextManeuver(0, 0, false, 0)' "$SRC/BAPBridge.java"
+          grep -Fq 'setPresentationContextBlocked' "$SRC/GatedCombiService.java"
+          grep -Fq 'appConnectorNavi.updateTimeToDestination(1, timeFormat, localSeconds)' "$SRC/BAPBridge.java"
+          if grep -Fq 'updateMapScale(' "$SRC/BAPBridge.java"; then echo 'ERROR: V3.4 presentation fix must not synthesize Fct45' >&2; exit 1; fi
+          JAR_SIZE="$(wc -c < "$BASE" | tr -d ' ')"
+          JAR_CKSUM="$(cksum < "$BASE" | awk '{print $1}')"
+          JAR_SHA="$(sha256sum "$BASE" | awk '{print tolower($1)}')"
+          echo "JAR_SIZE=$JAR_SIZE" >> "$GITHUB_ENV"
+          echo "JAR_CKSUM=$JAR_CKSUM" >> "$GITHUB_ENV"
+          echo "JAR_SHA=$JAR_SHA" >> "$GITHUB_ENV"
+          echo "V34_PRESENTATION_CONTEXT=PASS jar_sha256=$JAR_SHA"
 
       - name: Build V3.4 universal hook
         run: |
@@ -126,10 +203,14 @@ jobs:
           python3 - "$HOOK_SHA" "$GITHUB_SHA" <<'PY'
           import hashlib
           import json
+          import os
           import pathlib
           import sys
 
           hook_sha, source_commit = sys.argv[1:3]
+          jar_size = os.environ["JAR_SIZE"]
+          jar_cksum = os.environ["JAR_CKSUM"]
+          jar_sha = os.environ["JAR_SHA"]
           root = pathlib.Path(".")
 
           def digest(p):
@@ -182,7 +263,14 @@ jobs:
           text = hmi_info.read_text()
           for k, v in {
               "universal_runtime_sha256": hook_sha,
+              "jar_size": jar_size,
+              "jar_cksum": jar_cksum,
+              "jar_sha256": jar_sha,
               "branch_zip_status": "READY_FOR_VEHICLE_TEST",
+              "oem_lower_bar": "CARPLAY_RGI_FCT19_21_22_WITH_OEM_RG_PRESENTATION_V3",
+              "lower_bar_context_policy": "OEM_RG_PRESENTATION_MINIMAL_NEUTRAL_SYNC_F17_39_23_18_49",
+              "lower_bar_context_cluster_state": "CAPTURE_RESTORE_RGACTIVE_RGI_VALID",
+              "lower_bar_context_maneuver_policy": "NO_SYMBOL_NO_CUSTOM_RENDERER",
               "direct_display_revision": "experiment-oem-layout-second-screen-v3.4-stream-driven-startup",
               "startup_revision": "V3_4_PROTOCOL_ALWAYS_ON_DISPLAY_STREAM_DRIVEN",
               "startup_sd_runtime_gate": "DISABLED",
@@ -204,7 +292,12 @@ jobs:
               "branch": "experiment/oem-layout-second-screen_v3.4",
               "validated_source_commit": source_commit,
               "mode": "PRIVATE111_DIRECT_DISPLAY_V3_4_STREAM_DRIVEN",
+              "jar_size": jar_size,
+              "jar_cksum": jar_cksum,
+              "jar_sha256": jar_sha,
               "universal_runtime_sha256": hook_sha,
+              "oem_lower_bar": "CARPLAY_RGI_FCT19_21_22_WITH_OEM_RG_PRESENTATION_V3",
+              "lower_bar_context_policy": "OEM_RG_PRESENTATION_MINIMAL_NEUTRAL_SYNC_F17_39_23_18_49",
               "rebuild_required": "none",
               "vehicle_zip_status": "READY_FOR_V3_4_VEHICLE_TEST",
               "negotiation_policy": "ALWAYS_ON_WHILE_PRELOAD_INSTALLED",
@@ -237,6 +330,13 @@ jobs:
 
           required = {
               "Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so",
+              "Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar",
+              "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/BAPBridge.java",
+              "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/GatedCombiService.java",
+              "Toolbox/carplay_alt_screen/hmi/stubs/de/audi/tghu/navi/app/cluster/ClusterService.java",
+              "Toolbox/carplay_alt_screen/hmi/stubs/de/audi/atip/interapp/combi/bap/navi/data/CombiBAPNaviManeuverDescriptor.java",
+              "Toolbox/carplay_alt_screen/hmi/tests/BAPGateReinstallTest.java",
+              "Toolbox/carplay_alt_screen/hmi/tests/BAPPresentationContextTest.java",
               "Toolbox/carplay_alt_screen/src/altscreen_hook.c",
               "Toolbox/carplay_alt_screen/src/p1404_resolve.c",
               "Toolbox/carplay_alt_screen/src/p1404_airplay.c",
@@ -295,6 +395,8 @@ jobs:
           grep -Fq 'negotiation_policy=ALWAYS_ON_WHILE_PRELOAD_INSTALLED' BRANCH-ZIP-READY.txt
           grep -Fq 'display_start_policy=STREAM_DRIVEN' BRANCH-ZIP-READY.txt
           grep -Fq 'fixed_display_delay=NONE' BRANCH-ZIP-READY.txt
+          grep -Fq 'lower_bar_context_policy=OEM_RG_PRESENTATION_MINIMAL_NEUTRAL_SYNC_F17_39_23_18_49' BRANCH-ZIP-READY.txt
+          grep -Fq 'oem_lower_bar=CARPLAY_RGI_FCT19_21_22_WITH_OEM_RG_PRESENTATION_V3' BRANCH-ZIP-READY.txt
           echo 'V34_BRANCH_ZIP_CONTRACT=PASS'
 
       - name: Promote V3.4 runtime
@@ -305,6 +407,7 @@ jobs:
 
           git add \
             Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so \
+            Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar \
             Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt \
             Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt \
             Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS \

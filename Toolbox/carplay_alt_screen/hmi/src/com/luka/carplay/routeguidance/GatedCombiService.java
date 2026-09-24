@@ -13,6 +13,7 @@ public final class GatedCombiService implements CombiBAPServiceNavi {
     private volatile boolean blockFct19;
     private volatile boolean blockFct21;
     private volatile boolean blockFct22;
+    private volatile boolean blockPresentationContext;
 
     public GatedCombiService(CombiBAPServiceNavi r) { real = r; }
 
@@ -22,17 +23,23 @@ public final class GatedCombiService implements CombiBAPServiceNavi {
     public boolean isFct19Blocked() { return blockFct19; }
     public boolean isFct21Blocked() { return blockFct21; }
     public boolean isFct22Blocked() { return blockFct22; }
+    public void setPresentationContextBlocked(boolean value) {
+        blockPresentationContext = value;
+    }
+    public boolean isPresentationContextBlocked() {
+        return blockPresentationContext;
+    }
 
     public void updateCurrentPositionInfo(String v) { if (!blockFct19) real.updateCurrentPositionInfo(v); }
     public void updateDistanceToDestination(int v,int u,boolean s) { if (!blockFct21) real.updateDistanceToDestination(v,u,s); }
     public void updateTimeToDestination(int t,int f,long v) { if (!blockFct22) real.updateTimeToDestination(t,f,v); }
-    public void updateRGStatus(int a){real.updateRGStatus(a);}
-    public void updateActiveRGType(int a){real.updateActiveRGType(a);}
-    public void updateDistanceToNextManeuver(int a,int b,boolean c,int d){real.updateDistanceToNextManeuver(a,b,c,d);}
-    public void updateManeuverDescriptor(CombiBAPNaviManeuverDescriptor[] a){real.updateManeuverDescriptor(a);}
-    public void updateLaneGuidance(boolean a,CombiBAPNaviLaneGuidanceData[] b){real.updateLaneGuidance(a,b);}
-    public void updateExitView(int a,int b){real.updateExitView(a,b);}
-    public void updateManeuverState(int a){real.updateManeuverState(a);}
+    public void updateRGStatus(int a){if(!blockPresentationContext)real.updateRGStatus(a);}
+    public void updateActiveRGType(int a){if(!blockPresentationContext)real.updateActiveRGType(a);}
+    public void updateDistanceToNextManeuver(int a,int b,boolean c,int d){if(!blockPresentationContext)real.updateDistanceToNextManeuver(a,b,c,d);}
+    public void updateManeuverDescriptor(CombiBAPNaviManeuverDescriptor[] a){if(!blockPresentationContext)real.updateManeuverDescriptor(a);}
+    public void updateLaneGuidance(boolean a,CombiBAPNaviLaneGuidanceData[] b){if(!blockPresentationContext)real.updateLaneGuidance(a,b);}
+    public void updateExitView(int a,int b){if(!blockPresentationContext)real.updateExitView(a,b);}
+    public void updateManeuverState(int a){if(!blockPresentationContext)real.updateManeuverState(a);}
     public void showInitializingScreen(){real.showInitializingScreen();}
     public void hideInitializingScreen(){real.hideInitializingScreen();}
     public void updateCompassInfo(int a,int b){real.updateCompassInfo(a,b);}

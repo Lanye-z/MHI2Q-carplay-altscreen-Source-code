@@ -128,6 +128,10 @@ if grep -Fq 'branch=experiment/oem-layout-second-screen_v3.4' "$READY"; then
         fail "V3.4 unexpectedly uses a fixed display delay"
     grep -Fq 'sidecar_attach_policy=RECOVER_CURRENT_SESSION' "$READY" ||
         fail "V3.4 current-session attach policy missing"
+    grep -Fq 'oem_lower_bar=CARPLAY_RGI_FCT19_21_22_WITH_OEM_RG_PRESENTATION_V3' "$READY" ||
+        fail "V3.4 OEM lower-bar presentation contract missing"
+    grep -Fq 'lower_bar_context_policy=OEM_RG_PRESENTATION_MINIMAL_NEUTRAL_SYNC_F17_39_23_18_49' "$READY" ||
+        fail "V3.4 OEM RG presentation context contract missing"
 fi
 
 sh "$ROOT/VERIFY-NATIVE-DIRECT-RELEASE.sh"
