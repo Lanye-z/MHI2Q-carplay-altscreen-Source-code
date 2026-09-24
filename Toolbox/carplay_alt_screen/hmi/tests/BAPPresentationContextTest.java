@@ -70,7 +70,26 @@ public final class BAPPresentationContextTest {
         require(cluster.getCombiBAPListenerCombiService()==raw,"stock listener not restored");
         require(calls.rgOff>=1,"RGStatus(0) teardown missing");
 
+        /*
+         * Preserve an OEM route that was already active before CarPlay.
+         * The final state must be restored, not forced inactive.
+         */
+        ClusterService cluster2=new ClusterService(raw);
+        cluster2.getTestDsiContainer().setRgActive(true);
+        cluster2.updateRGIString(new short[]{7});
+        Navigation.setInstance(new Navigation(cluster2));
+        BAPBridge bridge2=new BAPBridge();
+        require(bridge2.init(raw),"second init failed");
+        bridge2.onStart();
+        bridge2.onShutdown();
+        require(cluster2.getTestDsiContainer().isRgActive(),
+            "pre-existing OEM rgActive was not restored");
+        require(cluster2.isRgiDataValidForTest(),
+            "pre-existing OEM rgiDataValid was not restored");
+        require(cluster2.getCombiBAPListenerCombiService()==raw,
+            "second stock listener not restored");
+
         Navigation.setInstance(null);
-        System.out.println("BAP_PRESENTATION_CONTEXT=PASS policy=MINIMAL_NEUTRAL_SYNC_F17_39_23_18_49");
+        System.out.println("BAP_PRESENTATION_CONTEXT=PASS policy=MINIMAL_NEUTRAL_SYNC_F17_39_23_18_49 restore_previous_oem=YES");
     }
 }
