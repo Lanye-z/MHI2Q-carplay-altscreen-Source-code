@@ -1,0 +1,92 @@
+name: Runtime Residue Rescue Audit
+
+on:
+  push:
+    branches:
+      - tool/runtime-residue-quarantine-v1
+    paths:
+      - '.github/workflows/runtime-residue-rescue-audit.yml'
+      - 'Toolbox/scripts/altscreen_runtime_rescue.sh'
+      - 'Toolbox/scripts/check_mmi_cockpit_runtime_residue.sh'
+      - 'Toolbox/scripts/quarantine_mmi_cockpit_runtime_residue.sh'
+      - 'Toolbox/scripts/restore_mmi_cockpit_runtime_quarantine.sh'
+      - 'Toolbox/scripts/delete_mmi_cockpit_runtime_quarantine.sh'
+      - 'Toolbox/scripts/restore_mmi_cockpit_rescue_sd_backup.sh'
+      - 'Toolbox/carplay_alt_screen/tests/test_runtime_residue_rescue.sh'
+      - 'Toolbox/GEM/mqb-runtimeResidueRescue.esd'
+      - 'Toolbox/scripts/altscreen_chain_test.sh'
+      - 'Toolbox/scripts/altscreen_chain_test_universal.sh'
+      - 'Toolbox/scripts/altscreen_restore_transaction.sh'
+      - 'Toolbox/scripts/altscreen_restore_apply.sh'
+      - 'Toolbox/scripts/altscreen_persistent_diag.sh'
+      - 'Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh'
+      - 'Toolbox/scripts/stop_mmi_cockpit_carplay_test.sh'
+      - 'Toolbox/scripts/finish_mmi_cockpit_carplay_test.sh'
+      - 'BRANCH-ZIP-READY.txt'
+      - 'PACKAGE_SOURCE_MAP.json'
+      - 'SHA256SUMS.txt'
+      - 'VERIFY-BRANCH-ZIP-READY.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rescue-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify latest V3.4 is an ancestor
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor a907419037d8508871cdf49ff4c5c17a10aac75c HEAD
+          echo 'RESCUE_V34_ANCESTRY=PASS base=a907419037d8508871cdf49ff4c5c17a10aac75c'
+
+      - name: Shell syntax and menu wiring
+        run: |
+          set -euo pipefail
+          for s in             Toolbox/scripts/altscreen_runtime_rescue.sh             Toolbox/scripts/check_mmi_cockpit_runtime_residue.sh             Toolbox/scripts/quarantine_mmi_cockpit_runtime_residue.sh             Toolbox/scripts/restore_mmi_cockpit_runtime_quarantine.sh             Toolbox/scripts/delete_mmi_cockpit_runtime_quarantine.sh             Toolbox/scripts/restore_mmi_cockpit_rescue_sd_backup.sh             Toolbox/scripts/altscreen_chain_test.sh             Toolbox/scripts/altscreen_chain_test_universal.sh             Toolbox/scripts/altscreen_restore_transaction.sh             Toolbox/scripts/altscreen_restore_apply.sh             Toolbox/scripts/altscreen_persistent_diag.sh             Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh             Toolbox/scripts/stop_mmi_cockpit_carplay_test.sh             Toolbox/scripts/finish_mmi_cockpit_carplay_test.sh
+          do
+            sh -n "$s"
+          done
+
+          ESD=Toolbox/GEM/mqb-runtimeResidueRescue.esd
+          grep -Fq 'screen "Runtime-Residue-Rescue" Customization' "$ESD"
+          grep -Fq 'check_mmi_cockpit_runtime_residue.sh' "$ESD"
+          grep -Fq 'quarantine_mmi_cockpit_runtime_residue.sh' "$ESD"
+          grep -Fq 'restore_mmi_cockpit_runtime_quarantine.sh' "$ESD"
+          grep -Fq 'delete_mmi_cockpit_runtime_quarantine.sh' "$ESD"
+          grep -Fq 'restore_mmi_cockpit_rescue_sd_backup.sh' "$ESD"
+
+          # Toolbox update/initial install paths must copy both ESD and scripts.
+          grep -Fq 'cp -r $VOLUME/Toolbox/scripts/* /eso/hmi/engdefs/scripts/mqb' Toolbox/scripts/update_toolbox.sh
+          grep -Fq 'cp $VOLUME/Toolbox/GEM/*.esd /eso/hmi/engdefs' Toolbox/scripts/update_toolbox.sh
+          grep -Fq 'Toolbox/scripts/*.sh' Toolbox/final/install_scripts.sh
+          grep -Fq 'Toolbox/GEM/*.esd' Toolbox/final/install_scripts.sh
+          echo 'RESCUE_MENU_WIRING=PASS'
+
+      - name: Run V3.4 transactional regressions
+        run: |
+          set -euo pipefail
+          sh Toolbox/carplay_alt_screen/tests/test_storage_policy.sh
+          sh Toolbox/carplay_alt_screen/tests/test_install_transaction.sh
+          sh Toolbox/carplay_alt_screen/tests/test_restore_transaction.sh
+          sh Toolbox/carplay_alt_screen/tests/test_start_autostart_transaction.sh
+
+      - name: Run rescue end-to-end regression
+        run: |
+          set -euo pipefail
+          sh Toolbox/carplay_alt_screen/tests/test_runtime_residue_rescue.sh
+
+      - name: Verify branch package integrity
+        run: |
+          set -euo pipefail
+          sh VERIFY-BRANCH-ZIP-READY.sh
+          grep -Fq 'BRANCH_ZIP_READY=YES' BRANCH-ZIP-READY.txt
+          grep -Fq 'branch=experiment/oem-layout-second-screen_v3.4' BRANCH-ZIP-READY.txt
+          grep -Fq 'vehicle_zip_status=READY_FOR_V3_4_VEHICLE_TEST' BRANCH-ZIP-READY.txt
+          grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V3_4' Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt
+          echo 'RESCUE_PACKAGE_VERIFY=PASS'
