@@ -731,11 +731,11 @@ static cf_obj make_view_areas(uint32_t w, uint32_t h) {
  * keeps the runtime coded canvas (observed 1440x542 on the private111 path);
  * only the nested safeArea changes. The displayable3 sink remains 1440x455.
  *
- * index 0 = FULL  (370,68,700x382)
- * index 1 = SMALL (490,68,460x382)
+ * index 0 = FULL  (370,75,700x375)
+ * index 1 = SMALL (490,75,460x375)
  *
- * V3.3 preserves the V3.1/V3.2 horizontal OEM constraints while using the
- * vehicle-tuned vertical safe region top=68, bottom=450.
+ * V3.5 preserves the V3.1/V3.2 horizontal OEM constraints while using the
+ * vehicle-tuned vertical safe region top=75, bottom=450.
  */
 static cf_obj make_cluster_layout_view_areas(uint32_t w, uint32_t h,
                                              int enable_two_areas) {
