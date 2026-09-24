@@ -389,10 +389,10 @@ public final class BAPBridge {
             return true;
         } catch (Throwable t) {
             Log.e(TAG, "OEM_RG_CONTEXT action=ACTIVATE result=FAIL", t);
-            restorePresentationStateBestEffort(cs, container, "activate_rollback");
             presentationContextActive = false;
             presentationResyncPending = false;
             syncGateBlocks();
+            restorePresentationStateBestEffort(cs, container, "activate_rollback");
             if (!anyFieldOwned()) restoreStockListenerIfOwned("context_activate_failed");
             return false;
         }
@@ -408,13 +408,18 @@ public final class BAPBridge {
             }
         }
 
-        ClusterService cs = currentClusterService();
-        Object container = findDsiContainer(cs);
-        restorePresentationStateBestEffort(cs, container, "shutdown");
-
+        /*
+         * Open the stock presentation gate before replaying the previous OEM
+         * state.  If OEM navigation was already active before CarPlay, its
+         * updateRgActive(true) must be allowed to republish Fct17/Fct39.
+         */
         presentationContextActive = false;
         presentationResyncPending = false;
         syncGateBlocks();
+
+        ClusterService cs = currentClusterService();
+        Object container = findDsiContainer(cs);
+        restorePresentationStateBestEffort(cs, container, "shutdown");
     }
 
     private void restorePresentationStateBestEffort(
