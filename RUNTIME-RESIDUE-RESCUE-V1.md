@@ -111,3 +111,118 @@ RESCUE_STATE=OEM_RESTORED_WITH_QUARANTINE current_runtime=ABSENT safe_to_delete=
 
 注意：V3.4 RESTORE 的 recovery route 使用当前标准路径
 `MMI-Cockpit-Carplay/backup/original/`。旧卡如果是 `backup/ORIGINAL/`，建议在电脑上改成小写 `original` 后再上车。
+
+## 日志与最终删除前备份
+
+救援工具不再使用一个会被后续动作覆盖的公共日志。每种动作使用独立固定日志：
+
+```text
+MMI-Cockpit-Carplay/logs/rescue/
+  runtime-residue-rescue-check.log
+  runtime-residue-rescue-check.previous.log
+  runtime-residue-rescue-quarantine.log
+  runtime-residue-rescue-quarantine.previous.log
+  runtime-residue-rescue-restore.log
+  runtime-residue-rescue-restore.previous.log
+  runtime-residue-rescue-delete.log
+  runtime-residue-rescue-delete.previous.log
+  runtime-residue-rescue-restore-backup.log
+  runtime-residue-rescue-restore-backup.previous.log
+```
+
+因此典型的 `CHECK → QUARANTINE → OEM RESTORE → CHECK → DELETE` 流程中，第一次 CHECK 会在第二次 CHECK 时转成
+`runtime-residue-rescue-check.previous.log`，其余动作各自保留，不会互相覆盖，也不会按点击次数无限创建新文件。
+
+V3.4 自己的 **RESTORE ORIGINAL** 仍保留完整 operation journal，位置为：
+
+```text
+MMI-Cockpit-Carplay/logs/operations/restore_YYYYMMDD_HHMMSS.log
+```
+
+该日志捕获 RESTORE ORIGINAL 的 stdout/stderr、preflight、事务快照、APPLY、逐文件恢复校验、COMMIT 或 rollback 结果。
+
+### DELETE QUARANTINE 的额外保险
+
+执行 **4) DELETE QUARANTINE (FINAL)** 时，不再直接删除车机里的旧 runtime。删除前必须先创建：
+
+```text
+MMI-Cockpit-Carplay/rescue-backup/runtime-residue-v1/
+  COMPLETE
+  payload/
+  meta/
+    files.manifest
+    dirs.manifest
+    source_path
+    target_state
+    purpose
+```
+
+其中 `payload/` 是整个：
+
+```text
+/mnt/app/root/.carplay-altscreen.rescue-v1
+```
+
+的完整文件内容副本。
+
+创建过程为：
+
+```text
+quarantine
+  ↓
+复制到 SD 临时 staging
+  ↓
+为源目录生成文件 cksum/size manifest
+  ↓
+为 SD 副本重新生成 manifest
+  ↓
+逐项 cmp
+  ↓
+写 COMPLETE
+  ↓
+发布为固定 rescue-backup
+  ↓
+再次与车机 quarantine 对比
+  ↓
+全部 PASS
+  ↓
+才允许 rm -rf 车机 quarantine
+```
+
+因此如果 SD 备份创建、校验、同步或发布任一步失败：
+
+```text
+DELETE_QUARANTINE=REFUSED
+reason=FINAL_SD_BACKUP_FAILED
+production_changed=NO
+```
+
+车机里的 quarantine 不会被删除。
+
+已有 `runtime-residue-v1` 备份不会被静默覆盖：
+- 如果与当前 quarantine 完全一致，直接复用；
+- 如果内容不同，DELETE 会拒绝，保留旧备份和车机 quarantine。
+
+最终删除后还会再次验证 SD backup 完整性。
+
+如以后确实需要重新取回被删掉的旧 runtime，可执行：
+
+```text
+5) RESTORE SD BACKUP TO QUARANTINE
+```
+
+它只会把已校验的 SD `payload/` 重建到：
+
+```text
+/mnt/app/root/.carplay-altscreen.rescue-v1
+```
+
+不会覆盖当前 `/mnt/app/root/carplay-altscreen`。之后是否使用 **3) RESTORE QUARANTINE** 恢复为活动 runtime，由人工决定。
+
+OEM 原厂备份目录：
+
+```text
+MMI-Cockpit-Carplay/backup/
+```
+
+与这个 rescue backup 完全分开，最终删除不会修改 OEM backup。
