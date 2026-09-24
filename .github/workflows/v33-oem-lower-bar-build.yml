@@ -1,4 +1,5 @@
 name: V3.3 OEM Lower Bar Build
+# Restore hardening closeout is enforced by the transaction regression suite.
 
 on:
   push:
