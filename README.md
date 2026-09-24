@@ -1,12 +1,12 @@
-> **V3.4 实车修正（2026-09-24）**：上一版通过 `rgActive/rgiDataValid + Fct17/Fct39` 激活 OEM Route Guidance，实车会错误拉起 maneuver/箭头小窗。当前 V3.4 已撤销该 presentation 激活路径，改为直接镜像 CarPlay 的当前道路、剩余距离和 ETA 到 `ClusterService/KOMO follow-info`，目标仅更新地图底部灰色 route-info 条；不写 RGStatus/ActiveRGType，不置 RGI valid，不主动激活箭头窗。
+> **V3.5 冷启动专项（2026-09-24）**：基于 V3.4，不改 68–450 safeArea、Context80、Sport Small、滚轮和动态 ViewArea。V3.5 将 AirPlay **NEGOTIATION_READY** 与 Screen **DISPLAY_GEOMETRY_READY** 解耦：ABI/CF/private111 backend 就绪后即可参与首次 capability transaction；早到的 capability 最多进行 500 ms 条件等待而不是固定 sleep；若 /info 先于 Screen display-1 可读，则仅用已实车测得的 1440×542 作为 negotiation bootstrap，真正 private renderer attach 前必须重新读取 live Screen geometry 并严格匹配，否则拒绝接管。当前分支待 CI promotion 与实车冷启动验证。\n\n> **V3.4 实车修正（2026-09-24）**：上一版通过 `rgActive/rgiDataValid + Fct17/Fct39` 激活 OEM Route Guidance，实车会错误拉起 maneuver/箭头小窗。当前 V3.4 已撤销该 presentation 激活路径，改为直接镜像 CarPlay 的当前道路、剩余距离和 ETA 到 `ClusterService/KOMO follow-info`，目标仅更新地图底部灰色 route-info 条；不写 RGStatus/ActiveRGType，不置 RGI valid，不主动激活箭头窗。
 
 <!-- BRANCH_STATUS_BEGIN -->
 > [!IMPORTANT]
-> **分支用途：** 当前候选实验主线。继承 V3.1 后期 `OEM_TARGET_FOLLOW_V1` 滚轮逻辑，重点修复 V3.1 的纵向几何：保留 OEM 横向安全范围，同时把纵向 safeArea 从局部 `y=49,h=300` 放开到地图有效高度 `y=0,h=455`；另修复 future frame timestamp 可能误报 stall 的边缘问题。
+> **分支用途：** V3.5 冷启动专项候选主线。继承 V3.4 全部显示/布局能力与 V3.1 后期 `OEM_TARGET_FOLLOW_V1` 滚轮逻辑，重点修复 V3.1 的纵向几何：保留 OEM 横向安全范围，同时把纵向 safeArea 从局部 `y=49,h=300` 放开到地图有效高度 `y=0,h=455`；另修复 future frame timestamp 可能误报 stall 的边缘问题。
 >
-> **上车测试结论：** 截至 2026-09-23，当前 HEAD 已完成构建、静态校验、CI promotion 和整包 verifier，状态为 `READY_FOR_VEHICLE_TEST`；尚没有一份能够明确绑定到该 exact HEAD 的完整实车验收日志，因此当前正式结论仍是“待实车验证”，不能写成已通过。
+> **上车测试结论：** V3.5 尚未实车；当前修改目标仅为消除首次 AirPlay capability transaction 早于 Screen geometry READY 时的冷启动竞态。CI promotion 完成前状态为 `PENDING_V3_5_BUILD`，完成后仍需实车分别验证“先插手机再启动车机 / 车机完全启动后再插手机 / 快速重连”三类冷启动时序。
 >
-> **当前定位：** 最新待测主线；上车重点验证车辆锚点/ETA/指南针纵向位置，以及继承后的 target-follow 滚轮。
+> **当前定位：** V3.4 的显示效果保持不变；V3.5 上车重点验证首次连接是否稳定出现 AltScreen/Private111，以及 bootstrap geometry 是否被 live 1440×542 正常确认。
 <!-- BRANCH_STATUS_END -->
 
 > [!IMPORTANT]
