@@ -62,8 +62,8 @@ grep -Fq 'INSTALL_ROLLBACK=PASS persistent_state=PRE_INSTALL' "$INSTALL_TXN" || 
 grep -Fq 'INSTALL_VERIFY=PASS' "$INSTALL_TXN" || fail "INSTALL final verifier missing"
 grep -Fq 'restore-precheck' "$INSTALL_TXN" ||
     fail "INSTALL final verifier does not verify the native recovery set"
-grep -Fq 'verify_hmi_backup' "$INSTALL_TXN" ||
-    fail "INSTALL final verifier does not validate HMI recovery backup"
+! grep -Fq 'verify_hmi_backup' "$INSTALL_TXN" ||
+    fail "INSTALL still requires a permanent HMI recovery backup"
 grep -Fq 'verify_boot_backup' "$INSTALL_TXN" ||
     fail "INSTALL final verifier does not validate boot diagnostics backup"
 grep -Fq 'INSTALL=PASS transaction=COMMITTED' "$INSTALL_TXN" || fail "INSTALL commit marker missing"
@@ -123,23 +123,12 @@ grep -Fq 'SD_WRITE_PROBE scope=' "$RESTORE_TXN" || fail "RESTORE SD write probes
 grep -Fq 'SD_FORMAT_HINT=FAT32_MBR_SINGLE_PRIMARY' "$RESTORE_TXN" || fail "RESTORE SD format hint missing"
 grep -Fq 'PUBLISH_SKIP_IDENTICAL' "$CTRL" || fail "universal publish lacks no-op skip"
 grep -Fq 'trusted original backup is absent' "$CTRL" || fail "native backup pollution guard missing"
-grep -Fq 'trusted original Java HMI backup is absent' "$INSTALL" || fail "HMI backup pollution guard missing"
-grep -Fq 'live_managed_install_detected' "$INSTALL" || fail "HMI managed-install detector missing"
-grep -Fq 'same_bytes "$JAR_SOURCE" "$JAR_TARGET"' "$INSTALL" ||
-    fail "current package JAR identity is not recognized as managed"
-grep -Fq 'historical_managed_jar' "$INSTALL" ||
-    fail "historical managed-JAR classifier missing"
-grep -Fq 'com/luka/carplay/cluster/WheelZoomBridge.class' "$INSTALL" ||
-    fail "previous V3 JAR detection is not stable across CI rebuild checksums"
-grep -Fq '[ "$current_package_jar" != YES ] && historical_managed_jar "$JAR_TARGET"' "$INSTALL" ||
-    fail "current-package and historical-JAR reasons can overlap"
-
-# INSTALL must explain exactly which managed residue triggered fail-closed.
-grep -Fq 'RUNTIME_OWNER_PRESENT=' "$INSTALL" || fail "INSTALL does not report runtime-owner residue"
-grep -Fq 'SMARTPHONE_INTEGRATOR_HOOK=' "$INSTALL" || fail "INSTALL does not report smartphone_integrator residue"
-grep -Fq 'CURRENT_PACKAGE_JAR_PRESENT=' "$INSTALL" || fail "INSTALL does not report current-package JAR residue"
-grep -Fq 'KNOWN_MANAGED_JAR_PRESENT=' "$INSTALL" || fail "INSTALL does not report historical managed-JAR residue"
-grep -Fq 'LIVE_MANAGED_SUMMARY=MANAGED reasons=' "$INSTALL" || fail "INSTALL managed-residue summary missing"
+grep -Fq 'mv "$TMP" "$JAR_TARGET"' "$INSTALL" || fail "INSTALL does not publish the project HMI JAR"
+! grep -Fq 'basevideo3-hmi-original' "$INSTALL" || fail "INSTALL still requires a permanent HMI backup"
+grep -Fq 'snap_file "$JAR" carplay_hook.jar' "$INSTALL_TXN" || fail "INSTALL transaction does not snapshot the live HMI JAR for rollback"
+grep -Fq 'restore_file "$JAR" carplay_hook.jar' "$INSTALL_TXN" || fail "INSTALL transaction cannot roll back the live HMI JAR"
+grep -Fq 'HMI_CONTROL_PLANE=REMOVED project_owned=YES' "$RESTORE_APPLY" || fail "RESTORE does not delete the project-owned HMI JAR"
+grep -Fq 'project-owned carplay_hook.jar remains after restore' "$RESTORE_TXN" || fail "RESTORE does not verify project HMI JAR deletion"
 grep -Fq 'NATIVE_REINSTALL_PRECHECK=FAIL reason=SMARTPHONE_INTEGRATOR_PRELOAD_PRESENT' "$CTRL" ||
     fail "native reinstall guard does not name residual preload"
 
@@ -162,7 +151,7 @@ grep -Fq 'DEST_MODE=TMP' "$ADAPT" || fail "adaptive log flat /tmp fallback missi
 grep -Fq 'basevideo3.enabled' "$START" || fail "persistent boot demand marker missing"
 grep -Fq 'diagnostics.enabled' "$DIAG" || fail "persistent diagnostics marker missing"
 
-echo "STORAGE_POLICY_TEST=PASS tmp=flat_files_only stream_supervisor=flat_fixed_names install_router=flat start_txn=flat install_txn=sd_reboot_recoverable_exact_rollback prepared_durable=1 snapshot_integrity=1 terminal_nonblocking=1 recovery_set_verify=1 install_ops=sd_fail_closed restore_ops=sd_preferred_tmp_fallback mirror_runtime=flat hook_log=flat restore_txn=sd_reboot_recoverable persistent_logs=sd managed_residue_reasons=explicit"
+echo "STORAGE_POLICY_TEST=PASS tmp=flat_files_only stream_supervisor=flat_fixed_names install_router=flat start_txn=flat install_txn=sd_reboot_recoverable_exact_rollback prepared_durable=1 snapshot_integrity=1 terminal_nonblocking=1 recovery_set_verify=1 install_ops=sd_fail_closed restore_ops=sd_preferred_tmp_fallback mirror_runtime=flat hook_log=flat restore_txn=sd_reboot_recoverable persistent_logs=sd hmi=project_owned"
 
 # Unified removable-media write policy.
 [ -f "$SD_RW" ] || fail "shared SD writable helper missing"
