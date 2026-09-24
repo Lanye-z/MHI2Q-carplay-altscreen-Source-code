@@ -43,10 +43,30 @@ V3.4 会拒绝接管“非空且没有合法 owner 标记”的 runtime。这个
 5. 成功后应看到：
    `QUARANTINE=PASS ... deletion=NONE reversible=YES`
 6. 此时原路径已空，可以进入 **MMI-Cockpit-Carplay** 执行 V3.4 **INSTALL**。
-7. 在 V3.4 安装和实车验证完成前，不删除 quarantine。
+7. V3.4 INSTALL 完成后完整重启车机，确认 CarPlay、第二屏、原车功能和再次启动均正常。
+8. 确认无误后，才执行 **4) DELETE QUARANTINE (FINAL)** 永久删除旧隔离 runtime。
 
 **3) RESTORE QUARANTINE** 只用于还没有安装新 V3.4 runtime 时回退。
 如果 `/mnt/app/root/carplay-altscreen` 已经存在，新 runtime 不会被覆盖，恢复操作会拒绝执行。
+
+## 最终删除保护
+
+**4) DELETE QUARANTINE (FINAL)** 是不可逆操作，因此脚本不会只因为 quarantine 存在就删除。
+它会再次要求：
+
+- 当前 `/mnt/app/root/carplay-altscreen` 有合法项目 owner；
+- owner 明确包含 `runtime=carplay-altscreen`；
+- 当前 runtime 的 `bin/mirror/BUILD_INFO.txt` 明确标记 `PRIVATE111_DIRECT_DISPLAY_V3_4`；
+- 当前 runtime 已有 `state/diagnostics.enabled`，即 V3.4 INSTALL 已完整提交；
+- quarantine 仍通过旧项目 runtime 指纹、目录结构、无 symlink 和可信 OEM backup 校验。
+
+全部通过后，只删除：
+
+```text
+/mnt/app/root/.carplay-altscreen.rescue-v1
+```
+
+不会删除当前 V3.4 runtime，也不会删除 SD 卡中的 OEM backup。
 
 日志固定写到：
 
