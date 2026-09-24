@@ -25,10 +25,11 @@ START_FIXTURE="$ROOT/Toolbox/carplay_alt_screen/tests/test_start_autostart_trans
 INSTALL="$ROOT/Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh"
 LAUNCH="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/start_vehicle.sh"
 STOP_LAUNCH="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh"
+SUPERVISOR="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stream_supervisor.sh"
 PATHS="$ROOT/Toolbox/carplay_alt_screen/src/altscreen_paths.c"
 fail(){ echo "STORAGE_POLICY_TEST=FAIL: $*" >&2; exit 1; }
 
-for f in "$START" "$STOP" "$FINISH" "$INSTALL_TXN" "$RESTORE_TXN" "$RESTORE_APPLY" "$CHAIN" "$CTRL" "$DIAG" "$ADAPT" "$BOOT" "$INSTALL" "$LAUNCH" "$STOP_LAUNCH"; do
+for f in "$START" "$STOP" "$FINISH" "$INSTALL_TXN" "$RESTORE_TXN" "$RESTORE_APPLY" "$CHAIN" "$CTRL" "$DIAG" "$ADAPT" "$BOOT" "$INSTALL" "$LAUNCH" "$STOP_LAUNCH" "$SUPERVISOR"; do
     sh -n "$f" || fail "shell syntax: $f"
 done
 
@@ -37,6 +38,8 @@ grep -Fq 'tmp/altscreen_start_$$.clean' "$START" || fail "START scratch is not f
 grep -Fq 'ROUTER_TMP="$(p /tmp/altscreen_router_child_install.$$)"' "$CHAIN" || fail "INSTALL router scratch is not flat /tmp"
 grep -Fq 'PIDFILE="$TMP_ROOT/altscreen_mirror.pid"' "$LAUNCH" || fail "Mirror pid is not flat /tmp"
 grep -Fq 'HOOK_LOG="$TMP_ROOT/altscreen_hook.log"' "$LAUNCH" || fail "Mirror hook log is not flat /tmp"
+grep -Fq 'STREAM_READY="$TMP_ROOT/altscreen-private111.stream-ready"' "$SUPERVISOR" || fail "V3.4 stream-ready marker is not flat /tmp"
+grep -Fq 'PIDFILE="$TMP_ROOT/altscreen_stream_supervisor.pid"' "$SUPERVISOR" || fail "V3.4 supervisor pid is not flat /tmp"
 grep -Fq 'AUTOLOG=/tmp/altscreen_autostart.log' "$START" || fail "autostart log is not flat /tmp"
 grep -Fq '#define ALTSCREEN_VOLATILE_ROOT "/tmp"' "$PATHS" || fail "native hook log root is not flat /tmp"
 
@@ -102,7 +105,7 @@ grep -Fq 'streams/carplay_hook.log' "$BOOT" ||
     fail "CarPlay Java/RGI log is not persisted to SD"
 
 # Legacy namespace references are allowed only for read/cleanup compatibility.
-for f in "$START" "$STOP" "$CHAIN" "$CTRL" "$DIAG" "$ADAPT" "$BOOT" "$LAUNCH" "$STOP_LAUNCH"; do
+for f in "$START" "$STOP" "$CHAIN" "$CTRL" "$DIAG" "$ADAPT" "$BOOT" "$LAUNCH" "$STOP_LAUNCH" "$SUPERVISOR"; do
     if grep -E 'mkdir( -p)? .*tmp/MMI-Cockpit-Carplay|ensure_dirs .*tmp/MMI-Cockpit-Carplay|TXN[^=]*=.*tmp/MMI-Cockpit-Carplay' "$f" >/dev/null 2>&1; then
         fail "nested /tmp write dependency remains in $f"
     fi
@@ -159,7 +162,7 @@ grep -Fq 'DEST_MODE=TMP' "$ADAPT" || fail "adaptive log flat /tmp fallback missi
 grep -Fq 'basevideo3.enabled' "$START" || fail "persistent boot demand marker missing"
 grep -Fq 'diagnostics.enabled' "$DIAG" || fail "persistent diagnostics marker missing"
 
-echo "STORAGE_POLICY_TEST=PASS tmp=flat_files_only install_router=flat start_txn=flat install_txn=sd_reboot_recoverable_exact_rollback prepared_durable=1 snapshot_integrity=1 terminal_nonblocking=1 recovery_set_verify=1 install_ops=sd_fail_closed restore_ops=sd_preferred_tmp_fallback mirror_runtime=flat hook_log=flat restore_txn=sd_reboot_recoverable persistent_logs=sd managed_residue_reasons=explicit"
+echo "STORAGE_POLICY_TEST=PASS tmp=flat_files_only stream_supervisor=flat_fixed_names install_router=flat start_txn=flat install_txn=sd_reboot_recoverable_exact_rollback prepared_durable=1 snapshot_integrity=1 terminal_nonblocking=1 recovery_set_verify=1 install_ops=sd_fail_closed restore_ops=sd_preferred_tmp_fallback mirror_runtime=flat hook_log=flat restore_txn=sd_reboot_recoverable persistent_logs=sd managed_residue_reasons=explicit"
 
 # Unified removable-media write policy.
 [ -f "$SD_RW" ] || fail "shared SD writable helper missing"
