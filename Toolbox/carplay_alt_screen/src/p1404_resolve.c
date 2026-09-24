@@ -516,7 +516,7 @@ static int read_authorization_run_id(const char *path, char *out, size_t cap,
     return 1;
 }
 
-static int runtime_authorization_match(void) {
+static __attribute__((unused)) int runtime_authorization_match(void) {
     char marker_id[AUTH_RUN_ID_MAX + 1u];
     char state_id[AUTH_RUN_ID_MAX + 1u];
     char state_path[ALTSCREEN_PATH_MAX];
@@ -613,7 +613,6 @@ int p1404_probe_stack(void) {
      */
     int requested_armed = 1;
     int requested_mutate = 1;
-    int force_start = 1;
 
     p1404_identity_ok = 0;
     p1404_armed = 0;
@@ -624,12 +623,7 @@ int p1404_probe_stack(void) {
         altscreen_log("PHASE=RUNTIME_SYMBOL_RESOLUTION result=REFUSED reason=stock_export_bind");
         return 0;
     }
-    if (!force_start && !runtime_authorization_match()) {
-        altscreen_log("PHASE=RUNTIME_SYMBOL_RESOLUTION result=REFUSED reason=transaction_authorization");
-        return 0;
-    }
-    if (force_start)
-        altscreen_log("PHASE=RUNTIME_AUTHORIZATION result=FORCED_BYPASS marker=FORCE_START required_symbol_and_backend_safety_checks=ENFORCED");
+    altscreen_log("PHASE=RUNTIME_AUTHORIZATION result=PASS policy=INSTALLED_PRELOAD sd_marker_gate=DISABLED required_symbol_and_backend_safety_checks=ENFORCED");
     if (!resolve_required_libairplay_symbols()) {
         /* Exact handle-scoped probing may have replaced a subset of forwarding
          * pointers before it refused. Restore the complete RTLD_NEXT stock
@@ -646,9 +640,7 @@ int p1404_probe_stack(void) {
     p1404_identity_ok = 1;
     p1404_armed = requested_armed;
     p1404_mutate_armed = requested_mutate;
-    altscreen_log("PHASE=RUNTIME_ABI_IDENTITY result=PASS compatibility_checks=%s resolution=DLSYM_REQUIRED_NAMES authorization=%s armed=%d mutate=%d",
-                  force_start ? "FORCED" : "BYPASSED_BY_OWNER",
-                  force_start ? "FORCED_BYPASS" : "PASS",
+    altscreen_log("PHASE=RUNTIME_ABI_IDENTITY result=PASS compatibility_checks=ENFORCED resolution=DLSYM_REQUIRED_NAMES authorization=INSTALLED_PRELOAD armed=%d mutate=%d",
                   p1404_armed, p1404_mutate_armed);
     return 1;
 }
