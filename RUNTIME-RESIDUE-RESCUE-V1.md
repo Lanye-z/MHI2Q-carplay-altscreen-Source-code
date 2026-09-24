@@ -78,3 +78,36 @@ MMI-Cockpit-Carplay/logs/runtime-residue-rescue.previous.log
 ```
 
 只保留当前和上一份，不会按次数无限堆积。
+
+## 不安装 V3.4、先恢复原厂的推荐流程
+
+对于已经存在历史 unowned runtime、但目标只是先确认原车状态的车辆，可以不执行 V3.4 INSTALL：
+
+```text
+CHECK
+  ↓
+QUARANTINE OLD RUNTIME
+  ↓
+V3.4 RESTORE ORIGINAL
+  ↓
+完整重启 MMI
+  ↓
+验证原车 CarPlay / 原车功能
+  ↓
+再次 CHECK
+  ↓
+DELETE QUARANTINE (FINAL)
+```
+
+恢复成功后，CHECK 会重新核对 OEM 原始文件、preload、pf.conf、HMI JAR、startup 和 runtime 状态。
+如果全部与可信 backup 一致，应显示：
+
+```text
+OEM_VERIFY=PASS ...
+RESCUE_STATE=OEM_RESTORED_WITH_QUARANTINE current_runtime=ABSENT safe_to_delete=YES
+```
+
+此时最终删除只删除旧隔离目录，不要求安装 V3.4。
+
+注意：V3.4 RESTORE 的 recovery route 使用当前标准路径
+`MMI-Cockpit-Carplay/backup/original/`。旧卡如果是 `backup/ORIGINAL/`，建议在电脑上改成小写 `original` 后再上车。
