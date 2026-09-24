@@ -4,6 +4,7 @@ TMP_ROOT="${ALT111_MIRROR_TMP_ROOT:-/tmp}"
 
 PIDFILE="$TMP_ROOT/altscreen_mirror.pid"
 WATCH_PIDFILE="$TMP_ROOT/altscreen_mirror.lifecycle.pid"
+SUPERVISOR_PIDFILE="$TMP_ROOT/altscreen_stream_supervisor.pid"
 STOP_GUARD="$TMP_ROOT/altscreen_mirror.stop.requested"
 RECOVERY_LOCK="$TMP_ROOT/altscreen_mirror.recovery.lock"
 
@@ -27,11 +28,15 @@ stop_pidfile() {
 # Publish the flat guard before stopping anything so no delayed recovery child
 # can race an explicit STOP/RESTORE.
 : > "$STOP_GUARD" 2>/dev/null || true
+if [ "${ALT111_SUPERVISOR_CHILD:-0}" != "1" ]; then
+  stop_pidfile "$SUPERVISOR_PIDFILE" 3
+fi
 stop_pidfile "$WATCH_PIDFILE" 3
 stop_pidfile "$PIDFILE" 30
 
 rm -f "$TMP_ROOT/altscreen_mirror.ready" \
-      "$TMP_ROOT/mmi-mirror-basevideo.ready" 2>/dev/null || true
+      "$TMP_ROOT/mmi-mirror-basevideo.ready" \
+      "$TMP_ROOT/altscreen_stream_supervisor.active" 2>/dev/null || true
 rmdir "$RECOVERY_LOCK" 2>/dev/null || true
 
 # Backward-compatible cleanup for builds that used /tmp/MMI-Cockpit-Carplay.
