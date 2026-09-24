@@ -1,0 +1,26 @@
+###########################################################################################
+# MMI-Cockpit-Carplay - legacy runtime residue rescue
+###########################################################################################
+screen "Runtime-Residue-Rescue" Customization
+
+keyValue
+    value   String sys 0x00000000 0
+    label   "Safe rescue for unowned /mnt/app/root/carplay-altscreen residue"
+    poll    0
+
+keyValue
+    value   String sys 0x00000000 0
+    label   "Quarantine = reversible rename only; no recursive deletion"
+    poll    0
+
+script
+   value   sys 1 0x0100 "/eso/hmi/engdefs/scripts/mqb/check_mmi_cockpit_runtime_residue.sh"
+   label   "1) CHECK RUNTIME RESIDUE"
+
+script
+   value   sys 1 0x0100 "/eso/hmi/engdefs/scripts/mqb/quarantine_mmi_cockpit_runtime_residue.sh"
+   label   "2) QUARANTINE OLD RUNTIME"
+
+script
+   value   sys 1 0x0100 "/eso/hmi/engdefs/scripts/mqb/restore_mmi_cockpit_runtime_quarantine.sh"
+   label   "3) RESTORE QUARANTINE"
