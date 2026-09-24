@@ -51,13 +51,13 @@ video_pos = native.find('video_impl = read_ptr_at(stream, SCREEN_STREAM_VIDEO_IM
 require(validate_pos >= 0 and video_pos > validate_pos,
         "geometry validation must precede renderer ownership")
 
-# V3.5 visual geometry keeps V3.4 horizontal/Context policy with only top=75.
+# V3.5 visual geometry keeps V3.4 horizontal/Context policy with only top=72.
 for marker in (
-    'safearea_revision=V35_OEM_X_VERTICAL_75_450',
-    'full.y = 75u;',
-    'full.h = 375u;',
-    'small.y = 75u;',
-    'small.h = 375u;',
+    'safearea_revision=V35_OEM_X_VERTICAL_72_450',
+    'full.y = 72u;',
+    'full.h = 378u;',
+    'small.y = 72u;',
+    'small.h = 378u;',
 ):
     require(marker in air, "visual geometry regression: " + marker)
 require('public static final int CTX_COMPOSITE = 80;' in java,
