@@ -1,12 +1,19 @@
+> [!CAUTION]
+> **V3.4 已冻结（2026-09-24）**：本分支停止继续开发，仅保留为 V3.5 的历史对照/回归基线。实车冷启动测试中，手机在车机冷启动早期已连接时出现 CarPlay/DIO 反复启动退出、HMI 长时间假死；拔出手机后车机随后自动重启并恢复。故障发生在正常 AirPlay Session / Private111 / Context80 建立之前，因此当前不能把它归因于 safeArea、动态 ViewArea 或 renderer，但也**不再建议使用 V3.4 做“手机预插或冷启动早插”测试**。后续冷启动修正与新测试全部转移到 V3.5。
+>
+> **冻结基线：** `a907419037d8508871cdf49ff4c5c17a10aac75c`（V3.4 最后一次运行代码 promotion）。冻结后的 README/状态标记修改不改变运行代码或安装包行为。
+>
 > **V3.4 实车修正（2026-09-24）**：上一版通过 `rgActive/rgiDataValid + Fct17/Fct39` 激活 OEM Route Guidance，实车会错误拉起 maneuver/箭头小窗。当前 V3.4 已撤销该 presentation 激活路径，改为直接镜像 CarPlay 的当前道路、剩余距离和 ETA 到 `ClusterService/KOMO follow-info`，目标仅更新地图底部灰色 route-info 条；不写 RGStatus/ActiveRGType，不置 RGI valid，不主动激活箭头窗。
 
 <!-- BRANCH_STATUS_BEGIN -->
 > [!IMPORTANT]
-> **分支用途：** 当前候选实验主线。继承 V3.1 后期 `OEM_TARGET_FOLLOW_V1` 滚轮逻辑，重点修复 V3.1 的纵向几何：保留 OEM 横向安全范围，同时把纵向 safeArea 从局部 `y=49,h=300` 放开到地图有效高度 `y=0,h=455`；另修复 future frame timestamp 可能误报 stall 的边缘问题。
+> **分支用途：** **历史冻结基线 / 不再开发。** V3.4 保留用于复现“stream-driven startup + FULL/SMALL 动态 ViewArea + Context80 + OEM target-follow wheel + KOMO gray-bar”这一阶段的实现，并作为 V3.5 的对照基线。
 >
-> **上车测试结论：** 截至 2026-09-23，当前 HEAD 已完成构建、静态校验、CI promotion 和整包 verifier，状态为 `READY_FOR_VEHICLE_TEST`；尚没有一份能够明确绑定到该 exact HEAD 的完整实车验收日志，因此当前正式结论仍是“待实车验证”，不能写成已通过。
+> **实车结论：** 正常时序下，V3.4 已有第二屏、Private111、OMX/decoded SHM、displayable3/Context80 等链路工作记录；但 2026-09-24 的一次**冷启动早插手机**测试出现 CarPlay/DIO 多轮启动退出、MMI/HMI 长时间假死，拔出手机后车机最终自动重启并恢复。故障日志未进入正常 AirPlay Session / Private111 显示阶段，因此尚未静态定位到某一具体 hook，但足以把 V3.4 从“候选主线”降级为冻结历史版本。
 >
-> **当前定位：** 最新待测主线；上车重点验证车辆锚点/ETA/指南针纵向位置，以及继承后的 target-follow 滚轮。
+> **使用限制：** 不建议继续用 V3.4 做预插手机冷启动、早插手机或长期稳定性验证；如需继续测试，请使用 V3.5 及后续分支。V3.4 的现有 ZIP/代码仅用于回归、对照和问题复现。
+>
+> **冻结策略：** 不再修改 V3.4 的运行代码、安装/卸载逻辑、safeArea、ViewArea 或二进制；仅允许必要的文档性说明。后续功能修复统一进入 V3.5+。
 <!-- BRANCH_STATUS_END -->
 
 > [!IMPORTANT]
