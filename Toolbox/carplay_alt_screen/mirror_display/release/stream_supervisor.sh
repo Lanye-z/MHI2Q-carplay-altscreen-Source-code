@@ -46,11 +46,13 @@ read_stream_key() {
   generation=$(sed -n 's/^generation=//p' "$STREAM_READY" 2>/dev/null | head -n 1)
   cookie=$(sed -n 's/^cookie=//p' "$STREAM_READY" 2>/dev/null | head -n 1)
   frames=$(sed -n 's/^frames=//p' "$STREAM_READY" 2>/dev/null | head -n 1)
+  complete=$(sed -n 's/^ready=//p' "$STREAM_READY" 2>/dev/null | head -n 1)
   case "$producer_pid" in ''|*[!0-9]*) return 1 ;; esac
   case "$generation" in ''|*[!0-9]*) return 1 ;; esac
   case "$frames" in ''|*[!0-9]*) return 1 ;; esac
   [ "$generation" -gt 0 ] || return 1
   [ "$frames" -ge 2 ] || return 1
+  [ "$complete" = "1" ] || return 1
   [ -n "$cookie" ] || return 1
   kill -0 "$producer_pid" 2>/dev/null || return 1
   printf '%s:%s:%s\n' "$producer_pid" "$generation" "$cookie"
