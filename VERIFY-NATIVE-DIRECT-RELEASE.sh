@@ -358,6 +358,39 @@ elif grep -Fq 'release_binary_status=V3_3_BINARY_STALE_SAFEAREA_REBUILD_REQUIRED
     if binary_strings "$HOOK" | grep -Fq 'safearea_revision=V33_OEM_X_VERTICAL_68_450'; then
         fail "V3.3 BUILD_INFO says hook rebuild pending but rebuilt 60..450 marker is already present"
     fi
+elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V3_5' "$INFO"; then
+    grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$INFO" ||
+        fail "rebuilt V3.5 package is not vehicle-ready"
+    grep -Fq 'hook_runtime_rebuild_required=no' "$INFO" ||
+        fail "vehicle-ready V3.5 package still declares a hook rebuild"
+    grep -Fq 'v35_negotiation_policy=EARLY_PROTOCOL_READY_ASYNC_GEOMETRY' "$INFO" ||
+        fail "vehicle-ready V3.5 early-negotiation metadata missing"
+    grep -Fq 'v35_sd_runtime_gate=DISABLED' "$INFO" ||
+        fail "vehicle-ready V3.5 still declares an SD runtime gate"
+    grep -Fq 'v35_display_start_policy=STREAM_DRIVEN' "$INFO" ||
+        fail "vehicle-ready V3.5 stream-driven display metadata missing"
+    grep -Fq 'v35_fixed_display_delay=NONE' "$INFO" ||
+        fail "vehicle-ready V3.5 unexpectedly declares a fixed display delay"
+    grep -Fq 'v35_capability_wait_ms=500' "$INFO" ||
+        fail "vehicle-ready V3.5 bounded capability wait metadata missing"
+    grep -Fq 'v35_geometry_gate=ASYNC_NON_FATAL' "$INFO" ||
+        fail "vehicle-ready V3.5 async geometry metadata missing"
+    grep -Fq 'v35_bootstrap_canvas=1440x542_NEGOTIATION_ONLY' "$INFO" ||
+        fail "vehicle-ready V3.5 negotiation-only bootstrap metadata missing"
+    grep -Fq 'v35_renderer_geometry_policy=LIVE_SCREEN_MATCH_REQUIRED' "$INFO" ||
+        fail "vehicle-ready V3.5 live renderer geometry fence metadata missing"
+    binary_strings "$HOOK" | grep -Fq 'PHASE=RUNTIME_AUTHORITY policy=INSTALLED_PRELOAD' ||
+        fail "promoted V3.5 hook lacks installed-preload authority marker"
+    binary_strings "$HOOK" | grep -Fq 'PHASE=NEGOTIATION_READY result=PASS policy=V35_EARLY_PROTOCOL_READY' ||
+        fail "promoted V3.5 hook lacks early negotiation-ready marker"
+    binary_strings "$HOOK" | grep -Fq 'PHASE=ALT111_NEGOTIATION_GEOMETRY source=BOOTSTRAP' ||
+        fail "promoted V3.5 hook lacks negotiation bootstrap marker"
+    binary_strings "$HOOK" | grep -Fq 'PHASE=ALT111_GEOMETRY_CONTRACT_MISMATCH' ||
+        fail "promoted V3.5 hook lacks live geometry mismatch fence"
+    binary_strings "$HOOK" | grep -Fq 'PHASE=PRIVATE111_STREAM_READY' ||
+        fail "promoted V3.5 hook lacks native stream-ready marker"
+    binary_strings "$HOOK" | grep -Fq 'safearea_revision=V33_OEM_X_VERTICAL_68_450' ||
+        fail "promoted V3.5 hook lost V3.4/V3.3 safeArea behavior"
 elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V3_4' "$INFO"; then
     grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$INFO" ||
         fail "rebuilt V3.4 package is not vehicle-ready"
@@ -956,10 +989,10 @@ fi
 grep -Fq 'stop_guard=RETAINED' "$RELEASE_STOP" ||
     fail "release stop does not advertise retained stop guard"
 
-grep -Fq 'AUTH_PRIVATE111_CORE=V34_ALWAYS_ON authority=installed_preload sd_runtime_gate=DISABLED' "$CTRL" ||
-    fail "V3.4 controller still exposes removable-SD runtime authorization"
-grep -Fq 'NEGOTIATION_POLICY=ONE_CARPLAY_SESSION automatic_main110_then_private111 no_display_gate=YES' "$CTRL" ||
-    fail "V3.4 one-session negotiation policy missing"
+grep -Fq 'AUTH_PRIVATE111_CORE=V35_EARLY_PROTOCOL_READY authority=installed_preload sd_runtime_gate=DISABLED geometry_gate=ASYNC' "$CTRL" ||
+    fail "V3.5 controller does not expose early-protocol-ready authority"
+grep -Fq 'NEGOTIATION_POLICY=ONE_CARPLAY_SESSION automatic_main110_then_private111 no_display_gate=YES early_capability_wait=BOUNDED' "$CTRL" ||
+    fail "V3.5 one-session cold-start negotiation policy missing"
 grep -Fq 'IAP2_THEMEASSETS_MUTATION=DISABLED' "$CTRL" ||
     fail "V3.4 retired ThemeAssets mutation policy missing"
 grep -Fq 'rm -f "$STATE_DIR/ARMED"' "$CTRL" ||
@@ -973,20 +1006,20 @@ grep -Fq 'ensure_dirs()' "$INSTALL" ||
 if grep -Fq 'mkdir -p "$JAR_TARGET_DIR"' "$INSTALL"; then
     fail "integrated installer still uses fatal EEXIST-prone mkdir -p for HMI target"
 fi
-grep -Fq 'PACKAGE_MODE=CARPLAY_PRIVATE111_DIRECT_DISPLAY_V3_4_STREAM_DRIVEN' "$INSTALL" ||
-    fail "integrated installer does not identify V3.4 stream-driven package"
-grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V3_4' "$INSTALL" ||
-    fail "integrated installer does not gate on rebuilt V3.4 release status"
+grep -Fq 'PACKAGE_MODE=CARPLAY_PRIVATE111_DIRECT_DISPLAY_V3_5_COLD_START' "$INSTALL" ||
+    fail "integrated installer does not identify V3.5 cold-start package"
+grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V3_5' "$INSTALL" ||
+    fail "integrated installer does not gate on rebuilt V3.5 release status"
 grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$INSTALL" ||
     fail "integrated installer does not gate on vehicle-ready release status"
-grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V3_4' "$CHAIN" ||
-    fail "runtime stager does not gate on rebuilt V3.4 release"
-grep -Fq 'mode=carplay-private111-direct-display-v3.4' "$CHAIN" ||
-    fail "runtime ownership marker is not V3.4"
-grep -Fq 'CarPlay private111 Direct Display V3.4' "$STATUS" ||
-    fail "STATUS does not identify the V3.4 display path"
+grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V3_5' "$CHAIN" ||
+    fail "runtime stager does not gate on rebuilt V3.5 release"
+grep -Fq 'mode=carplay-private111-direct-display-v3.5' "$CHAIN" ||
+    fail "runtime ownership marker is not V3.5"
+grep -Fq 'CarPlay private111 Direct Display V3.5' "$STATUS" ||
+    fail "STATUS does not identify the V3.5 display path"
 grep -Fq 'DISPLAY_START_POLICY=STREAM_DRIVEN' "$STATUS" ||
-    fail "STATUS does not surface V3.4 stream-driven startup policy"
+    fail "STATUS does not surface V3.5 stream-driven startup policy"
 grep -Fq 'FRAME_LINEARIZER_SLOW_EVENTS=' "$STATUS" ||
     fail "STATUS does not surface Screen readback latency evidence"
 grep -Fq 'select_controller_log_source' "$BOOT_DIAG" ||
@@ -1011,7 +1044,7 @@ if grep -Eq '/tmp/MMI-Cockpit-Carplay/.+autostart\.log' "$START"; then
     fail "retired nested Mirror autostart log path remains"
 fi
 grep -Fq 'STREAM_SUPERVISOR_RC=' "$START" ||
-    fail "V3.4 boot supervisor return code diagnostic missing"
+    fail "V3.5 boot supervisor return code diagnostic missing"
 grep -Fq 'ensure_dirs "$STATE"' "$START" ||
     fail "QNX-safe idempotent runtime state creation missing"
 if grep -Fq 'mkdir -p "$STATE"' "$START"; then
@@ -1031,12 +1064,12 @@ sh "$INSTALL_TX_TEST" || fail "install transaction fixture failed"
 sh "$RESTORE_TX_TEST" || fail "RESTORE rollback fault-injection fixture failed"
 
 if grep -Fq 'touch /tmp/mmi-mirror-active' "$START"; then
-    fail "V3.4 still asserts Java80 demand at boot before private111 stream-ready"
+    fail "V3.5 still asserts Java80 demand at boot before private111 stream-ready"
 fi
 grep -Fq '/mnt/app/root/carplay-altscreen/bin/mirror/stream_supervisor.sh' "$START" ||
-    fail "V3.4 boot does not launch the lightweight stream supervisor"
+    fail "V3.5 boot does not launch the lightweight stream supervisor"
 grep -Fq 'fixed_delay=NONE' "$START" ||
-    fail "V3.4 START does not declare dynamic no-fixed-delay display policy"
+    fail "V3.5 START does not declare dynamic no-fixed-delay display policy"
 grep -Fq 'meaning=destination_first_successful_gles_present' "$START" ||
     fail "destination-ready semantics missing"
 grep -Fq 'LD_PRELOAD= "$BIN"' "$LAUNCH" ||
