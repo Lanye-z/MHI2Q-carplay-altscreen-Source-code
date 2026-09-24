@@ -189,7 +189,11 @@ check_state(){
         return 1
     fi
     if [ -e "$ROOT" ] && [ -e "$QUARANTINE" ]; then
-        log "RESCUE_STATE=CONFLICT reason=ROOT_AND_QUARANTINE_BOTH_EXIST action=STOP"
+        if current_v34_runtime "$ROOT" && recognized_unowned "$QUARANTINE"; then
+            log "RESCUE_STATE=V3_4_WITH_QUARANTINE current_runtime=VERIFIED safe_to_delete=YES"
+            return 0
+        fi
+        log "RESCUE_STATE=CONFLICT reason=ROOT_AND_QUARANTINE_BOTH_EXIST_BUT_NOT_VERIFIED action=STOP"
         return 1
     fi
     if valid_owner "$ROOT"; then
