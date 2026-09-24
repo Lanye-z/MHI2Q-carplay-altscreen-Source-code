@@ -605,9 +605,15 @@ static int resolve_required_libairplay_symbols(void) {
 }
 
 int p1404_probe_stack(void) {
-    int requested_armed = altscreen_marker_present("ARMED");
-    int requested_mutate = requested_armed && altscreen_marker_present("ARMED_MUTATE");
-    int force_start = requested_armed && altscreen_marker_present("FORCE_START");
+    /*
+     * V3.4 production policy: installation/preload presence is the enable
+     * contract.  Do not gate the current CarPlay session on removable-SD
+     * ARMED/run_id markers.  Firmware identity, exact symbol resolution and
+     * backend safety checks below remain mandatory and fail open to stock.
+     */
+    int requested_armed = 1;
+    int requested_mutate = 1;
+    int force_start = 1;
 
     p1404_identity_ok = 0;
     p1404_armed = 0;
