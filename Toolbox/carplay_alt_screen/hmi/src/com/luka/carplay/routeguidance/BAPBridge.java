@@ -7,7 +7,7 @@
  *   FctID 22 TimeToDestination       -> CarPlay only while a valid ETA exists
  *
  * Invalid/missing CarPlay lower-bar data always fails open to the stock Audi producer.
- * V3.4 mirrors the same road/distance/ETA into ClusterService/KOMO follow-info
+ * V3.5 mirrors the same road/distance/ETA into ClusterService/KOMO follow-info
  * so the existing gray route-info strip is updated without setting rgActive,
  * rgiDataValid, RGStatus, ActiveRGType or any maneuver presentation field.
  * FctID 45 MapScale is never written here.
