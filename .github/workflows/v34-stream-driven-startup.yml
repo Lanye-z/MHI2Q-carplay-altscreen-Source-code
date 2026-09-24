@@ -1,0 +1,304 @@
+name: V3.4 Stream-Driven Startup Build
+
+on:
+  push:
+    branches:
+      - experiment/oem-layout-second-screen_v3.4
+    paths:
+      - '.github/workflows/v34-stream-driven-startup.yml'
+      - 'Toolbox/carplay_alt_screen/src/**'
+      - 'Toolbox/carplay_alt_screen/build_source_snapshot.sh'
+      - 'Toolbox/carplay_alt_screen/mirror_display/release/**'
+      - 'Toolbox/carplay_alt_screen/tests/**'
+      - 'Toolbox/scripts/**'
+      - 'VERIFY-NATIVE-DIRECT-RELEASE.sh'
+      - 'VERIFY-BRANCH-ZIP-READY.sh'
+      - 'BRANCH-ZIP-READY.txt'
+      - 'PACKAGE_SOURCE_MAP.json'
+      - 'SHA256SUMS.txt'
+  workflow_dispatch:
+
+concurrency:
+  group: v34-stream-driven-startup-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install ARM inspection tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang lld binutils-arm-linux-gnueabihf python3-pyelftools
+
+      - name: Build V3.4 universal hook
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/v34-universal-runtime"
+          sh Toolbox/carplay_alt_screen/build_source_snapshot.sh universal "$OUT"
+          test -s "$OUT/libcarplay_altscreen.so"
+
+          strings "$OUT/libcarplay_altscreen.so" | grep -Fq 'PHASE=RUNTIME_AUTHORITY policy=INSTALLED_PRELOAD'
+          strings "$OUT/libcarplay_altscreen.so" | grep -Fq 'policy=V34_ALWAYS_ON'
+          strings "$OUT/libcarplay_altscreen.so" | grep -Fq 'PHASE=PRIVATE111_STREAM_READY'
+          strings "$OUT/libcarplay_altscreen.so" | grep -Fq '/tmp/altscreen-private111.stream-ready'
+          strings "$OUT/libcarplay_altscreen.so" | grep -Fq 'safearea_revision=V33_OEM_X_VERTICAL_60_450'
+          if strings "$OUT/libcarplay_altscreen.so" | grep -Fq 'PHASE=STATE_ROOT_WAIT result='; then
+            echo 'ERROR: rebuilt V3.4 hook still contains removable-SD startup gate' >&2
+            exit 1
+          fi
+
+          arm-linux-gnueabihf-readelf -d "$OUT/libcarplay_altscreen.so" | grep -q 'libc.so.3'
+          arm-linux-gnueabihf-readelf -d "$OUT/libcarplay_altscreen.so" | grep -q 'libm.so.2'
+
+          cp "$OUT/libcarplay_altscreen.so" Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so
+          HOOK_SHA="$(sha256sum Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so | awk '{print tolower($1)}')"
+          echo "HOOK_SHA=$HOOK_SHA" >> "$GITHUB_ENV"
+          echo "V34_HOOK_BUILD=PASS sha256=$HOOK_SHA"
+
+      - name: Verify V3.4 lifecycle source contracts
+        run: |
+          set -euo pipefail
+          START=Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh
+          CTRL=Toolbox/scripts/altscreen_chain_test_universal.sh
+          SUP=Toolbox/carplay_alt_screen/mirror_display/release/stream_supervisor.sh
+          LAUNCH=Toolbox/carplay_alt_screen/mirror_display/release/start_vehicle.sh
+          STOP=Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh
+          TAP=Toolbox/carplay_alt_screen/src/private111_direct_tap.c
+          RESOLVE=Toolbox/carplay_alt_screen/src/p1404_resolve.c
+          AIRPLAY=Toolbox/carplay_alt_screen/src/p1404_airplay.c
+          HOOKSRC=Toolbox/carplay_alt_screen/src/altscreen_hook.c
+
+          for s in "$START" "$CTRL" "$SUP" "$LAUNCH" "$STOP" \
+                   Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh \
+                   Toolbox/scripts/status_mmi_cockpit_carplay_test.sh; do
+            sh -n "$s"
+          done
+
+          grep -Fq 'int requested_armed = 1;' "$RESOLVE"
+          grep -Fq 'int requested_mutate = 1;' "$RESOLVE"
+          grep -Fq 'alt_flag_info      = 1;' "$AIRPLAY"
+          grep -Fq 'alt_flag_feature   = 1;' "$AIRPLAY"
+          grep -Fq 'alt_flag_create111 = 1;' "$AIRPLAY"
+          grep -Fq 'alt_flag_iap2      = 0;' "$AIRPLAY"
+          grep -Fq 'PHASE=RUNTIME_AUTHORITY policy=INSTALLED_PRELOAD' "$HOOKSRC"
+          ! grep -Fq 'PHASE=STATE_ROOT_WAIT result=' "$HOOKSRC"
+
+          grep -Fq '#define P111_STREAM_READY_PATH "/tmp/altscreen-private111.stream-ready"' "$TAP"
+          grep -Fq 'g_frame->frame_count < 2u' "$TAP"
+          grep -Fq 'PHASE=PRIVATE111_STREAM_READY' "$TAP"
+
+          grep -Fq 'STREAM_READY="$TMP_ROOT/altscreen-private111.stream-ready"' "$SUP"
+          grep -Fq '[ "$frames" -ge 2 ]' "$SUP"
+          grep -Fq 'ALT111_RECOVER_CURRENT_SESSION=1' "$SUP"
+          grep -Fq 'ALT111_STREAM_SUPERVISED=1' "$SUP"
+          ! grep -Fq 'sleep 15' "$SUP"
+
+          grep -Fq '/mnt/app/root/carplay-altscreen/bin/mirror/stream_supervisor.sh' "$START"
+          ! grep -Fq 'touch /tmp/mmi-mirror-active' "$START"
+          grep -Fq 'DISPLAY_START_POLICY=STREAM_DRIVEN' "$START"
+          grep -Fq 'fixed_delay=NONE' "$START"
+          grep -Fq 'AUTH_PRIVATE111_CORE=V34_ALWAYS_ON' "$CTRL"
+          grep -Fq 'NEGOTIATION_POLICY=ONE_CARPLAY_SESSION' "$CTRL"
+
+          echo 'V34_LIFECYCLE_CONTRACT=PASS negotiation=ALWAYS_ON display=STREAM_DRIVEN fixed_delay=NONE'
+
+      - name: Run transactional regression tests
+        run: |
+          set -euo pipefail
+          sh Toolbox/carplay_alt_screen/tests/test_start_autostart_transaction.sh
+          sh Toolbox/carplay_alt_screen/tests/test_storage_policy.sh
+          sh Toolbox/carplay_alt_screen/tests/test_install_transaction.sh
+          sh Toolbox/carplay_alt_screen/tests/test_restore_transaction.sh
+          python3 Toolbox/carplay_alt_screen/tests/test_wheel_zoom_pacing.py
+
+      - name: Promote V3.4 metadata and manifests
+        run: |
+          set -euo pipefail
+          python3 - "$HOOK_SHA" "$GITHUB_SHA" <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import sys
+
+          hook_sha, source_commit = sys.argv[1:3]
+          root = pathlib.Path(".")
+
+          def digest(p):
+              return hashlib.sha256(p.read_bytes()).hexdigest()
+
+          def replace_key(text, key, value):
+              prefix = key + "="
+              lines = text.splitlines()
+              found = False
+              out = []
+              for line in lines:
+                  if line.startswith(prefix):
+                      if not found:
+                          out.append(prefix + value)
+                          found = True
+                      continue
+                  out.append(line)
+              if not found:
+                  out.append(prefix + value)
+              return "\n".join(out) + "\n"
+
+          mirror_info = root / "Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt"
+          text = mirror_info.read_text()
+          for k, v in {
+              "hook_runtime_rebuild_required": "no",
+              "release_binary_status": "PRIVATE111_DIRECT_DISPLAY_V3_4",
+              "vehicle_zip_status": "READY_FOR_VEHICLE_TEST",
+              "v34_negotiation_policy": "ALWAYS_ON_WHILE_PRELOAD_INSTALLED",
+              "v34_sd_runtime_gate": "DISABLED",
+              "v34_display_start_policy": "STREAM_DRIVEN",
+              "v34_stream_ready_marker": "/tmp/altscreen-private111.stream-ready",
+              "v34_stream_ready_stable_decoded_frames": "2",
+              "v34_fixed_display_delay": "NONE",
+              "v34_sidecar_attach_policy": "RECOVER_CURRENT_SESSION",
+              "v34_display_demand_owner": "stream_supervisor",
+              "v34_persistent_runtime_growth": "NONE",
+          }.items():
+              text = replace_key(text, k, v)
+          mirror_info.write_text(text)
+
+          hmi_info = root / "Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt"
+          text = hmi_info.read_text()
+          for k, v in {
+              "universal_runtime_sha256": hook_sha,
+              "branch_zip_status": "READY_FOR_VEHICLE_TEST",
+              "direct_display_revision": "experiment-oem-layout-second-screen-v3.4-stream-driven-startup",
+              "startup_revision": "V3_4_PROTOCOL_ALWAYS_ON_DISPLAY_STREAM_DRIVEN",
+              "startup_sd_runtime_gate": "DISABLED",
+              "startup_fixed_display_delay": "NONE",
+              "startup_stream_ready_marker": "/tmp/altscreen-private111.stream-ready",
+              "startup_stream_ready_stable_decoded_frames": "2",
+          }.items():
+              text = replace_key(text, k, v)
+          hmi_info.write_text(text)
+
+          ready = root / "BRANCH-ZIP-READY.txt"
+          text = ready.read_text()
+          for k, v in {
+              "BRANCH_ZIP_READY": "YES",
+              "branch": "experiment/oem-layout-second-screen_v3.4",
+              "validated_source_commit": source_commit,
+              "mode": "PRIVATE111_DIRECT_DISPLAY_V3_4_STREAM_DRIVEN",
+              "universal_runtime_sha256": hook_sha,
+              "rebuild_required": "none",
+              "vehicle_zip_status": "READY_FOR_V3_4_VEHICLE_TEST",
+              "negotiation_policy": "ALWAYS_ON_WHILE_PRELOAD_INSTALLED",
+              "sd_runtime_gate": "DISABLED",
+              "display_start_policy": "STREAM_DRIVEN",
+              "stream_ready_marker": "/tmp/altscreen-private111.stream-ready",
+              "stream_ready_stable_decoded_frames": "2",
+              "fixed_display_delay": "NONE",
+              "sidecar_attach_policy": "RECOVER_CURRENT_SESSION",
+          }.items():
+              text = replace_key(text, k, v)
+          ready.write_text(text)
+
+          release = root / "Toolbox/carplay_alt_screen/mirror_display/release"
+          rel_names = [
+              "BUILD_INFO.txt",
+              "carplay-alt111-mirror-display",
+              "libscreen_id_bridge.so",
+              "start_vehicle.sh",
+              "stop_vehicle.sh",
+              "stream_supervisor.sh",
+          ]
+          (release / "SHA256SUMS").write_text("".join(
+              f"{digest(release / name)} {name}\n"
+              for name in rel_names if (release / name).is_file()
+          ))
+
+          required = {
+              "Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so",
+              "Toolbox/carplay_alt_screen/src/altscreen_hook.c",
+              "Toolbox/carplay_alt_screen/src/p1404_resolve.c",
+              "Toolbox/carplay_alt_screen/src/p1404_airplay.c",
+              "Toolbox/carplay_alt_screen/src/private111_direct_tap.c",
+              "Toolbox/carplay_alt_screen/mirror_display/release/start_vehicle.sh",
+              "Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh",
+              "Toolbox/carplay_alt_screen/mirror_display/release/stream_supervisor.sh",
+              "Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt",
+              "Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS",
+              "Toolbox/scripts/altscreen_chain_test.sh",
+              "Toolbox/scripts/altscreen_chain_test_universal.sh",
+              "Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh",
+              "Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh",
+              "Toolbox/scripts/status_mmi_cockpit_carplay_test.sh",
+              "Toolbox/carplay_alt_screen/tests/test_start_autostart_transaction.sh",
+              "Toolbox/carplay_alt_screen/tests/test_storage_policy.sh",
+              "Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt",
+              ".github/workflows/v34-stream-driven-startup.yml",
+              "VERIFY-NATIVE-DIRECT-RELEASE.sh",
+              "VERIFY-BRANCH-ZIP-READY.sh",
+              "BRANCH-ZIP-READY.txt",
+          }
+
+          package = root / "PACKAGE_SOURCE_MAP.json"
+          data = json.loads(package.read_text())
+          for rel in set(data).union(required):
+              p = root / rel
+              if p.is_file():
+                  data[rel] = digest(p)
+          package.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+
+          sums = root / "SHA256SUMS.txt"
+          table = {}
+          for line in sums.read_text().splitlines():
+              parts = line.split(None, 1)
+              if len(parts) == 2:
+                  table[parts[1].strip()] = parts[0].lower()
+          for rel in set(table).union(required).union({"PACKAGE_SOURCE_MAP.json"}):
+              p = root / rel
+              if p.is_file():
+                  table[rel] = digest(p)
+          table["PACKAGE_SOURCE_MAP.json"] = digest(package)
+          sums.write_text("".join(
+              f"{table[rel]} {rel}\n" for rel in sorted(table)
+          ))
+          PY
+
+      - name: Verify complete V3.4 package
+        run: |
+          set -euo pipefail
+          sh VERIFY-NATIVE-DIRECT-RELEASE.sh
+          sh VERIFY-BRANCH-ZIP-READY.sh
+          grep -Fq 'BRANCH_ZIP_READY=YES' BRANCH-ZIP-READY.txt
+          grep -Fq 'branch=experiment/oem-layout-second-screen_v3.4' BRANCH-ZIP-READY.txt
+          grep -Fq 'vehicle_zip_status=READY_FOR_V3_4_VEHICLE_TEST' BRANCH-ZIP-READY.txt
+          grep -Fq 'negotiation_policy=ALWAYS_ON_WHILE_PRELOAD_INSTALLED' BRANCH-ZIP-READY.txt
+          grep -Fq 'display_start_policy=STREAM_DRIVEN' BRANCH-ZIP-READY.txt
+          grep -Fq 'fixed_display_delay=NONE' BRANCH-ZIP-READY.txt
+          echo 'V34_BRANCH_ZIP_CONTRACT=PASS'
+
+      - name: Promote V3.4 runtime
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add \
+            Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so \
+            Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt \
+            Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt \
+            Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS \
+            BRANCH-ZIP-READY.txt \
+            PACKAGE_SOURCE_MAP.json \
+            SHA256SUMS.txt
+
+          if ! git diff --cached --quiet; then
+            git commit -m "build(v3.4): promote stream-driven startup runtime [skip ci]"
+            git fetch origin "$GITHUB_REF_NAME"
+            git rebase "origin/$GITHUB_REF_NAME"
+            git push origin "HEAD:$GITHUB_REF_NAME"
+          fi
