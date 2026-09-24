@@ -391,19 +391,6 @@ recover_stale(){
   return 0
 }
 
-verify_hmi_backup(){
-  h="$BACKUP/basevideo3-hmi-original"
-  [ -f "$h/COMPLETE" ] && [ -f "$h/target" ] || return 1
-  [ "$(cat "$h/target" 2>/dev/null || true)" = /mnt/app/eso/hmi/lsd/jars/carplay_hook.jar ] || return 1
-  if [ -f "$h/present" ] && [ ! -f "$h/absent" ]; then
-    [ -s "$h/carplay_hook.jar" ] || return 1
-    [ ! -f "$h/cksum" ] || [ "$(cksum < "$h/carplay_hook.jar")" = "$(cat "$h/cksum")" ] || return 1
-  elif [ -f "$h/absent" ] && [ ! -f "$h/present" ]; then
-    [ ! -e "$h/carplay_hook.jar" ] || return 1
-  else
-    return 1
-  fi
-}
 verify_boot_backup(){
   b="$BACKUP/boot-diagnostics"
   [ -f "$b/COMPLETE" ] && [ -s "$b/startup.sh" ] && [ -f "$b/startup.cksum" ] && [ -f "$b/path" ] || return 1
@@ -455,18 +442,16 @@ verify_installed(){
   [ "$b" = 1 ] && [ "$e" = 1 ] ||
     { log "INSTALL_VERIFY=FAIL reason=DIAGNOSTICS_BLOCK_COUNT begin=$b end=$e"; return 1; }
 
-  # The uninstall path depends on these backups. Re-run the native restore
-  # precheck and independently verify HMI/boot backups before COMMIT.
+  # The uninstall path depends on the native and boot recovery sets. The HMI
+  # JAR is project-owned and is covered only by the INSTALL transaction snapshot.
   [ -f "$CONTROLLER" ] ||
     { log "INSTALL_VERIFY=FAIL reason=CONTROLLER_MISSING"; return 1; }
   ALTS_INSTALL_TXN_ACTIVE=1 /bin/sh "$CONTROLLER" restore-precheck ||
     { log "INSTALL_VERIFY=FAIL reason=NATIVE_RECOVERY_SET_INVALID"; return 1; }
-  verify_hmi_backup ||
-    { log "INSTALL_VERIFY=FAIL reason=HMI_BACKUP_INVALID"; return 1; }
   verify_boot_backup ||
     { log "INSTALL_VERIFY=FAIL reason=BOOT_DIAGNOSTICS_BACKUP_INVALID"; return 1; }
 
-  log "INSTALL_VERIFY=PASS runtime=owned jar=verified native_preload=verified diagnostics=verified sd_state=verified recovery_set=verified"
+  log "INSTALL_VERIFY=PASS runtime=owned jar=project_owned_verified native_preload=verified diagnostics=verified sd_state=verified recovery_set=verified"
   return 0
 }
 fail(){
