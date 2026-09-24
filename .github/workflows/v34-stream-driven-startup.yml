@@ -1,3 +1,4 @@
+# V3.4 lifecycle build: protocol always-on, display stream-driven; no fixed display delay.
 name: V3.4 Stream-Driven Startup Build
 
 on:
