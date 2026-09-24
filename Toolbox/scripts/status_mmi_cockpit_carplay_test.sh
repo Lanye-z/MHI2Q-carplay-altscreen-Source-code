@@ -37,13 +37,18 @@ WHEEL_ZOOM_LOG="$DEVICE_ROOT/tmp/mmi-mirror-wheel-zoom.log"
 MIRROR="$RUNTIME/bin/mirror"
 MIRROR_PID="$DEVICE_ROOT/tmp/altscreen_mirror.pid"
 MIRROR_LOG="$DEVICE_ROOT/tmp/altscreen_mirror.log"
+STREAM_READY="$DEVICE_ROOT/tmp/altscreen-private111.stream-ready"
+SUPERVISOR_PID="$DEVICE_ROOT/tmp/altscreen_stream_supervisor.pid"
+SUPERVISOR_LOG="$DEVICE_ROOT/tmp/altscreen_stream_supervisor.log"
 EXPECTED_SIZE=113781
 EXPECTED_CKSUM=1699756523
 
 file_size(){ n=$(wc -c < "$1" 2>/dev/null) || { echo 0; return; }; set -- $n; echo "${1:-0}"; }
 file_cksum(){ if command -v cksum >/dev/null 2>&1; then cksum < "$1" 2>/dev/null | awk '{print $1}'; else echo unavailable; fi; }
 
-echo "=== CarPlay private111 Direct Display V2 ==="
+echo "=== CarPlay private111 Direct Display V3.4 ==="
+echo "PRIVATE111_NEGOTIATION_POLICY=ALWAYS_ON_WHILE_PRELOAD_INSTALLED sd_runtime_gate=DISABLED"
+echo "DISPLAY_START_POLICY=STREAM_DRIVEN stable_decoded_frames=2 fixed_delay=NONE"
 echo "V3_CONTROL_PLANE=changeMapZoomLevel wheel_zoom=enabled display_baseline=V2_UNCHANGED"
 echo "SOURCE_PATH=private111_ScreenStreamProcessData"
 echo "H264_TAP=/carplay111_h264"
@@ -76,6 +81,20 @@ if [ -f "$MIRROR_PID" ]; then
 fi
 [ "$MIRROR_RUNNING" = 1 ] && echo "DIRECT_DISPLAY_SIDECAR=RUNNING pid=$PID" || echo "DIRECT_DISPLAY_SIDECAR=NOT_RUNNING"
 [ -x "$MIRROR/carplay-alt111-mirror-display" ] && echo "DIRECT_DISPLAY_BINARY=INSTALLED" || echo "DIRECT_DISPLAY_BINARY=MISSING"
+
+SUPERVISOR_RUNNING=0
+SUPID=""
+if [ -f "$SUPERVISOR_PID" ]; then
+    SUPID=$(cat "$SUPERVISOR_PID" 2>/dev/null || true)
+    if [ -n "$SUPID" ] && kill -0 "$SUPID" 2>/dev/null; then SUPERVISOR_RUNNING=1; fi
+fi
+[ "$SUPERVISOR_RUNNING" = 1 ] && echo "STREAM_SUPERVISOR=RUNNING pid=$SUPID" || echo "STREAM_SUPERVISOR=NOT_RUNNING"
+if [ -s "$STREAM_READY" ]; then
+    echo "PRIVATE111_STREAM_READY=YES"
+    cat "$STREAM_READY" 2>/dev/null || true
+else
+    echo "PRIVATE111_STREAM_READY=NO"
+fi
 
 HOOK_LOG=""
 for candidate in "$DEVICE_ROOT/tmp/altscreen_hook.log" "$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/altscreen_hook.log" "$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay.altscreen_hook.log"; do
