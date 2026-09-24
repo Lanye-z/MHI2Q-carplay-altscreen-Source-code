@@ -114,7 +114,47 @@ jobs:
           echo "JAR_SIZE=$JAR_SIZE" >> "$GITHUB_ENV"
           echo "JAR_CKSUM=$JAR_CKSUM" >> "$GITHUB_ENV"
           echo "JAR_SHA=$JAR_SHA" >> "$GITHUB_ENV"
-          echo "V34_PRESENTATION_CONTEXT=PASS jar_sha256=$JAR_SHA"
+
+          # The rebuilt HMI JAR is the authoritative artifact for this run.
+          # Update every runtime preflight identity before transaction tests,
+          # otherwise START/INSTALL/STATUS would reject the freshly built JAR
+          # using the previous release's size/cksum.
+          python3 - "$JAR_SIZE" "$JAR_CKSUM" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          size, cksum = sys.argv[1:3]
+          paths = [
+              pathlib.Path("Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh"),
+              pathlib.Path("Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh"),
+              pathlib.Path("Toolbox/scripts/status_mmi_cockpit_carplay_test.sh"),
+          ]
+          for path in paths:
+              text = path.read_text()
+              text, n1 = re.subn(r"^EXPECTED_SIZE=\d+$",
+                                 "EXPECTED_SIZE=" + size, text,
+                                 flags=re.M)
+              text, n2 = re.subn(r"^EXPECTED_CKSUM=\d+$",
+                                 "EXPECTED_CKSUM=" + cksum, text,
+                                 flags=re.M)
+              if n1 != 1 or n2 != 1:
+                  raise SystemExit(
+                      "unexpected HMI identity fields in %s: size=%d cksum=%d"
+                      % (path, n1, n2)
+                  )
+              path.write_text(text)
+          PY
+          for s in \
+            Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh \
+            Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh \
+            Toolbox/scripts/status_mmi_cockpit_carplay_test.sh; do
+            sh -n "$s"
+            grep -Fq "EXPECTED_SIZE=$JAR_SIZE" "$s"
+            grep -Fq "EXPECTED_CKSUM=$JAR_CKSUM" "$s"
+          done
+
+          echo "V34_PRESENTATION_CONTEXT=PASS jar_sha256=$JAR_SHA identity_scripts=SYNCED"
 
       - name: Build V3.4 universal hook
         run: |
@@ -409,6 +449,9 @@ jobs:
             Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so \
             Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar \
             Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt \
+            Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh \
+            Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh \
+            Toolbox/scripts/status_mmi_cockpit_carplay_test.sh \
             Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt \
             Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS \
             BRANCH-ZIP-READY.txt \
