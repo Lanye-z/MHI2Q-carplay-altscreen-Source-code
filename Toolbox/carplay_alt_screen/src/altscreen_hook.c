@@ -1479,7 +1479,6 @@ static void *altscreen_runtime_init_worker(void *unused) {
     int nme_io_ready;
     int native_geometry_ready = 0;
     int process_allowed;
-    int force_start;
     int state_root_ready;
     unsigned geometry_step;
     const char *pname;
@@ -1517,11 +1516,9 @@ static void *altscreen_runtime_init_worker(void *unused) {
         return NULL;
     }
     pname = p1404_process_name();
-    force_start = altscreen_marker_present("FORCE_START");
     process_allowed = process_is_allowed(pname);
-    altscreen_log("PHASE=RUNTIME_PROCESS_IDENTITY result=%s process=%s force_start=%d identity_override=DISABLED worker_started=1 stock_until_ready=1",
-                  process_allowed ? "PASS" : "REFUSED",
-                  pname, force_start);
+    altscreen_log("PHASE=RUNTIME_PROCESS_IDENTITY result=%s process=%s policy=INSTALLED_PRELOAD identity_override=DISABLED worker_started=1 stock_until_ready=1",
+                  process_allowed ? "PASS" : "REFUSED", pname);
     if (!process_allowed || !p1404_probe_stack()) {
         p1404_armed = 0;
         p1404_mutate_armed = 0;
@@ -1539,7 +1536,10 @@ static void *altscreen_runtime_init_worker(void *unused) {
     }
     altscreen_log("PHASE=RUNTIME_FORWARDING_GATE result=PASS libc_forward=1 native_stock=1 nme_exact_io=1");
     altscreen_log("PHASE=LOG_WRITER_READY mode=bounded_async queue_slots=256 line_bytes=768 max_bytes=16777216 no_truncate=1 deferred_worker=1 startup_thread_blocked=0");
-    altscreen_profile_load(NULL);
+    /* V3.4 fixes the legacy iAP2 profile to observe-only in-process. No SD
+     * profile file participates in normal CarPlay negotiation. */
+    altscreen_profile_set(&altscreen_prof_observe);
+    altscreen_log("PROFILE policy=V34_FIXED_OBSERVE removable_state_dependency=NONE");
     p1404_airplay_bind();
     p1404_airplay_load_flags();
     backend_ready = p1404_private111_backend_install();
