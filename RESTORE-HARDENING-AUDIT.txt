@@ -1,6 +1,6 @@
-source_commit=4355cc45bba57be6de6d373c8e720fd911f083b4
+source_commit=16d668efb748251e534a1f7b5584948117318679
 branch=experiment/oem-layout-second-screen_v3.3
-utc=2026-09-24T01:11:44Z
+utc=2026-09-24T01:12:53Z
 
 == shell syntax ==
 -- Toolbox/scripts/altscreen_chain_test.sh
@@ -17,6 +17,26 @@ rc=0
 rc=0
 
 == restore transaction test ==
+SD_WRITE_PROBE scope=RESTORE_TRANSACTION phase=INITIAL path=/tmp/altscreen-restore-txn.IOTGaI/mixed-sd result=PASS
+SD_WRITE=PASS scope=RESTORE_TRANSACTION volume=/tmp/altscreen-restore-txn.IOTGaI/mixed-sd already_writable=1
+===== V3 transactional RESTORE ORIGINAL started =====
+RESTORE_HMI_BACKUP=PASS original=present project_managed=NO production_changed=NO
+RESTORE_PREFLIGHT_STARTUP=PASS production_changed=NO
+ERROR: native/runtime restore precheck failed
+RESTORE=REFUSED production_changed=NO
+===== V3 transactional RESTORE ORIGINAL started =====
+RESTORE_HMI_BACKUP=PASS original=present project_managed=NO production_changed=NO
+RESTORE_PREFLIGHT_STARTUP=PASS production_changed=NO
+ROUTER_PROFILE=UNIVERSAL
+SD_WRITE_PROBE scope=CONTROLLER_restore-precheck phase=INITIAL path=/tmp/altscreen-restore-txn.IOTGaI/mixed-sd result=PASS
+SD_WRITE=PASS scope=CONTROLLER_restore-precheck volume=/tmp/altscreen-restore-txn.IOTGaI/mixed-sd already_writable=1
+LOCK_ACQUIRED pid=2921 action=restore-precheck
+RESTORE_PRECHECK=PASS profile=UNIVERSAL production_changed=NO
+LOCK_RELEASE=PASS
+RUNTIME_CLEANUP_PRECHECK=FAIL reason=UNOWNED_NONEMPTY_RUNTIME path=/mnt/app/root/carplay-altscreen production_changed=NO
+FAIL: runtime cleanup precheck failed; production files unchanged
+ERROR: native/runtime restore precheck failed
+RESTORE=REFUSED production_changed=NO
 RESTORE_TRANSACTION_TEST=FAIL: non-empty unowned runtime preflight reason missing
 restore_test_rc=1
 
