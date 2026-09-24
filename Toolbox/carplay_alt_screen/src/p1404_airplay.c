@@ -498,12 +498,12 @@ static int alt_is_measured_b9_canvas(uint32_t display_w,
  *
  * The private111 coded canvas remains 1440x542 and the V3.1 renderer remains
  * 1:1 into the 1440x455 displayable3 viewport. CarPlay now receives a vertical
- * safe region from y=60 through bottom=450:
+ * safe region from y=68 through bottom=450:
  *
- *   FULL  X/W stays 370/700, Y/H becomes 60/390
- *   SMALL X/W stays 490/460, Y/H becomes 60/390
+ *   FULL  X/W stays 370/700, Y/H becomes 68/382
+ *   SMALL X/W stays 490/460, Y/H becomes 68/382
  *
- * Relative to V3.1, the top edge moves down by 11 px so compass/top controls
+ * Relative to V3.1, the top edge moves down by 19 px so compass/top controls
  * have more clearance. Relative to V3.2, the bottom edge moves up by only 5 px
  * so ETA remains low while no longer using the absolute bottom edge.
  * The OEM terminal-space map-plane Y=26 remains destination metadata only.
@@ -526,26 +526,26 @@ static int alt_load_measured_k1004_safe_area(uint32_t display_w,
     /*
      * ListModel176 remains the source for the OEM horizontal bounds. V3.3
      * preserves X/W and applies the vehicle-tuned vertical safe region
-     * y=60,h=390 (bottom=450). The Audi layout may translate the whole map
+     * y=68,h=382 (bottom=450). The Audi layout may translate the whole map
      * plane afterwards; that compositor operation remains separate and must
      * not be cancelled here.
      */
     if (!strcmp(view, "SMALL")) {
         r.x = 490u;
-        r.y = 60u;
+        r.y = 68u;
         r.w = 460u;
-        r.h = 390u;
+        r.h = 382u;
         r.physical_w = 460u;
-        r.physical_h = 390u;
+        r.physical_h = 382u;
         r.renderer_dx = small_dx;
         r.renderer_dy = small_dy;
     } else if (!strcmp(view, "FULL")) {
         r.x = 370u;
-        r.y = 60u;
+        r.y = 68u;
         r.w = 700u;
-        r.h = 390u;
+        r.h = 382u;
         r.physical_w = 700u;
-        r.physical_h = 390u;
+        r.physical_h = 382u;
         r.renderer_dx = 0;
         r.renderer_dy = 0;
     } else {
@@ -555,13 +555,13 @@ static int alt_load_measured_k1004_safe_area(uint32_t display_w,
 
     /*
      * Horizontal safe bounds retain the measured OEM map-local geometry.
-     * Vertically, V3.3 uses the tuned 60..450 visible-map range. The whole-map
+     * Vertically, V3.3 uses the tuned 68..450 visible-map range. The whole-map
      * renderer translation is still applied afterwards (Sport SMALL contributes
      * -476 on X and normally 0 on Y).
      */
     physical_x = (int64_t)(!strcmp(view, "SMALL") ? 490u : 370u) +
                  (int64_t)r.renderer_dx;
-    physical_y = 60 + (int64_t)r.renderer_dy;
+    physical_y = 68 + (int64_t)r.renderer_dy;
     if (physical_x < -8192 || physical_x > 8192 ||
         physical_y < -8192 || physical_y > 8192) {
         return 0;
@@ -573,7 +573,7 @@ static int alt_load_measured_k1004_safe_area(uint32_t display_w,
     r.view[sizeof(r.view) - 1u] = 0;
     strncpy(r.layout, layout, sizeof(r.layout) - 1u);
     r.layout[sizeof(r.layout) - 1u] = 0;
-    strncpy(r.source, "k1004-oem-x-vertical-60-450-v33", sizeof(r.source) - 1u);
+    strncpy(r.source, "k1004-oem-x-vertical-68-450-v33", sizeof(r.source) - 1u);
     r.source[sizeof(r.source) - 1u] = 0;
     *out = r;
     return 1;
@@ -605,14 +605,14 @@ static void alt_resolve_cluster_safe_area(uint32_t display_w,
      */
     if (alt_is_measured_b9_canvas(display_w, display_h)) {
         out->x = 370u;
-        out->y = 60u;
+        out->y = 68u;
         out->w = 700u;
-        out->h = 390u;
+        out->h = 382u;
         out->physical_x = 370;
-        out->physical_y = 60;
+        out->physical_y = 68;
         out->physical_w = 700u;
-        out->physical_h = 390u;
-        strncpy(out->source, "k1004-default-v33-60-450-before-hmi",
+        out->physical_h = 382u;
+        strncpy(out->source, "k1004-default-v33-68-450-before-hmi",
                 sizeof(out->source) - 1u);
     } else {
         out->w = display_w;
@@ -676,11 +676,11 @@ static cf_obj make_view_areas(uint32_t w, uint32_t h) {
  * keeps the runtime coded canvas (observed 1440x542 on the private111 path);
  * only the nested safeArea changes. The displayable3 sink remains 1440x455.
  *
- * index 0 = FULL  (370,60,700x390)
- * index 1 = SMALL (490,60,460x390)
+ * index 0 = FULL  (370,68,700x382)
+ * index 1 = SMALL (490,68,460x382)
  *
  * V3.3 preserves the V3.1/V3.2 horizontal OEM constraints while using the
- * vehicle-tuned vertical safe region top=60, bottom=450.
+ * vehicle-tuned vertical safe region top=68, bottom=450.
  */
 static cf_obj make_cluster_layout_view_areas(uint32_t w, uint32_t h,
                                              int enable_two_areas) {
@@ -695,9 +695,9 @@ static cf_obj make_cluster_layout_view_areas(uint32_t w, uint32_t h,
 
     memset(&full, 0, sizeof(full));
     full.x = 370u;
-    full.y = 60u;
+    full.y = 68u;
     full.w = 700u;
-    full.h = 390u;
+    full.h = 382u;
     if (!full.h || !alt_safe_rect_valid(&full, w, h)) goto fail;
 
     v = rect_dict(w, h, 0u, 0u);
@@ -711,9 +711,9 @@ static cf_obj make_cluster_layout_view_areas(uint32_t w, uint32_t h,
 
     memset(&small, 0, sizeof(small));
     small.x = 490u;
-    small.y = 60u;
+    small.y = 68u;
     small.w = 460u;
-    small.h = 390u;
+    small.h = 382u;
     if (!small.h || !alt_safe_rect_valid(&small, w, h)) goto fail;
 
     v = rect_dict(w, h, 0u, 0u);
@@ -852,8 +852,8 @@ void *alt_build_cluster_display(void) {
         "initialViewArea=%d adjacent=%d predeclared_even_if_hmi_late=%d "
         "view=full:%ux%u safe_source=%u,%u,%ux%u "
         "safe_physical=%d,%d,%ux%u renderer_offset=%d,%d "
-        "safe_yh_mapping=vertical_inset_top60_bottom450 "
-        "safearea_revision=V33_OEM_X_VERTICAL_60_450 "
+        "safe_yh_mapping=vertical_inset_top68_bottom450 "
+        "safearea_revision=V33_OEM_X_VERTICAL_68_450 "
         "renderer_geometry_revision=V31_ONE_TO_ONE_CLIP "
         "map_plane_terminal_y=26 map_plane_terminal_y_policy=metadata_only_not_renderer_offset "
         "mode=%s layout=%s source=%s renderer_scale=0 "

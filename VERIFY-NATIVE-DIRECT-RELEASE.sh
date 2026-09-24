@@ -185,7 +185,7 @@ HOOK_PENDING=0
 NATIVE_REBUILDS=0
 SAFEAREA_V32=0
 SAFEAREA_V33=0
-if grep -Fq 'safearea_revision=V33_OEM_X_VERTICAL_60_450' "$AIRPLAY_SRC"; then
+if grep -Fq 'safearea_revision=V33_OEM_X_VERTICAL_68_450' "$AIRPLAY_SRC"; then
     SAFEAREA_V33=1
 elif grep -Fq 'safearea_revision=V32_OEM_X_VISIBLE_Y' "$AIRPLAY_SRC"; then
     SAFEAREA_V32=1
@@ -311,11 +311,11 @@ elif grep -Fq 'release_binary_status=V3_3_BINARY_STALE_SAFEAREA_REBUILD_REQUIRED
         fail "V3.3 safeArea source must declare hook rebuild pending"
     grep -Fq 'hook_layout_safearea_rebuild_required=yes' "$INFO" ||
         fail "V3.3 safeArea source must declare safeArea hook rebuild pending"
-    grep -Fq 'hook_safearea_policy=V33_OEM_X_VERTICAL_60_450' "$INFO" ||
+    grep -Fq 'hook_safearea_policy=V33_OEM_X_VERTICAL_68_450' "$INFO" ||
         fail "V3.3 safeArea pending metadata missing"
     binary_strings "$HOOK" | grep -Fq 'safearea_revision=V32_OEM_X_VISIBLE_Y' ||
         fail "V3.3 pending package must still contain the previously promoted V3.2 hook"
-    if binary_strings "$HOOK" | grep -Fq 'safearea_revision=V33_OEM_X_VERTICAL_60_450'; then
+    if binary_strings "$HOOK" | grep -Fq 'safearea_revision=V33_OEM_X_VERTICAL_68_450'; then
         fail "V3.3 BUILD_INFO says hook rebuild pending but rebuilt 60..450 marker is already present"
     fi
 elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$INFO"; then
@@ -347,9 +347,9 @@ elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$INFO"; then
         fi
         if [ "$HOOK_PENDING" = 0 ]; then
             if [ "$SAFEAREA_V33" = 1 ]; then
-                binary_strings "$HOOK" | grep -Fq 'safe_yh_mapping=vertical_inset_top60_bottom450' ||
+                binary_strings "$HOOK" | grep -Fq 'safe_yh_mapping=vertical_inset_top68_bottom450' ||
                     fail "V3.3 universal hook missing tuned 60..450 safeArea mapping"
-                binary_strings "$HOOK" | grep -Fq 'safearea_revision=V33_OEM_X_VERTICAL_60_450' ||
+                binary_strings "$HOOK" | grep -Fq 'safearea_revision=V33_OEM_X_VERTICAL_68_450' ||
                     fail "V3.3 universal hook missing safeArea revision marker"
                 binary_strings "$HOOK" | grep -Fq 'renderer_geometry_revision=V31_ONE_TO_ONE_CLIP' ||
                     fail "V3.3 universal hook missing retained V3.1 renderer geometry marker"
@@ -675,7 +675,7 @@ grep -Fq 'r.w = 460u;' "$AIRPLAY_SRC" ||
 grep -Fq 'map_plane_terminal_y_policy=metadata_only_not_renderer_offset' "$AIRPLAY_SRC" ||
     fail "OEM terminal Y=26 must remain metadata-only"
 if [ "$SAFEAREA_V33" = 1 ]; then
-    grep -Fq 'safe_yh_mapping=vertical_inset_top60_bottom450' "$AIRPLAY_SRC" ||
+    grep -Fq 'safe_yh_mapping=vertical_inset_top68_bottom450' "$AIRPLAY_SRC" ||
         fail "V3.3 tuned safeArea coordinate-space diagnostic missing"
     grep -Fq 'renderer_geometry_revision=V31_ONE_TO_ONE_CLIP' "$AIRPLAY_SRC" ||
         fail "V3.3 must retain the V3.1 renderer geometry revision"

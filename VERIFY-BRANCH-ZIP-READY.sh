@@ -92,13 +92,13 @@ if [ "$mode" = PRIVATE111_DIRECT_DISPLAY_V3_3_OEM_LOWER_BAR ]; then
         fail "V3.3 Java/RGI SD log contract missing"
     grep -Fq 'oem_lower_bar_map_scale=FCT45_STOCK_PASSTHROUGH' "$HMI_INFO" ||
         fail "V3.3 OEM map-scale passthrough missing"
-    grep -Fq 'safearea_policy=V33_OEM_X_VERTICAL_60_450' "$HMI_INFO" ||
-        fail "V3.3 HMI safeArea policy is not top60/bottom450"
-    grep -Fq 'geometry_safearea_space=OEM_X_VERTICAL_60_450' "$HMI_INFO" ||
+    grep -Fq 'safearea_policy=V33_OEM_X_VERTICAL_68_450' "$HMI_INFO" ||
+        fail "V3.3 HMI safeArea policy is not top68/bottom450"
+    grep -Fq 'geometry_safearea_space=OEM_X_VERTICAL_68_450' "$HMI_INFO" ||
         fail "V3.3 HMI safeArea coordinate-space marker missing"
-    grep -Fq 'safearea_full=370,60,700,390' "$READY" ||
+    grep -Fq 'safearea_full=370,68,700,382' "$READY" ||
         fail "V3.3 FULL safeArea ready marker mismatch"
-    grep -Fq 'safearea_small=490,60,460,390' "$READY" ||
+    grep -Fq 'safearea_small=490,68,460,382' "$READY" ||
         fail "V3.3 SMALL safeArea ready marker mismatch"
     grep -Fq "rgi_metadata_sha256=$actual_rgi_sha" "$READY" ||
         fail "V3.3 ready marker RGI SHA mismatch"

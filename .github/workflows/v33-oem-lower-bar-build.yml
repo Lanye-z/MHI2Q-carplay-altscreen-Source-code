@@ -533,10 +533,10 @@ jobs:
               "direct_display_revision":
                   "experiment-oem-layout-second-screen-v3.3-oem-lower-bar",
               "branch_zip_status": "READY_FOR_VEHICLE_TEST",
-              "safearea_policy": "V33_OEM_X_VERTICAL_60_450",
-              "geometry_safearea_space": "OEM_X_VERTICAL_60_450",
-              "safearea_full": "370,60,700,390",
-              "safearea_small": "490,60,460,390",
+              "safearea_policy": "V33_OEM_X_VERTICAL_68_450",
+              "geometry_safearea_space": "OEM_X_VERTICAL_68_450",
+              "safearea_full": "370,68,700,382",
+              "safearea_small": "490,68,460,382",
           }
           for key, value in updates.items():
               text = upsert(text, key, value)
@@ -549,15 +549,15 @@ jobs:
               "release_binary_status": "PRIVATE111_DIRECT_DISPLAY_V2",
               "vehicle_zip_status": "READY_FOR_VEHICLE_TEST",
               "hook_layout_safearea_rebuild_required": "no",
-              "hook_safearea_policy": "V33_OEM_X_VERTICAL_60_450",
-              "oem_layout_full_safearea_reference_455": "370,60,700,390",
-              "oem_layout_small_safearea_reference_455": "490,60,460,390",
+              "hook_safearea_policy": "V33_OEM_X_VERTICAL_68_450",
+              "oem_layout_full_safearea_reference_455": "370,68,700,382",
+              "oem_layout_small_safearea_reference_455": "490,68,460,382",
               "oem_layout_safearea_canvas_yh_mapping":
-                  "vertical_inset_top60_bottom450",
-              "oem_layout_classic_full_safearea_physical": "370,60,700,390",
-              "oem_layout_classic_small_safearea_physical": "490,60,460,390",
-              "oem_layout_sport_full_safearea_physical": "370,60,700,390",
-              "oem_layout_sport_small_safearea_physical": "14,60,460,390",
+                  "vertical_inset_top68_bottom450",
+              "oem_layout_classic_full_safearea_physical": "370,68,700,382",
+              "oem_layout_classic_small_safearea_physical": "490,68,460,382",
+              "oem_layout_sport_full_safearea_physical": "370,68,700,382",
+              "oem_layout_sport_small_safearea_physical": "14,68,460,382",
           }
           for key, value in mirror_updates.items():
               mirror_text = upsert(mirror_text, key, value)
@@ -663,9 +663,9 @@ jobs:
           jar_sha256=$SHA
           universal_runtime_sha256=$HOOK_SHA
           display_chain=V3_1_OEM_MAP_1TO1_CLIP
-          safearea_policy=V3_3_OEM_X_VERTICAL_60_450
-          safearea_full=370,60,700,390
-          safearea_small=490,60,460,390
+          safearea_policy=V3_3_OEM_X_VERTICAL_68_450
+          safearea_full=370,68,700,382
+          safearea_small=490,68,460,382
           oem_lower_bar=CARPLAY_RGI_FCT19_21_22_PARTIAL_V2
           current_road=FCT19_CARPLAY_WHEN_VALID_ELSE_STOCK
           remaining_distance=FCT21_CARPLAY_WHEN_VALID_ELSE_STOCK
@@ -748,9 +748,9 @@ jobs:
           sh VERIFY-BRANCH-ZIP-READY.sh
           grep -Fq 'branch=experiment/oem-layout-second-screen_v3.3' BRANCH-ZIP-READY.txt
           grep -Fq 'vehicle_zip_status=READY_FOR_V3_3_VEHICLE_TEST' BRANCH-ZIP-READY.txt
-          grep -Fq 'safearea_policy=V3_3_OEM_X_VERTICAL_60_450' BRANCH-ZIP-READY.txt
-          grep -Fq 'safearea_full=370,60,700,390' BRANCH-ZIP-READY.txt
-          grep -Fq 'safearea_small=490,60,460,390' BRANCH-ZIP-READY.txt
+          grep -Fq 'safearea_policy=V3_3_OEM_X_VERTICAL_68_450' BRANCH-ZIP-READY.txt
+          grep -Fq 'safearea_full=370,68,700,382' BRANCH-ZIP-READY.txt
+          grep -Fq 'safearea_small=490,68,460,382' BRANCH-ZIP-READY.txt
           grep -Fq 'wheel_zoom_pacing_revision=BURST_ADAPTIVE_100_150_200_V2' BRANCH-ZIP-READY.txt
           grep -Fq 'wheel_zoom_active_pace_ms=100,150,200' BRANCH-ZIP-READY.txt
           grep -Fq 'wheel_zoom_quiet_small_backlog_pace_ms=100' BRANCH-ZIP-READY.txt
