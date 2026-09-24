@@ -331,7 +331,7 @@ jar_valid "$JAR_SOURCE" || {
     exit 1
 }
 
-echo "PACKAGE_MODE=CARPLAY_PRIVATE111_DIRECT_DISPLAY_V2"
+echo "PACKAGE_MODE=CARPLAY_PRIVATE111_DIRECT_DISPLAY_V3_4_STREAM_DRIVEN"
 echo "NATIVE_SOURCE=private111_ScreenStreamProcessData h264_shm=/carplay111_h264"
 echo "DECODER_BACKEND=stock_omx_screen_linearized_shm decoded_shm=/carplay111_decoded"
 echo "PIXEL_BRIDGE=Screen_linearized_NV12_to_existing_MMI_GLES"
@@ -348,6 +348,7 @@ CHAIN_RC=$?
 MIRROR_RUNTIME="$DEVICE_ROOT/mnt/app/root/carplay-altscreen/bin/mirror"
 [ -x "$MIRROR_RUNTIME/carplay-alt111-mirror-display" ] || { echo "FAIL: integrated direct-display binary was not staged"; exit 1; }
 [ -x "$MIRROR_RUNTIME/start_vehicle.sh" ] || { echo "FAIL: integrated direct-display launcher was not staged"; exit 1; }
+[ -x "$MIRROR_RUNTIME/stream_supervisor.sh" ] || { echo "FAIL: V3.4 stream supervisor was not staged"; exit 1; }
 
 APP_RW=0
 rollback(){
@@ -381,7 +382,8 @@ APP_RW=0
 
 echo "HMI_CONTROL_PLANE=INSTALLED target=/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar size=$EXPECTED_SIZE cksum=$EXPECTED_CKSUM"
 echo "HMI_CONTRACT=JAVA80 ctx80=98,101,102,3 basevideo=3"
-echo "INSTALL=PASS integrated=AltScreen+H264Tap+DecoderTap+Displayable3+Java80 reboot_required=YES"
+echo "V34_STARTUP_POLICY=private111_always_on display_stream_driven fixed_delay=NONE sd_runtime_gate=DISABLED"
+echo "INSTALL=PASS integrated=AltScreen+H264Tap+DecoderTap+StreamSupervisor+Displayable3+Java80 reboot_required=YES"
 exit 0
  "$HMI_INFO" 2>/dev/null &&
 grep -Fq 'wheel_zoom_build_status=COMPILED_READY_FOR_VEHICLE_TEST' "$HMI_INFO" 2>/dev/null || {
