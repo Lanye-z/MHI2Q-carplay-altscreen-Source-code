@@ -190,7 +190,7 @@ jobs:
           strings "$OUT/libcarplay_altscreen.so" | grep -Fq 'policy=V34_ALWAYS_ON'
           strings "$OUT/libcarplay_altscreen.so" | grep -Fq 'PHASE=PRIVATE111_STREAM_READY'
           strings "$OUT/libcarplay_altscreen.so" | grep -Fq '/tmp/altscreen-private111.stream-ready'
-          strings "$OUT/libcarplay_altscreen.so" | grep -Fq 'safearea_revision=V35_OEM_X_VERTICAL_75_450'
+          strings "$OUT/libcarplay_altscreen.so" | grep -Fq 'safearea_revision=V35_OEM_X_VERTICAL_72_450'
           if strings "$OUT/libcarplay_altscreen.so" | grep -Fq 'PHASE=STATE_ROOT_WAIT result='; then
             echo 'ERROR: rebuilt V3.4 hook still contains removable-SD startup gate' >&2
             exit 1
@@ -318,14 +318,14 @@ jobs:
               "v35_persistent_runtime_growth": "NONE",
               "v35_lower_bar_observability": "KOMO_SERVICE,FOLLOW_MODE,SETTERS,FLUSH,RG_ACTIVE,RGI_VALID",
               "v35_lower_bar_observability_policy": "READ_ONLY_NO_FCT17_FCT39_ACTIVATION",
-              "hook_safearea_policy": "V35_OEM_X_VERTICAL_75_450",
-              "oem_layout_full_safearea_reference_455": "370,75,700,375",
-              "oem_layout_small_safearea_reference_455": "490,75,460,375",
-              "oem_layout_safearea_canvas_yh_mapping": "vertical_inset_top75_bottom450",
-              "oem_layout_classic_full_safearea_physical": "370,75,700,375",
-              "oem_layout_classic_small_safearea_physical": "490,75,460,375",
-              "oem_layout_sport_full_safearea_physical": "370,75,700,375",
-              "oem_layout_sport_small_safearea_physical": "14,75,460,375",
+              "hook_safearea_policy": "V35_OEM_X_VERTICAL_72_450",
+              "oem_layout_full_safearea_reference_455": "370,72,700,378",
+              "oem_layout_small_safearea_reference_455": "490,72,460,378",
+              "oem_layout_safearea_canvas_yh_mapping": "vertical_inset_top72_bottom450",
+              "oem_layout_classic_full_safearea_physical": "370,72,700,378",
+              "oem_layout_classic_small_safearea_physical": "490,72,460,378",
+              "oem_layout_sport_full_safearea_physical": "370,72,700,378",
+              "oem_layout_sport_small_safearea_physical": "14,72,460,378",
           }.items():
               text = replace_key(text, k, v)
           mirror_info.write_text(text)
@@ -351,10 +351,10 @@ jobs:
               "startup_fixed_display_delay": "NONE",
               "startup_stream_ready_marker": "/tmp/altscreen-private111.stream-ready",
               "startup_stream_ready_stable_decoded_frames": "2",
-              "safearea_policy": "V35_OEM_X_VERTICAL_75_450",
-              "geometry_safearea_space": "OEM_X_VERTICAL_75_450",
-              "safearea_full": "370,75,700,375",
-              "safearea_small": "490,75,460,375",
+              "safearea_policy": "V35_OEM_X_VERTICAL_72_450",
+              "geometry_safearea_space": "OEM_X_VERTICAL_72_450",
+              "safearea_full": "370,72,700,378",
+              "safearea_small": "490,72,460,378",
               "cold_start_policy": "EARLY_NEGOTIATION_READY",
               "cold_start_capability_wait_ms": "500",
               "cold_start_geometry_gate": "ASYNC",
@@ -388,9 +388,9 @@ jobs:
               "stream_ready_stable_decoded_frames": "2",
               "fixed_display_delay": "NONE",
               "sidecar_attach_policy": "RECOVER_CURRENT_SESSION",
-              "safearea_policy": "V3_5_OEM_X_VERTICAL_75_450",
-              "safearea_full": "370,75,700,375",
-              "safearea_small": "490,75,460,375",
+              "safearea_policy": "V3_5_OEM_X_VERTICAL_72_450",
+              "safearea_full": "370,72,700,378",
+              "safearea_small": "490,72,460,378",
           }.items():
               text = replace_key(text, k, v)
           ready.write_text(text)
@@ -484,9 +484,9 @@ jobs:
           grep -Fq 'lower_bar_context_policy=KOMO_FOLLOW_INFO_NO_RGI_PRESENTATION' BRANCH-ZIP-READY.txt
           grep -Fq 'lower_bar_observability=KOMO_FOLLOW_RG_RGI_BEFORE_AFTER_V35' BRANCH-ZIP-READY.txt
           grep -Fq 'lower_bar_observability_policy=READ_ONLY_NO_PRESENTATION_MUTATION' BRANCH-ZIP-READY.txt
-          grep -Fq 'safearea_policy=V3_5_OEM_X_VERTICAL_75_450' BRANCH-ZIP-READY.txt
-          grep -Fq 'safearea_full=370,75,700,375' BRANCH-ZIP-READY.txt
-          grep -Fq 'safearea_small=490,75,460,375' BRANCH-ZIP-READY.txt
+          grep -Fq 'safearea_policy=V3_5_OEM_X_VERTICAL_72_450' BRANCH-ZIP-READY.txt
+          grep -Fq 'safearea_full=370,72,700,378' BRANCH-ZIP-READY.txt
+          grep -Fq 'safearea_small=490,72,460,378' BRANCH-ZIP-READY.txt
           grep -Fq 'oem_lower_bar=CARPLAY_RGI_FCT19_21_22_PLUS_KOMO_GRAY_BAR_V4' BRANCH-ZIP-READY.txt
           grep -Fq 'Version: V3.5 - cold-start + dynamic ViewArea' Toolbox/GEM/mqb-carplayAltScreen.esd
           grep -Fq 'type111 -> H264 tap -> stock OMX -> decoded SHM -> displayable3 -> Java Context80' Toolbox/GEM/mqb-carplayAltScreen.esd
