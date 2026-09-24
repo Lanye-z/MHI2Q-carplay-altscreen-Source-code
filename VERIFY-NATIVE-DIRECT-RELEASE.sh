@@ -322,6 +322,20 @@ elif grep -Fq 'release_binary_status=V3_1_BINARY_STALE_OBSERVABILITY_REBUILD_REQ
     if binary_strings "$BIN" | grep -Fq 'display_observer_revision=V32_READABLE_STATE_V1'; then
         fail "BUILD_INFO says V3.2 observability rebuild pending but sidecar already contains the new observer marker"
     fi
+elif grep -Fq 'release_binary_status=V3_4_BINARY_STALE_LIFECYCLE_REBUILD_REQUIRED' "$INFO"; then
+    SOURCE_ONLY=0
+    HOOK_PENDING=1
+    NATIVE_REBUILDS=0
+    grep -Fq 'vehicle_zip_status=NOT_READY_HOOK_REBUILD_REQUIRED' "$INFO" ||
+        fail "V3.4 lifecycle source must remain blocked until universal hook rebuild"
+    grep -Fq 'hook_runtime_rebuild_required=yes' "$INFO" ||
+        fail "V3.4 lifecycle source must declare hook rebuild pending"
+    grep -Fq 'v34_negotiation_policy=ALWAYS_ON_WHILE_PRELOAD_INSTALLED' "$INFO" ||
+        fail "V3.4 negotiation metadata missing"
+    grep -Fq 'v34_display_start_policy=STREAM_DRIVEN' "$INFO" ||
+        fail "V3.4 display startup metadata missing"
+    grep -Fq 'v34_fixed_display_delay=NONE' "$INFO" ||
+        fail "V3.4 fixed-delay removal metadata missing"
 elif grep -Fq 'release_binary_status=V3_3_BINARY_STALE_SAFEAREA_REBUILD_REQUIRED' "$INFO"; then
     SOURCE_ONLY=0
     HOOK_PENDING=1
