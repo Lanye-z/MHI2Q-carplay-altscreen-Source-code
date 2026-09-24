@@ -21,6 +21,7 @@ HMI_SRC="$ROOT/Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/Clust
 WHEEL_SRC="$ROOT/Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java"
 HMI_BUILD_INFO="$ROOT/Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt"
 WHEEL_PACING_TEST="$ROOT/Toolbox/carplay_alt_screen/tests/test_wheel_zoom_pacing.py"
+VIEW_AREA_LIFECYCLE_TEST="$ROOT/Toolbox/carplay_alt_screen/tests/test_view_area_lifecycle.py"
 START="$ROOT/Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh"
 CTRL="$ROOT/Toolbox/scripts/altscreen_chain_test_universal.sh"
 LAUNCH="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/start_vehicle.sh"
@@ -51,7 +52,7 @@ sha256_file(){
 }
 binary_strings(){ strings "$1" 2>/dev/null || grep -a -o '[[:print:]][[:print:]]*' "$1"; }
 
-for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$TAP_H" "$AIRPLAY_SRC" "$RESOLVE" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$GL_RENDERER_CPP" "$MAIN_CPP" "$HMI_SRC" "$WHEEL_SRC" "$HMI_BUILD_INFO" "$WHEEL_PACING_TEST" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$SUPERVISOR" "$HOOK_SRC" "$STOP" "$FINISH" "$INSTALL" "$STATUS" "$CHAIN" "$INSTALL_TXN" "$RESTORE_TXN" "$RESTORE_APPLY" "$PERSIST_DIAG" "$BOOT_DIAG" "$START_TX_TEST" "$STORAGE_POLICY_TEST" "$INSTALL_TX_TEST" "$RESTORE_TX_TEST"; do
+for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$TAP_H" "$AIRPLAY_SRC" "$RESOLVE" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$GL_RENDERER_CPP" "$MAIN_CPP" "$HMI_SRC" "$WHEEL_SRC" "$HMI_BUILD_INFO" "$WHEEL_PACING_TEST" "$VIEW_AREA_LIFECYCLE_TEST" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$SUPERVISOR" "$HOOK_SRC" "$STOP" "$FINISH" "$INSTALL" "$STATUS" "$CHAIN" "$INSTALL_TXN" "$RESTORE_TXN" "$RESTORE_APPLY" "$PERSIST_DIAG" "$BOOT_DIAG" "$START_TX_TEST" "$STORAGE_POLICY_TEST" "$INSTALL_TX_TEST" "$RESTORE_TX_TEST"; do
     [ -s "$f" ] || fail "missing/empty: $f"
 done
 
@@ -801,6 +802,20 @@ grep -Fq 'PHASE=ALT111_VIEWAREA_TARGET' "$NATIVE" ||
     fail "native HMI view-area target observer missing"
 grep -Fq 'PHASE=ALT111_VIEWAREA_RESULT' "$NATIVE" ||
     fail "native view-area response/retry observer missing"
+grep -Fq 'view_area_inflight_seq' "$NATIVE" ||
+    fail "view-area same-target retry lacks per-request sequence fencing"
+grep -Fq 'stale_callback_fenced=1' "$NATIVE" ||
+    fail "view-area timeout does not explicitly fence late callbacks"
+grep -Fq 'PHASE=ALT111_VIEWAREA_FRAME_BASELINE' "$NATIVE" ||
+    fail "view-area post-command decoded-frame baseline missing"
+grep -Fq 'PHASE=ALT111_VIEWAREA_FRESH_FRAME' "$NATIVE" ||
+    fail "view-area ACK is not followed by fresh-frame observability"
+grep -Fq 'PHASE=ALT111_VIEWAREA_NO_FRESH_FRAME' "$NATIVE" ||
+    fail "view-area ACK-without-redraw diagnostic missing"
+grep -Fq 'visual_proof=pending_fresh_type111_frame' "$NATIVE" ||
+    fail "view-area ACK is still being treated as visual completion"
+python3 "$VIEW_AREA_LIFECYCLE_TEST" ||
+    fail "updateViewArea lifecycle behavioral contract failed"
 grep -Fq 'strstr(layout, "LayoutMIB2HighB9")' "$NATIVE" ||
     fail "view-area sender is not gated to the measured B9 layout family"
 grep -Fq 'native_measured_view_area_canvas' "$NATIVE" ||

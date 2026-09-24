@@ -922,7 +922,8 @@ static void alt111_event_response(int status, void *response, void *opaque) {
         if (ctx->event_kind == ALT111_EVENT_UPDATE_VIEW_AREA)
             p1404_cockpit_native_view_area_result(
                 ctx->receiver, ctx->stream, ctx->generation,
-                ctx->event_value, status, response != NULL);
+                ctx->event_seq, ctx->event_value,
+                status, response != NULL);
         else if (ctx->event_kind == ALT111_EVENT_ZOOM)
             p1404_cockpit_native_zoom_result(
                 ctx->receiver, ctx->stream, ctx->generation,
@@ -1012,7 +1013,8 @@ int alt_send_cluster_event(void *receiver, void *stream, uint32_t generation,
 
 
 int alt_send_cluster_view_area(void *receiver, void *stream,
-                               uint32_t generation, int view_area_index) {
+                               uint32_t generation, uint32_t event_seq,
+                               int view_area_index) {
     airplay_send_command_fn send_command;
     struct alt111_event_context *ctx = NULL;
     const struct altscreen_display *display = altscreen_cluster_display();
@@ -1021,7 +1023,8 @@ int alt_send_cluster_view_area(void *receiver, void *stream,
     int rc = -1;
     const int adjacent_index = view_area_index == 0 ? 1 : 0;
 
-    if (!receiver || !stream || !generation || !display || !display->uuid ||
+    if (!receiver || !stream || !generation || !event_seq ||
+        !display || !display->uuid ||
         (view_area_index != 0 && view_area_index != 1))
         return -1;
 
@@ -1057,14 +1060,15 @@ int alt_send_cluster_view_area(void *receiver, void *stream,
     ctx->generation = generation;
     ctx->event_kind = ALT111_EVENT_UPDATE_VIEW_AREA;
     ctx->event_value = view_area_index;
+    ctx->event_seq = event_seq;
     ctx->refs = 2;
 
     rc = send_command(receiver, command, alt111_event_response, ctx);
     altscreen_log(
         "PHASE=ALT111_VIEWAREA_SUBMIT receiver=%p stream=%p generation=%u "
-        "uuid=%s viewAreaIndex=%d animationDurationMillis=0 "
+        "request_seq=%u uuid=%s viewAreaIndex=%d animationDurationMillis=0 "
         "adjacentViewAreas=[%d] rc=%d same_session=1",
-        receiver, stream, generation, display->uuid,
+        receiver, stream, generation, event_seq, display->uuid,
         view_area_index, adjacent_index, rc);
 
     if (rc == 0) {

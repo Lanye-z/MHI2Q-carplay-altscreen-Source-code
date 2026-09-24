@@ -122,11 +122,18 @@ struct native_slot {
     uint64_t ui_event_at;
     uint64_t keyframe_event_at;
     uint64_t view_area_event_at;
+    uint64_t view_area_ack_at;
+    uint32_t view_area_inflight_seq;
+    uint32_t view_area_acked_seq;
+    uint32_t view_area_frame_generation;
+    uint32_t view_area_frame_count;
     int ui_event_state;       /* 0=needed, 1=inflight, 2=accepted, 3=timed-out */
     int keyframe_event_state; /* 0=needed, 1=inflight, 2=accepted, 3=timed-out */
-    int view_area_event_state;/* 0=needed, 1=inflight, 2=accepted */
+    int view_area_event_state;/* 0=needed, 1=inflight, 2=acknowledged */
     int view_area_target;     /* 0=FULL, 1=SMALL, -1=unknown */
-    int view_area_applied;    /* last accepted index, -1=unknown */
+    int view_area_applied;    /* last acknowledged index, -1=unknown */
+    int view_area_frame_baseline_valid;
+    int view_area_frame_pending;
 };
 
 struct native_thread_job {
@@ -898,6 +905,155 @@ static void native_wheel_zoom_tail(uint32_t *out_epoch, uint32_t *out_seq) {
     if (out_seq) *out_seq = tail_seq;
 }
 
+static void native_view_area_capture_frame_baseline(
+        void *receiver, void *stream, uint32_t generation,
+        uint32_t request_seq) {
+    struct p111_frame_progress_snapshot progress;
+    struct native_slot *slot;
+    int progress_ok;
+
+    memset(&progress, 0, sizeof(progress));
+    progress_ok = p111_frame_tap_get_progress(stream, &progress) &&
+                  progress.active;
+
+    native_lock();
+    slot = find_stream_locked(receiver, stream);
+    if (slot && slot->generation == generation &&
+        slot->view_area_event_state == 1 &&
+        slot->view_area_inflight_seq == request_seq) {
+        slot->view_area_frame_baseline_valid = progress_ok;
+        slot->view_area_frame_generation =
+            progress_ok ? progress.generation : 0u;
+        slot->view_area_frame_count =
+            progress_ok ? progress.frame_count : 0u;
+    }
+    native_unlock();
+
+    altscreen_log(
+        "PHASE=ALT111_VIEWAREA_FRAME_BASELINE receiver=%p stream=%p "
+        "generation=%u request_seq=%u telemetry=%s frame_generation=%u "
+        "frame_count=%u",
+        receiver, stream, generation, request_seq,
+        progress_ok ? "decoded_progress" : "unavailable",
+        progress_ok ? progress.generation : 0u,
+        progress_ok ? progress.frame_count : 0u);
+}
+
+static void native_check_view_area_fresh_frame(
+        void *receiver, void *stream, uint32_t generation) {
+    struct p111_frame_progress_snapshot progress;
+    struct native_slot *slot;
+    uint32_t request_seq = 0;
+    uint32_t baseline_generation = 0;
+    uint32_t baseline_count = 0;
+    uint64_t ack_at = 0;
+    uint64_t now = obs_now_us();
+    int view_area_index = -1;
+    int baseline_valid = 0;
+    int pending = 0;
+    int progress_ok = 0;
+    int completed = 0;
+    int timed_out = 0;
+
+    native_lock();
+    slot = find_stream_locked(receiver, stream);
+    if (slot && slot->generation == generation &&
+        slot->view_area_event_state == 2 &&
+        slot->view_area_frame_pending &&
+        slot->view_area_acked_seq != 0) {
+        pending = 1;
+        request_seq = slot->view_area_acked_seq;
+        view_area_index = slot->view_area_applied;
+        ack_at = slot->view_area_ack_at;
+        baseline_valid = slot->view_area_frame_baseline_valid;
+        baseline_generation = slot->view_area_frame_generation;
+        baseline_count = slot->view_area_frame_count;
+    }
+    native_unlock();
+    if (!pending) return;
+
+    memset(&progress, 0, sizeof(progress));
+    progress_ok = p111_frame_tap_get_progress(stream, &progress) &&
+                  progress.active;
+
+    if (!baseline_valid && progress_ok) {
+        native_lock();
+        slot = find_stream_locked(receiver, stream);
+        if (slot && slot->generation == generation &&
+            slot->view_area_event_state == 2 &&
+            slot->view_area_frame_pending &&
+            slot->view_area_acked_seq == request_seq &&
+            !slot->view_area_frame_baseline_valid) {
+            slot->view_area_frame_baseline_valid = 1;
+            slot->view_area_frame_generation = progress.generation;
+            slot->view_area_frame_count = progress.frame_count;
+            baseline_generation = progress.generation;
+            baseline_count = progress.frame_count;
+            baseline_valid = 1;
+        }
+        native_unlock();
+        if (baseline_valid) {
+            altscreen_log(
+                "PHASE=ALT111_VIEWAREA_FRAME_BASELINE_LATE receiver=%p "
+                "stream=%p generation=%u request_seq=%u viewAreaIndex=%d "
+                "frame_generation=%u frame_count=%u",
+                receiver, stream, generation, request_seq, view_area_index,
+                baseline_generation, baseline_count);
+        }
+        return;
+    }
+
+    if (progress_ok && baseline_valid &&
+        (progress.generation != baseline_generation ||
+         progress.frame_count != baseline_count)) {
+        native_lock();
+        slot = find_stream_locked(receiver, stream);
+        if (slot && slot->generation == generation &&
+            slot->view_area_event_state == 2 &&
+            slot->view_area_frame_pending &&
+            slot->view_area_acked_seq == request_seq) {
+            slot->view_area_frame_pending = 0;
+            completed = 1;
+        }
+        native_unlock();
+        if (completed) {
+            altscreen_log(
+                "PHASE=ALT111_VIEWAREA_FRESH_FRAME receiver=%p stream=%p "
+                "generation=%u request_seq=%u viewAreaIndex=%d "
+                "baseline_generation=%u baseline_count=%u "
+                "frame_generation=%u frame_count=%u "
+                "meaning=fresh_type111_after_ack_not_semantic_relayout_proof",
+                receiver, stream, generation, request_seq, view_area_index,
+                baseline_generation, baseline_count,
+                progress.generation, progress.frame_count);
+        }
+        return;
+    }
+
+    if (ack_at && now > ack_at + NATIVE_EVENT_TIMEOUT_SECONDS) {
+        native_lock();
+        slot = find_stream_locked(receiver, stream);
+        if (slot && slot->generation == generation &&
+            slot->view_area_event_state == 2 &&
+            slot->view_area_frame_pending &&
+            slot->view_area_acked_seq == request_seq) {
+            slot->view_area_frame_pending = 0;
+            timed_out = 1;
+        }
+        native_unlock();
+        if (timed_out) {
+            altscreen_log(
+                "WARN PHASE=ALT111_VIEWAREA_NO_FRESH_FRAME receiver=%p "
+                "stream=%p generation=%u request_seq=%u viewAreaIndex=%d "
+                "ack_age_s=%llu telemetry=%s "
+                "meaning=ack_without_observed_new_type111_frame",
+                receiver, stream, generation, request_seq, view_area_index,
+                (unsigned long long)(now - ack_at),
+                progress_ok ? "decoded_progress" : "unavailable");
+        }
+    }
+}
+
 /*
  * This monitor is the same-session bridge between Audi NAV_VIEW_SIZE_CHOICE
  * and CarPlay's standard updateViewArea command.  Java publishes the OEM state;
@@ -914,6 +1070,8 @@ static void *native_monitor_worker(void *arg) {
     int visible, pending, live, route_ready, event_kind, send_rc;
     int desired_view_area = -1, view_area_send_index, zoom_gate, cluster_owned;
     int wheel_generation_current;
+    uint32_t view_area_command_seq = 0;
+    uint32_t view_area_send_seq = 0;
     int zoom_target_steps = 0;
     int zoom_sent_steps = 0;
     int zoom_stall_latched = 0;
@@ -1004,6 +1162,7 @@ static void *native_monitor_worker(void *arg) {
             zoom_events, WHEEL_ZOOM_BATCH_MAX);
         event_kind = 0;
         view_area_send_index = -1;
+        view_area_send_seq = 0;
         zoom_gate = 0;
 
         native_lock();
@@ -1031,17 +1190,24 @@ static void *native_monitor_worker(void *arg) {
             }
 
             /*
-             * View-area commands are safe to retry: they only select one of
-             * the two viewAreas already declared for type111. A stale callback
-             * cannot mark a newer target accepted because the callback carries
-             * the requested index and result handling checks it.
+             * updateViewArea is idempotent by target index, but a timed-out
+             * request may still complete late. Fence every attempt with its own
+             * sequence so an old ACK can never satisfy a retry to the same
+             * FULL/SMALL target.
              */
             if (slot->view_area_event_state == 1 &&
                 now > slot->view_area_event_at + NATIVE_EVENT_TIMEOUT_SECONDS) {
-                altscreen_log("WARN PHASE=ALT111_VIEWAREA_TIMEOUT receiver=%p stream=%p generation=%u target=%d retry=1",
-                              receiver, stream, generation,
-                              slot->view_area_target);
+                altscreen_log(
+                    "WARN PHASE=ALT111_VIEWAREA_TIMEOUT receiver=%p stream=%p "
+                    "generation=%u request_seq=%u target=%d retry=1 "
+                    "stale_callback_fenced=1",
+                    receiver, stream, generation,
+                    slot->view_area_inflight_seq,
+                    slot->view_area_target);
                 slot->view_area_event_state = 0;
+                slot->view_area_inflight_seq = 0;
+                slot->view_area_frame_pending = 0;
+                slot->view_area_frame_baseline_valid = 0;
             }
 
             if (desired_view_area == 0 || desired_view_area == 1) {
@@ -1054,7 +1220,12 @@ static void *native_monitor_worker(void *arg) {
                                       slot->config_width,
                                       slot->config_height));
                     slot->view_area_target = desired_view_area;
+                    slot->view_area_applied = -1;
                     slot->view_area_event_state = 0;
+                    slot->view_area_inflight_seq = 0;
+                    slot->view_area_acked_seq = 0;
+                    slot->view_area_frame_pending = 0;
+                    slot->view_area_frame_baseline_valid = 0;
                 }
             }
 
@@ -1078,9 +1249,15 @@ static void *native_monitor_worker(void *arg) {
                         slot->view_area_target == 1) &&
                        slot->view_area_applied != slot->view_area_target &&
                        slot->view_area_event_state != 1) {
+                ++view_area_command_seq;
+                if (!view_area_command_seq) ++view_area_command_seq;
                 slot->view_area_event_state = 1;
                 slot->view_area_event_at = now;
+                slot->view_area_inflight_seq = view_area_command_seq;
+                slot->view_area_frame_pending = 0;
+                slot->view_area_frame_baseline_valid = 0;
                 view_area_send_index = slot->view_area_target;
+                view_area_send_seq = view_area_command_seq;
                 event_kind = ALT111_EVENT_UPDATE_VIEW_AREA;
             }
         }
@@ -1093,11 +1270,15 @@ static void *native_monitor_worker(void *arg) {
         zoom_gate = route_ready && cluster_owned && wheel_generation_current;
 
         if (event_kind == ALT111_EVENT_UPDATE_VIEW_AREA) {
+            native_view_area_capture_frame_baseline(
+                receiver, stream, generation, view_area_send_seq);
             send_rc = alt_send_cluster_view_area(
-                receiver, stream, generation, view_area_send_index);
+                receiver, stream, generation,
+                view_area_send_seq, view_area_send_index);
             if (send_rc != 0)
                 p1404_cockpit_native_view_area_result(
-                    receiver, stream, generation, view_area_send_index,
+                    receiver, stream, generation,
+                    view_area_send_seq, view_area_send_index,
                     send_rc, 0);
         } else if (event_kind) {
             send_rc = alt_send_cluster_event(receiver, stream, generation, event_kind);
@@ -1105,6 +1286,8 @@ static void *native_monitor_worker(void *arg) {
                 p1404_cockpit_native_event_result(receiver, stream, generation,
                                                    event_kind, send_rc, 0);
         }
+
+        native_check_view_area_fresh_frame(receiver, stream, generation);
 
         if (!zoom_gate &&
             (zoom_target_steps != 0 || zoom_sent_steps != 0 ||
@@ -1584,34 +1767,47 @@ void p1404_cockpit_native_event_result(void *receiver, void *stream,
 
 void p1404_cockpit_native_view_area_result(void *receiver, void *stream,
                                             uint32_t generation,
+                                            uint32_t event_seq,
                                             int view_area_index,
                                             int status,
                                             int response_received) {
     struct native_slot *slot;
+    uint64_t result_now = obs_now_us();
     int accepted = status == 0 && response_received;
     int applied = 0;
+    int stale = 0;
 
     native_lock();
     slot = find_stream_locked(receiver, stream);
     if (slot && slot->generation == generation &&
         slot->view_area_target == view_area_index &&
-        slot->view_area_event_state == 1) {
+        slot->view_area_event_state == 1 &&
+        slot->view_area_inflight_seq == event_seq) {
         if (accepted) {
             slot->view_area_applied = view_area_index;
             slot->view_area_event_state = 2;
+            slot->view_area_acked_seq = event_seq;
+            slot->view_area_ack_at = result_now;
+            slot->view_area_frame_pending = 1;
         } else {
             slot->view_area_event_state = 0;
+            slot->view_area_inflight_seq = 0;
+            slot->view_area_frame_pending = 0;
+            slot->view_area_frame_baseline_valid = 0;
         }
         applied = 1;
+    } else {
+        stale = 1;
     }
     native_unlock();
 
     altscreen_log(
         "PHASE=ALT111_VIEWAREA_RESULT receiver=%p stream=%p generation=%u "
-        "viewAreaIndex=%d status=%d response_received=%d accepted=%d "
-        "target_still_current=%d retry=%d",
-        receiver, stream, generation, view_area_index, status,
-        response_received, accepted && applied, applied,
+        "request_seq=%u viewAreaIndex=%d status=%d response_received=%d "
+        "acknowledged=%d target_still_current=%d stale_callback=%d retry=%d "
+        "visual_proof=pending_fresh_type111_frame",
+        receiver, stream, generation, event_seq, view_area_index, status,
+        response_received, accepted && applied, applied, stale,
         applied && !accepted);
 }
 

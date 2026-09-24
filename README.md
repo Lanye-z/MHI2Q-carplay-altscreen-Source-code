@@ -312,6 +312,9 @@ Cluster visible area
   - Classic / Sport 状态跟随 HMI。
   - Sport Small 使用当前实车测得的 `-476,0` map translation。
   - HMI state 短暂缺失时 retain previous placement。
+  - V3.4 在现有双 ViewArea 几何不变的前提下，为每次 `updateViewArea` 增加独立 `request_seq`；超时重试后迟到的旧 ACK 不能再误确认新请求。
+  - ACK 只记为协议层 acknowledged，不再等价于“iPhone 已完成地图重排”；运行时额外记录 ACK 后第一张 fresh Type111 decoded frame，并对“ACK 后 4 秒仍无新帧”单独报警。
+  - 本轮**不复制 ER 泄露包的固定 safeArea/Context 数值**，也不改变当前 `68..450`、Context80、Sport Small `-476,0` 与 renderer 链。手机端是否在 fresh frame 内真正重新定位，仍以新一轮实车视频与日志为准。
 
 - **Virtual Cockpit 输出**
   - 使用现有 GLES / displayable3 路径。
