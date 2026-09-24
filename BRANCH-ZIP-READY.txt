@@ -1,7 +1,7 @@
 BRANCH_ZIP_READY=YES
-branch=experiment/oem-layout-second-screen_v3.4
+branch=experiment/oem-layout-second-screen_v3.5
 validated_source_commit=d048b6d1d123566dd2b63722ccfb38245a5828bc
-mode=PRIVATE111_DIRECT_DISPLAY_V3_4_STREAM_DRIVEN
+mode=PRIVATE111_DIRECT_DISPLAY_V3_5_COLD_START
 jar_size=116485
 jar_cksum=3164421977
 jar_sha256=62997ce4544900a84a8774565af2e3e348e6a59332ff23577b700d9d5ce252b4
@@ -50,7 +50,7 @@ boot_log_capture=VOLATILE_BOOT_FLAT_CURSOR_NO_REPLAY
 rgi_metadata_sha256=87d10f67fbb3dc142642d899977bab0a6eb4009f61d3bcd873d0cce9e01511f7
 rgi_messages=0x5200,0x5201,0x5202,0x5203,0x5204
 rebuild_required=none
-vehicle_zip_status=READY_FOR_V3_4_VEHICLE_TEST
+vehicle_zip_status=PENDING_V3_5_BUILD
 install_policy=EXTRACT_BRANCH_ZIP_CONTENTS_TO_SD_ROOT
 
 negotiation_policy=ALWAYS_ON_WHILE_PRELOAD_INSTALLED
@@ -60,3 +60,8 @@ stream_ready_marker=/tmp/altscreen-private111.stream-ready
 stream_ready_stable_decoded_frames=2
 fixed_display_delay=NONE
 sidecar_attach_policy=RECOVER_CURRENT_SESSION
+cold_start_policy=EARLY_NEGOTIATION_READY
+cold_start_capability_wait_ms=500
+cold_start_geometry_gate=ASYNC
+cold_start_bootstrap_canvas=1440x542_NEGOTIATION_ONLY
+cold_start_renderer_geometry=LIVE_SCREEN_MATCH_REQUIRED
