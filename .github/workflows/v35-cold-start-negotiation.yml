@@ -19,6 +19,8 @@ on:
       - 'VERIFY-NATIVE-DIRECT-RELEASE.sh'
       - 'VERIFY-BRANCH-ZIP-READY.sh'
       - 'BRANCH-ZIP-READY.txt'
+      - 'README.md'
+      - 'Toolbox/GEM/mqb-carplayAltScreen.esd'
       - 'PACKAGE_SOURCE_MAP.json'
       - 'SHA256SUMS.txt'
   workflow_dispatch:
@@ -437,6 +439,8 @@ jobs:
               "VERIFY-NATIVE-DIRECT-RELEASE.sh",
               "VERIFY-BRANCH-ZIP-READY.sh",
               "BRANCH-ZIP-READY.txt",
+              "README.md",
+              "Toolbox/GEM/mqb-carplayAltScreen.esd",
           }
 
           package = root / "PACKAGE_SOURCE_MAP.json"
@@ -484,7 +488,16 @@ jobs:
           grep -Fq 'safearea_full=370,75,700,375' BRANCH-ZIP-READY.txt
           grep -Fq 'safearea_small=490,75,460,375' BRANCH-ZIP-READY.txt
           grep -Fq 'oem_lower_bar=CARPLAY_RGI_FCT19_21_22_PLUS_KOMO_GRAY_BAR_V4' BRANCH-ZIP-READY.txt
-          echo 'V35_BRANCH_ZIP_CONTRACT=PASS'
+          grep -Fq 'Version: V3.5 - cold-start + dynamic ViewArea' Toolbox/GEM/mqb-carplayAltScreen.esd
+          grep -Fq 'type111 -> H264 tap -> stock OMX -> decoded SHM -> displayable3 -> Java Context80' Toolbox/GEM/mqb-carplayAltScreen.esd
+          ! grep -Fq 'Context80 Readback V1' Toolbox/GEM/mqb-carplayAltScreen.esd
+          ! grep -Fq 'type111 -> Window58 -> screen_read_window' Toolbox/GEM/mqb-carplayAltScreen.esd
+          if grep -Fq '\n\n>' README.md; then
+            echo 'ERROR: README contains literal escaped newlines in branch status' >&2
+            exit 1
+          fi
+          grep -Fq 'READY_FOR_V3_5_VEHICLE_TEST' README.md
+          echo 'V35_BRANCH_ZIP_CONTRACT=PASS GEM=V3.5 README_STATUS=SYNCED'
 
       - name: Promote V3.5 runtime
         run: |
