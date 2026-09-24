@@ -20,6 +20,7 @@ MAIN_CPP="$ROOT/Toolbox/carplay_alt_screen/mirror_display/src/main.cpp"
 HMI_SRC="$ROOT/Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java"
 WHEEL_SRC="$ROOT/Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java"
 HMI_BUILD_INFO="$ROOT/Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt"
+BAP_BRIDGE="$ROOT/Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/BAPBridge.java"
 WHEEL_PACING_TEST="$ROOT/Toolbox/carplay_alt_screen/tests/test_wheel_zoom_pacing.py"
 VIEW_AREA_LIFECYCLE_TEST="$ROOT/Toolbox/carplay_alt_screen/tests/test_view_area_lifecycle.py"
 START="$ROOT/Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh"
@@ -52,7 +53,7 @@ sha256_file(){
 }
 binary_strings(){ strings "$1" 2>/dev/null || grep -a -o '[[:print:]][[:print:]]*' "$1"; }
 
-for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$TAP_H" "$AIRPLAY_SRC" "$RESOLVE" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$GL_RENDERER_CPP" "$MAIN_CPP" "$HMI_SRC" "$WHEEL_SRC" "$HMI_BUILD_INFO" "$WHEEL_PACING_TEST" "$VIEW_AREA_LIFECYCLE_TEST" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$SUPERVISOR" "$HOOK_SRC" "$STOP" "$FINISH" "$INSTALL" "$STATUS" "$CHAIN" "$INSTALL_TXN" "$RESTORE_TXN" "$RESTORE_APPLY" "$PERSIST_DIAG" "$BOOT_DIAG" "$START_TX_TEST" "$STORAGE_POLICY_TEST" "$INSTALL_TX_TEST" "$RESTORE_TX_TEST"; do
+for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$TAP_H" "$AIRPLAY_SRC" "$RESOLVE" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$GL_RENDERER_CPP" "$MAIN_CPP" "$HMI_SRC" "$WHEEL_SRC" "$HMI_BUILD_INFO" "$BAP_BRIDGE" "$WHEEL_PACING_TEST" "$VIEW_AREA_LIFECYCLE_TEST" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$SUPERVISOR" "$HOOK_SRC" "$STOP" "$FINISH" "$INSTALL" "$STATUS" "$CHAIN" "$INSTALL_TXN" "$RESTORE_TXN" "$RESTORE_APPLY" "$PERSIST_DIAG" "$BOOT_DIAG" "$START_TX_TEST" "$STORAGE_POLICY_TEST" "$INSTALL_TX_TEST" "$RESTORE_TX_TEST"; do
     [ -s "$f" ] || fail "missing/empty: $f"
 done
 
@@ -211,7 +212,10 @@ HOOK_PENDING=0
 NATIVE_REBUILDS=0
 SAFEAREA_V32=0
 SAFEAREA_V33=0
-if grep -Fq 'safearea_revision=V33_OEM_X_VERTICAL_68_450' "$AIRPLAY_SRC"; then
+SAFEAREA_V35=0
+if grep -Fq 'safearea_revision=V35_OEM_X_VERTICAL_75_450' "$AIRPLAY_SRC"; then
+    SAFEAREA_V35=1
+elif grep -Fq 'safearea_revision=V33_OEM_X_VERTICAL_68_450' "$AIRPLAY_SRC"; then
     SAFEAREA_V33=1
 elif grep -Fq 'safearea_revision=V32_OEM_X_VISIBLE_Y' "$AIRPLAY_SRC"; then
     SAFEAREA_V32=1
@@ -379,6 +383,12 @@ elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V3_5' "$INFO"; th
         fail "vehicle-ready V3.5 negotiation-only bootstrap metadata missing"
     grep -Fq 'v35_renderer_geometry_policy=LIVE_SCREEN_MATCH_REQUIRED' "$INFO" ||
         fail "vehicle-ready V3.5 live renderer geometry fence metadata missing"
+    grep -Fq 'hook_safearea_policy=V35_OEM_X_VERTICAL_75_450' "$INFO" ||
+        fail "vehicle-ready V3.5 top75 safeArea metadata missing"
+    grep -Fq 'v35_lower_bar_observability=KOMO_SERVICE,FOLLOW_MODE,SETTERS,FLUSH,RG_ACTIVE,RGI_VALID' "$INFO" ||
+        fail "vehicle-ready V3.5 gray-bar observability metadata missing"
+    grep -Fq 'v35_lower_bar_observability_policy=READ_ONLY_NO_FCT17_FCT39_ACTIVATION' "$INFO" ||
+        fail "vehicle-ready V3.5 gray-bar read-only policy missing"
     binary_strings "$HOOK" | grep -Fq 'PHASE=RUNTIME_AUTHORITY policy=INSTALLED_PRELOAD' ||
         fail "promoted V3.5 hook lacks installed-preload authority marker"
     binary_strings "$HOOK" | grep -Fq 'PHASE=NEGOTIATION_READY result=PASS policy=V35_EARLY_PROTOCOL_READY' ||
@@ -389,8 +399,8 @@ elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V3_5' "$INFO"; th
         fail "promoted V3.5 hook lacks live geometry mismatch fence"
     binary_strings "$HOOK" | grep -Fq 'PHASE=PRIVATE111_STREAM_READY' ||
         fail "promoted V3.5 hook lacks native stream-ready marker"
-    binary_strings "$HOOK" | grep -Fq 'safearea_revision=V33_OEM_X_VERTICAL_68_450' ||
-        fail "promoted V3.5 hook lost V3.4/V3.3 safeArea behavior"
+    binary_strings "$HOOK" | grep -Fq 'safearea_revision=V35_OEM_X_VERTICAL_75_450' ||
+        fail "promoted V3.5 hook missing top75 safeArea behavior"
 elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V3_4' "$INFO"; then
     grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$INFO" ||
         fail "rebuilt V3.4 package is not vehicle-ready"
@@ -440,7 +450,14 @@ elif grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$INFO"; then
                 fail "V3.2 BUILD_INFO declares readable display telemetry but promoted sidecar is stale"
         fi
         if [ "$HOOK_PENDING" = 0 ]; then
-            if [ "$SAFEAREA_V33" = 1 ]; then
+            if [ "$SAFEAREA_V35" = 1 ]; then
+                binary_strings "$HOOK" | grep -Fq 'safe_yh_mapping=vertical_inset_top75_bottom450' ||
+                    fail "V3.5 universal hook missing top75/bottom450 safeArea mapping"
+                binary_strings "$HOOK" | grep -Fq 'safearea_revision=V35_OEM_X_VERTICAL_75_450' ||
+                    fail "V3.5 universal hook missing safeArea revision marker"
+                binary_strings "$HOOK" | grep -Fq 'renderer_geometry_revision=V31_ONE_TO_ONE_CLIP' ||
+                    fail "V3.5 universal hook missing retained V3.1 renderer geometry marker"
+            elif [ "$SAFEAREA_V33" = 1 ]; then
                 binary_strings "$HOOK" | grep -Fq 'safe_yh_mapping=vertical_inset_top68_bottom450' ||
                     fail "V3.3 universal hook missing tuned 60..450 safeArea mapping"
                 binary_strings "$HOOK" | grep -Fq 'safearea_revision=V33_OEM_X_VERTICAL_68_450' ||
@@ -769,7 +786,18 @@ grep -Fq 'r.w = 460u;' "$AIRPLAY_SRC" ||
     fail "SMALL safeArea width missing"
 grep -Fq 'map_plane_terminal_y_policy=metadata_only_not_renderer_offset' "$AIRPLAY_SRC" ||
     fail "OEM terminal Y=26 must remain metadata-only"
-if [ "$SAFEAREA_V33" = 1 ]; then
+if [ "$SAFEAREA_V35" = 1 ]; then
+    grep -Fq 'safe_yh_mapping=vertical_inset_top75_bottom450' "$AIRPLAY_SRC" ||
+        fail "V3.5 tuned safeArea coordinate-space diagnostic missing"
+    grep -Fq 'renderer_geometry_revision=V31_ONE_TO_ONE_CLIP' "$AIRPLAY_SRC" ||
+        fail "V3.5 must retain the V3.1 renderer geometry revision"
+    grep -Fq 'r.y = 75u;' "$AIRPLAY_SRC" ||
+        fail "V3.5 FULL/SMALL safeArea Y must be 75"
+    grep -Fq 'r.h = 375u;' "$AIRPLAY_SRC" ||
+        fail "V3.5 FULL/SMALL safeArea height must be 375"
+    grep -Fq 'physical_y = 75 + (int64_t)r.renderer_dy;' "$AIRPLAY_SRC" ||
+        fail "V3.5 physical safe-region Y must start at 75 before renderer translation"
+elif [ "$SAFEAREA_V33" = 1 ]; then
     grep -Fq 'safe_yh_mapping=vertical_inset_top68_bottom450' "$AIRPLAY_SRC" ||
         fail "V3.3 tuned safeArea coordinate-space diagnostic missing"
     grep -Fq 'renderer_geometry_revision=V31_ONE_TO_ONE_CLIP' "$AIRPLAY_SRC" ||
@@ -988,6 +1016,19 @@ if grep -F 'rm -f' "$RELEASE_STOP" | grep -Fq 'stop.requested'; then
 fi
 grep -Fq 'stop_guard=RETAINED' "$RELEASE_STOP" ||
     fail "release stop does not advertise retained stop guard"
+
+for marker in 'KOMO_SERVICE=' 'KOMO_FOLLOW_MODE=' 'SET_CURRENT_STREET=PASS' 'SET_DISTANCE=PASS' 'SET_ETA=PASS' 'ROUTE_INFO_FLUSH=ATTEMPTED' 'ROUTE_INFO_MODE=' 'RG_ACTIVE_' 'RGI_VALID_'
+do
+    grep -Fq "$marker" "$BAP_BRIDGE" ||
+        fail "V3.5 gray-bar observability marker missing: $marker"
+done
+for forbidden in 'updateRGStatus(' 'updateActiveRGType(' 'updateManeuverDescriptor(' 'updateDistanceToNextManeuver(' 'updateRGIString('; do
+    if grep -Fq "$forbidden" "$BAP_BRIDGE"; then
+        fail "V3.5 read-only gray-bar diagnostics reintroduced presentation writer: $forbidden"
+    fi
+done
+grep -Fq 'lower_bar_observability_behavior=READ_ONLY_NO_PRESENTATION_MUTATION' "$HMI_BUILD_INFO" ||
+    fail "V3.5 HMI gray-bar read-only observability metadata missing"
 
 grep -Fq 'AUTH_PRIVATE111_CORE=V35_EARLY_PROTOCOL_READY authority=installed_preload sd_runtime_gate=DISABLED geometry_gate=ASYNC' "$CTRL" ||
     fail "V3.5 controller does not expose early-protocol-ready authority"
