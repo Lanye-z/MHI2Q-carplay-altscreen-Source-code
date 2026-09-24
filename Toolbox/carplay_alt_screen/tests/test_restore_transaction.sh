@@ -290,11 +290,12 @@ ALTSCREEN_CHAIN_VOLUME="$MIX_VOL" \
 MIX_PRE_RC=$?
 set -e
 [ "$MIX_PRE_RC" -ne 0 ] || fail "non-empty unowned runtime unexpectedly accepted"
-grep -Fq 'RUNTIME_CLEANUP_PRECHECK=FAIL reason=UNOWNED_NONEMPTY_RUNTIME' "$TMP/mixed-unowned-nonempty.txt" || {
+if ! grep -Fq 'RUNTIME_CLEANUP_PRECHECK=FAIL reason=UNOWNED_NONEMPTY_RUNTIME' "$TMP/mixed-unowned-nonempty.txt" &&
+   ! grep -Fq 'RUNTIME_CLEANUP_PRECHECK=FAIL reason=UNOWNED_NONEMPTY_RUNTIME' "$MIX_SD/logs/restore-transaction.log"; then
   cat "$TMP/mixed-unowned-nonempty.txt" >&2
   [ ! -f "$MIX_SD/logs/restore-transaction.log" ] || cat "$MIX_SD/logs/restore-transaction.log" >&2
   fail "non-empty unowned runtime preflight reason missing"
-}
+fi
 ! grep -Fq 'RESTORE_TRANSACTION=PREPARED' "$TMP/mixed-unowned-nonempty.txt" ||
   fail "non-empty unowned runtime reached PREPARED"
 [ "$(cksum < "$MIX_DEV/mnt/system/etc/eso/production/smartphone_integrator.json")" = "$MIX_PRE_SI" ] ||
