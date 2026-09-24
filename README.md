@@ -1,10 +1,14 @@
 <!-- BRANCH_STATUS_BEGIN -->
-> [!IMPORTANT]
-> **分支用途：** 当前候选实验主线。继承 V3.1 后期 `OEM_TARGET_FOLLOW_V1` 滚轮逻辑，重点修复 V3.1 的纵向几何：保留 OEM 横向安全范围，同时把纵向 safeArea 从局部 `y=49,h=300` 放开到地图有效高度 `y=0,h=455`；另修复 future frame timestamp 可能误报 stall 的边缘问题。
+> [!CAUTION]
+> **V3.3 已冻结（FROZEN）。**
 >
-> **上车测试结论：** 截至 2026-09-23，当前 HEAD 已完成构建、静态校验、CI promotion 和整包 verifier，状态为 `READY_FOR_VEHICLE_TEST`；尚没有一份能够明确绑定到该 exact HEAD 的完整实车验收日志，因此当前正式结论仍是“待实车验证”，不能写成已通过。
+> **功能冻结基线：** `4860e36b0f8a1d61b92316ae379f15a3ef9cd2bc`。从 2026-09-24 起，本分支不再继续修改运行逻辑、RGI/BAP、Type111、safeArea、滚轮、安装或恢复链；后续功能开发转移到 `experiment/oem-layout-second-screen_v3.4`。本次冻结后的提交仅允许文档性说明，不代表产生新的 V3.3 runtime。
 >
-> **当前定位：** 最新待测主线；上车重点验证车辆锚点/ETA/指南针纵向位置，以及继承后的 target-follow 滚轮。
+> **已确认能力：** private111 → 原车 OMX → decoded SHM → displayable3 → Context80 第二屏链路可用；safeArea 已收口为 `top=68,bottom=450`；V3.2/V3.3 的布局、滚轮和 lower-bar RGI 数据接收链均已完成静态/CI 验证。
+>
+> **最终实车结论：** 2026-09-24 的 V3.3 日志确认 CarPlay ETA 已进入 RGI/Java，并且 `Fct22 updateTimeToDestination()` 实际持续写出；但 V3.3 的策略仍是 `BAP_ONLY_DO_NOT_DRIVE_RGI_PRESENTATION_ACTIVE`，没有激活 Audi OEM Route Guidance presentation context，因此 ETA 仍未进入原厂仪表菜单。这个问题**不再在 V3.3 修复**，由 V3.4 继续处理。
+>
+> **用途：** V3.3 仅作为“68～450 safeArea + V3.3 lower-bar partial takeover + 已验证显示/滚轮基线”的冻结对照版本。若要验证 ETA/道路/剩余距离进入 Audi 原厂导航菜单，请使用 V3.4 后续修正版。
 <!-- BRANCH_STATUS_END -->
 
 > [!IMPORTANT]
