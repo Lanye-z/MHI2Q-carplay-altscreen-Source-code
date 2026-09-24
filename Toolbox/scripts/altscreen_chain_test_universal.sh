@@ -595,7 +595,7 @@ cmd_start(){
     ensure_dirs "$session" "$STATE_DIR" || { lock_release; return 1; }
     echo "$run_id" > "$STATE_DIR/run_id"; echo "$session" > "$STATE_DIR/session_path"
 
-    # V3.4 production policy: preload installation is the persistent enable
+    # V3.5 production policy: preload installation is the persistent enable;
     # contract. SD markers remain diagnostics/rollback metadata only and may not
     # gate a CarPlay session. Remove legacy arming files so an old card cannot
     # accidentally reintroduce V3.3 authorization semantics.
@@ -604,8 +604,8 @@ cmd_start(){
           "$STATE_DIR/FORCE_START" "$STATE_DIR/FULL_CHAIN_MODE" "$STATE_DIR/NATIVE_DISPLAY_MODE"
     touch "$STATE_DIR/ACTIVE" || { lock_release; return 1; }
 
-    say "AUTH_PRIVATE111_CORE=V34_ALWAYS_ON authority=installed_preload sd_runtime_gate=DISABLED"
-    say "NEGOTIATION_POLICY=ONE_CARPLAY_SESSION automatic_main110_then_private111 no_display_gate=YES"
+    say "AUTH_PRIVATE111_CORE=V35_EARLY_PROTOCOL_READY authority=installed_preload sd_runtime_gate=DISABLED geometry_gate=ASYNC"
+    say "NEGOTIATION_POLICY=ONE_CARPLAY_SESSION automatic_main110_then_private111 no_display_gate=YES early_capability_wait=BOUNDED"
     say "DISPLAY_PATH=PRIVATE111_DIRECT source=ScreenStreamProcessData h264_shm=/carplay111_h264 decoder_backend=stock_omx_screen_linearized_shm decoded_shm=/carplay111_decoded sink=displayable3_gles context_owner=JAVA80 window58_readback=0"
     say "IAP2_THEMEASSETS_MUTATION=DISABLED policy=V33_PROVEN_PRIVATE111_WITHOUT_THEMEASSETS"
     lock_release || return 1
@@ -667,7 +667,7 @@ cmd_status(){
         echo "UNIVERSAL_PRELOAD_CONFIG=NOT_ARMED"
     fi
     for m in ACTIVE ARMED FORCE_START ARMED_IAP2; do [ -e "$STATE_DIR/$m" ] && echo "MARKER $m=PRESENT" || echo "MARKER $m=ABSENT"; done
-    echo "NEGOTIATION_POLICY=V34_ALWAYS_ON_WHILE_PRELOAD_INSTALLED sd_runtime_gate=DISABLED"
+    echo "NEGOTIATION_POLICY=V35_EARLY_PROTOCOL_READY sd_runtime_gate=DISABLED geometry_gate=ASYNC"
     echo "DISPLAY_START_POLICY=STREAM_DRIVEN stable_decoded_frames=2 fixed_delay=NONE"
     echo "FIRMWARE_PROFILE=UNIVERSAL"
     echo "RESOLVER_POLICY=dynamic_symbols_plus_ELF_relocations fail_open=YES"
