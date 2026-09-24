@@ -190,8 +190,8 @@ for marker in \
   '/tmp/mmi-mirror-hmi.state' \
   'safe_source=' \
   'safe_physical=' \
-  'safe_yh_mapping=vertical_inset_top75_bottom450' \
-  'safearea_revision=V35_OEM_X_VERTICAL_75_450' \
+  'safe_yh_mapping=vertical_inset_top72_bottom450' \
+  'safearea_revision=V35_OEM_X_VERTICAL_72_450' \
   'renderer_geometry_revision=V31_ONE_TO_ONE_CLIP' \
   'map_plane_terminal_y_policy=metadata_only_not_renderer_offset' \
   'renderer_offset=' \
