@@ -10,7 +10,7 @@ keyValue
 
 keyValue
     value   String sys 0x00000000 0
-    label   "Quarantine = reversible rename only; no recursive deletion"
+    label   "All rescue actions are logged to SD; final delete first makes verified SD backup"
     poll    0
 
 script
@@ -33,3 +33,12 @@ keyValue
 script
    value   sys 1 0x0100 "/eso/hmi/engdefs/scripts/mqb/delete_mmi_cockpit_runtime_quarantine.sh"
    label   "4) DELETE QUARANTINE (FINAL)"
+
+keyValue
+    value   String sys 0x00000000 0
+    label   "Emergency only: recreate quarantine from verified SD rescue backup"
+    poll    0
+
+script
+   value   sys 1 0x0100 "/eso/hmi/engdefs/scripts/mqb/restore_mmi_cockpit_rescue_sd_backup.sh"
+   label   "5) RESTORE SD BACKUP TO QUARANTINE"
