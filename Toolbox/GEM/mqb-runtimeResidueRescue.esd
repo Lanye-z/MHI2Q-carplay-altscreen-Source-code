@@ -27,7 +27,7 @@ script
 
 keyValue
     value   String sys 0x00000000 0
-    label   "After reboot + verified V3.4 only:"
+    label   "After reboot + verified V3.4 or OEM restore:"
     poll    0
 
 script
