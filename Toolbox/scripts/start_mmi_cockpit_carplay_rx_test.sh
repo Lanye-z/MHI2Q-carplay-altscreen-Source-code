@@ -225,7 +225,7 @@ fi
 stage PRECHECK_SIDECAR
 [ -x "$MIRROR/carplay-alt111-mirror-display" ] || pre_fail "direct-display sidecar binary missing"
 [ -x "$MIRROR_START" ] || pre_fail "direct-display sidecar launcher missing"
-[ -x "$MIRROR_SUPERVISOR" ] || pre_fail "V3.4 stream supervisor missing"
+[ -x "$MIRROR_SUPERVISOR" ] || pre_fail "V3.5 stream supervisor missing"
 
 stage LOCATE_STARTUP
 STARTUP=""
@@ -525,7 +525,7 @@ trap - 0 1 2 15
 echo "DISPLAY_PATH=PRIVATE111_DIRECT source=ScreenStreamProcessData h264_shm=/carplay111_h264 decoder_backend=stock_omx_screen_linearized_shm decoded_shm=/carplay111_decoded sink=displayable3_gles window58_readback=0"
 echo "HMI_CONTROL_PLANE=JAVA80 context=80 composite=98,101,102,3"
 echo "CONTEXT_POLICY=JAVA_ONLY native_dmdt=0 sidecar_dmdt=0"
-echo "PRIVATE111_NEGOTIATION_POLICY=ALWAYS_ON_WHILE_PRELOAD_INSTALLED sd_runtime_gate=DISABLED"
+echo "PRIVATE111_NEGOTIATION_POLICY=V35_EARLY_PROTOCOL_READY sd_runtime_gate=DISABLED geometry_gate=ASYNC"
 echo "DISPLAY_START_POLICY=STREAM_DRIVEN marker=/tmp/altscreen-private111.stream-ready stable_decoded_frames=2 fixed_delay=NONE"
 echo "DYNAMIC_JAVA80_DEMAND=/tmp/mmi-mirror-active owner=stream_supervisor"
 echo "READY_MARKER=/tmp/mmi-mirror-basevideo.ready meaning=destination_first_successful_gles_present"
