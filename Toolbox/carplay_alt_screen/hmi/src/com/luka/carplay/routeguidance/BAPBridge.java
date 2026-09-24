@@ -529,7 +529,11 @@ public final class BAPBridge {
 
     private static Boolean readRgiDataValid(ClusterService cs) {
         if (cs == null) return null;
-        Boolean value = readBooleanFieldExact(cs, new String[]{
+        Boolean value = readBooleanGetterExact(cs, new String[]{
+            "isRgiDataValid", "isRGIDataValid", "getRgiDataValid", "getRGIDataValid"
+        }, "RGI_VALID");
+        if (value != null) return value;
+        value = readBooleanFieldExact(cs, new String[]{
             "rgiDataValid", "RGIDataValid", "mRgiDataValid", "mRGIDataValid"
         }, "RGI_VALID");
         if (value != null) return value;
@@ -539,7 +543,13 @@ public final class BAPBridge {
 
     private static Boolean readKomoFollowMode(ClusterService cs) {
         if (cs == null) return null;
-        Boolean value = readBooleanFieldExact(cs, new String[]{
+        Boolean value = readBooleanGetterExact(cs, new String[]{
+            "isKOMOFollowMode", "isKomoFollowMode", "getKOMOFollowMode",
+            "getKomoFollowMode", "isFollowMode", "isRouteInfoFollowMode",
+            "isRouteInfoModeFollow"
+        }, "KOMO_FOLLOW");
+        if (value != null) return value;
+        value = readBooleanFieldExact(cs, new String[]{
             "komoFollowMode", "KOMOFollowMode", "followMode",
             "routeInfoFollowMode", "routeInfoModeFollow"
         }, "KOMO_FOLLOW");
@@ -557,6 +567,33 @@ public final class BAPBridge {
         if (value != null) return value;
         return readBooleanFieldByHints(container,
             new String[]{"follow"}, "KOMO_FOLLOW_CONTAINER");
+    }
+
+    private static Boolean readBooleanGetterExact(
+            Object target, String[] names, String probe) {
+        if (target == null || names == null) return null;
+        for (int i = 0; i < names.length; ++i) {
+            try {
+                Method m = findMethod(target.getClass(), names[i], new Class[0]);
+                if (m == null) continue;
+                Class type = m.getReturnType();
+                if (type != Boolean.TYPE && type != Boolean.class) continue;
+                m.setAccessible(true);
+                Object raw = m.invoke(target, new Object[0]);
+                if (raw instanceof Boolean) {
+                    Boolean value = (Boolean)raw;
+                    Log.i(TAG, probe + "_PROBE=GETTER_EXACT"
+                        + " owner=" + target.getClass().getName()
+                        + " method=" + names[i]
+                        + " value=" + booleanBit(value));
+                    return value;
+                }
+            } catch (Throwable t) {
+                Log.w(TAG, probe + "_PROBE=GETTER_FAILED method="
+                    + names[i] + " error=" + t);
+            }
+        }
+        return null;
     }
 
     private static Boolean readBooleanFieldExact(
