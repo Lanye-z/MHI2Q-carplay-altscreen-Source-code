@@ -27,7 +27,6 @@ extern void altscreen_log(const char *fmt, ...);
 
 /* V3.4 fixed volatile handoff: never written to persistent /mnt/app or SD. */
 #define P111_STREAM_READY_PATH "/tmp/altscreen-private111.stream-ready"
-#define P111_STREAM_READY_TMP  "/tmp/altscreen-private111.stream-ready.new"
 
 struct p111_avcc_cache {
     void *stream;
@@ -98,7 +97,6 @@ static uint32_t tap_now_us32(void) {
 
 static void stream_ready_clear_locked(void) {
     (void)unlink(P111_STREAM_READY_PATH);
-    (void)unlink(P111_STREAM_READY_TMP);
     g_stream_ready_generation = 0u;
 }
 
@@ -127,7 +125,14 @@ static int stream_ready_publish_locked(void) {
                  (unsigned)g_frame->sequence);
     if (n <= 0 || (size_t)n >= sizeof(payload)) return 0;
 
-    fd = open(P111_STREAM_READY_TMP, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    /*
+     * QNX target headers used by this hook do not expose rename() in the
+     * freestanding build profile. Publish the fixed volatile marker in-place.
+     * A short/partial write is immediately unlinked; the supervisor also
+     * validates every field plus producer PID/generation before acting, so a
+     * concurrently observed partial file is fail-closed for display startup.
+     */
+    fd = open(P111_STREAM_READY_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) {
         altscreen_log("WARN PHASE=PRIVATE111_STREAM_READY marker_open_failed errno=%d fail_open=YES",
                       errno);
@@ -135,10 +140,9 @@ static int stream_ready_publish_locked(void) {
     }
     wr = write(fd, payload, (size_t)n);
     (void)close(fd);
-    if (wr != (ssize_t)n || rename(P111_STREAM_READY_TMP,
-                                    P111_STREAM_READY_PATH) != 0) {
+    if (wr != (ssize_t)n) {
         int saved = errno;
-        (void)unlink(P111_STREAM_READY_TMP);
+        (void)unlink(P111_STREAM_READY_PATH);
         altscreen_log("WARN PHASE=PRIVATE111_STREAM_READY marker_publish_failed errno=%d fail_open=YES",
                       saved);
         return 0;
