@@ -1,6 +1,6 @@
-source_commit=16d668efb748251e534a1f7b5584948117318679
+source_commit=22a6371750690b91387f2b70d508ce1f7ab50095
 branch=experiment/oem-layout-second-screen_v3.3
-utc=2026-09-24T01:12:53Z
+utc=2026-09-24T01:13:42Z
 
 == shell syntax ==
 -- Toolbox/scripts/altscreen_chain_test.sh
@@ -17,32 +17,12 @@ rc=0
 rc=0
 
 == restore transaction test ==
-SD_WRITE_PROBE scope=RESTORE_TRANSACTION phase=INITIAL path=/tmp/altscreen-restore-txn.IOTGaI/mixed-sd result=PASS
-SD_WRITE=PASS scope=RESTORE_TRANSACTION volume=/tmp/altscreen-restore-txn.IOTGaI/mixed-sd already_writable=1
-===== V3 transactional RESTORE ORIGINAL started =====
-RESTORE_HMI_BACKUP=PASS original=present project_managed=NO production_changed=NO
-RESTORE_PREFLIGHT_STARTUP=PASS production_changed=NO
-ERROR: native/runtime restore precheck failed
-RESTORE=REFUSED production_changed=NO
-===== V3 transactional RESTORE ORIGINAL started =====
-RESTORE_HMI_BACKUP=PASS original=present project_managed=NO production_changed=NO
-RESTORE_PREFLIGHT_STARTUP=PASS production_changed=NO
-ROUTER_PROFILE=UNIVERSAL
-SD_WRITE_PROBE scope=CONTROLLER_restore-precheck phase=INITIAL path=/tmp/altscreen-restore-txn.IOTGaI/mixed-sd result=PASS
-SD_WRITE=PASS scope=CONTROLLER_restore-precheck volume=/tmp/altscreen-restore-txn.IOTGaI/mixed-sd already_writable=1
-LOCK_ACQUIRED pid=2921 action=restore-precheck
-RESTORE_PRECHECK=PASS profile=UNIVERSAL production_changed=NO
-LOCK_RELEASE=PASS
-RUNTIME_CLEANUP_PRECHECK=FAIL reason=UNOWNED_NONEMPTY_RUNTIME path=/mnt/app/root/carplay-altscreen production_changed=NO
-FAIL: runtime cleanup precheck failed; production files unchanged
-ERROR: native/runtime restore precheck failed
-RESTORE=REFUSED production_changed=NO
-RESTORE_TRANSACTION_TEST=FAIL: non-empty unowned runtime preflight reason missing
-restore_test_rc=1
+RESTORE_TRANSACTION_TEST=PASS prepared_sync_fail_closed=1 precheck_fail_closed=1 poisoned_hmi_backup_fail_closed=1 absent_backup_live_conflict_fail_closed=1 runtime_cleanup_preflight_fail_closed=1 apply_failure_rollback=1 exact_rollback_verify=1 stale_terminal_cleanup=1 corrupt_snapshot_non_destructive=1 mixed_unowned_runtime_recovery=1 mixed_missing_runtime_recovery=1
+restore_test_rc=0
 
 == storage policy test ==
 STORAGE_POLICY_TEST=PASS tmp=flat_files_only install_router=flat start_txn=flat install_txn=sd_reboot_recoverable_exact_rollback prepared_durable=1 snapshot_integrity=1 terminal_nonblocking=1 recovery_set_verify=1 install_ops=sd_fail_closed restore_ops=sd_preferred_tmp_fallback mirror_runtime=flat hook_log=flat restore_txn=sd_reboot_recoverable persistent_logs=sd managed_residue_reasons=explicit
 SD_RW_POLICY_TEST=PASS policy=PROBE_REMOUNT_REPROBE
 storage_test_rc=0
 
-AUDIT_RESULT syntax_rc=0 restore_rc=1 storage_rc=0
+AUDIT_RESULT syntax_rc=0 restore_rc=0 storage_rc=0
