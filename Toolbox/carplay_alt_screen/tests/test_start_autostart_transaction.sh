@@ -22,11 +22,9 @@ make_fixture(){
 #!/bin/sh
 state="$ALTSCREEN_CHAIN_VOLUME/MMI-Cockpit-Carplay/state"
 mkdir -p "$state"
-touch "$state/ARMED" "$state/ARMED_MUTATE" "$state/ARMED_INFO"       "$state/ARMED_FEATURE" "$state/ARMED_CREATE111" "$state/ACTIVE" "$state/FORCE_START"
+touch "$state/ACTIVE"
 echo fixture_run > "$state/run_id"
 echo fixture_session > "$state/session_path"
-mkdir -p "$ALTSCREEN_CHAIN_ROOT/mnt/app/root/carplay-altscreen/state"
-echo fixture_run > "$ALTSCREEN_CHAIN_ROOT/mnt/app/root/carplay-altscreen/state/fullchain_probe"
 exit "${MOCK_CONTROLLER_RC:-0}"
 MOCK_CTRL
 
@@ -38,6 +36,16 @@ MOCK_START
 #!/bin/sh
 exit 0
 MOCK_STOP
+    cat > "$app/bin/mirror/stream_supervisor.sh" <<'MOCK_SUP'
+#!/bin/sh
+pf="$ALTSCREEN_CHAIN_ROOT/tmp/altscreen_stream_supervisor.pid"
+old=$(cat "$pf" 2>/dev/null || true)
+if [ -n "$old" ] && kill -0 "$old" 2>/dev/null; then exit 0; fi
+sleep 300 &
+pid=$!
+echo "$pid" > "$pf"
+exit 0
+MOCK_SUP
     cat > "$app/bin/mirror/carplay-alt111-mirror-display" <<'MOCK_BIN'
 #!/bin/sh
 exit 0
@@ -60,7 +68,14 @@ run_start(){
 
 tmp=${TMPDIR:-/tmp}/altscreen-start-autostart-test.$$
 rm -rf "$tmp"
-trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+cleanup(){
+    find "$tmp" -type f -name altscreen_stream_supervisor.pid 2>/dev/null | while IFS= read -r pf; do
+        pid=$(cat "$pf" 2>/dev/null || true)
+        [ -z "$pid" ] || kill "$pid" 2>/dev/null || true
+    done
+    rm -rf "$tmp"
+}
+trap cleanup EXIT HUP INT TERM
 mkdir -p "$tmp"
 
 # Success with a pre-existing state directory proves QNX-safe idempotent setup.
@@ -69,11 +84,19 @@ live=$1; vol=$2
 run_start "$live" "$vol" "$tmp/success1.log" || fail "first START failed"
 grep -Fq 'START=PASS integrated=' "$tmp/success1.log" || fail "first START pass marker missing"
 [ -f "$live/mnt/app/root/carplay-altscreen/state/basevideo3.enabled" ] || fail "boot-demand marker missing"
-[ -f "$live/tmp/mmi-mirror-active" ] || fail "current-boot demand missing"
+[ ! -e "$live/tmp/mmi-mirror-active" ] || fail "V3.4 asserted display demand before stream-ready"
+[ -s "$live/tmp/altscreen_stream_supervisor.pid" ] || fail "stream supervisor pid missing"
+sup=$(cat "$live/tmp/altscreen_stream_supervisor.pid" 2>/dev/null || true)
+[ -n "$sup" ] && kill -0 "$sup" 2>/dev/null || fail "stream supervisor is not alive"
 [ "$(grep -c '^# BEGIN ALT111 BASEVIDEO3 AUTOSTART$' "$live/mnt/system/etc/boot/startup.sh")" = 1 ] ||
     fail "autostart block count is not one"
 grep -Fq '/tmp/altscreen_autostart.log' "$live/mnt/system/etc/boot/startup.sh" ||
     fail "autostart log path is not canonical"
+grep -Fq '/mnt/app/root/carplay-altscreen/bin/mirror/stream_supervisor.sh' "$live/mnt/system/etc/boot/startup.sh" ||
+    fail "V3.4 autostart does not launch the stream supervisor"
+if grep -Fq 'touch /tmp/mmi-mirror-active' "$live/mnt/system/etc/boot/startup.sh"; then
+    fail "V3.4 boot autostart still asserts display demand before stream-ready"
+fi
 if find "$live/mnt/system/etc/boot" -type f -name 'startup.sh.basevideo3.*' | grep -q .; then
     fail "START leaked transaction scratch into /mnt/system"
 fi
@@ -99,12 +122,12 @@ set -e
 [ "$rc" = 7 ] || fail "repeated controller failure rc=$rc expected=7"
 cmp -s "$tmp/startup.before" "$live/mnt/system/etc/boot/startup.sh" ||
     fail "repeated failure did not restore startup.sh"
-[ -f "$vol/MMI-Cockpit-Carplay/state/FORCE_START" ] ||
-    fail "pre-existing controller authorization was incorrectly removed"
+[ -f "$vol/MMI-Cockpit-Carplay/state/ACTIVE" ] ||
+    fail "pre-existing controller transaction state was incorrectly removed"
 [ -f "$live/mnt/app/root/carplay-altscreen/state/basevideo3.enabled" ] ||
     fail "pre-existing boot demand was incorrectly removed"
-[ -f "$live/tmp/mmi-mirror-active" ] ||
-    fail "pre-existing current-boot demand was incorrectly removed"
+[ ! -e "$live/tmp/mmi-mirror-active" ] ||
+    fail "repeated START incorrectly asserted display demand without stream-ready"
 grep -Fq 'START_FAIL_STAGE=CONTROLLER_START rc=7' "$tmp/repeat_fail.log" ||
     fail "repeated failure stage/rc diagnostic missing"
 
@@ -124,11 +147,11 @@ cmp -s "$tmp/fresh.before" "$live2/mnt/system/etc/boot/startup.sh" ||
     fail "fresh failure left boot-demand marker"
 [ ! -e "$live2/tmp/mmi-mirror-active" ] ||
     fail "fresh failure left current-boot demand"
-for marker in ARMED ARMED_MUTATE ARMED_INFO ARMED_FEATURE ARMED_CREATE111 ACTIVE FORCE_START run_id session_path; do
+for marker in ACTIVE run_id session_path; do
     [ ! -e "$vol2/MMI-Cockpit-Carplay/state/$marker" ] || fail "fresh failure left controller marker $marker"
 done
 [ ! -e "$live2/mnt/app/root/carplay-altscreen/state/fullchain_probe" ] ||
-    fail "fresh failure left runtime authorization probe"
+    fail "V3.4 unexpectedly created a runtime authorization probe"
 grep -Fq 'START_ROLLBACK_CONTROLLER=DISARMED_NEW_TRANSACTION' "$tmp/fresh_fail.log" ||
     fail "fresh failure controller rollback diagnostic missing"
 grep -Fq 'START_ROLLBACK_AUTOSTART=RESTORED' "$tmp/fresh_fail.log" ||
@@ -137,4 +160,4 @@ if find "$live2/mnt/system/etc/boot" -type f -name 'startup.sh.basevideo3.*' | g
     fail "failed START leaked transaction scratch into /mnt/system"
 fi
 
-echo "START_AUTOSTART_TRANSACTION_TEST=PASS idempotent_state=1 persistent_journal=1 rollback=transactional canonical_autolog=1 system_scratch=tmp_only"
+echo "START_AUTOSTART_TRANSACTION_TEST=PASS idempotent_state=1 persistent_journal=1 rollback=transactional stream_supervisor=1 demand_before_stream=0 canonical_autolog=1 system_scratch=tmp_only"
