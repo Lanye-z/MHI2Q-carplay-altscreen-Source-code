@@ -118,7 +118,7 @@ static int stream_ready_publish_locked(void) {
     if (g_stream_ready_generation == g_generation) return 1;
 
     n = snprintf(payload, sizeof(payload),
-                 "pid=%u\ngeneration=%u\ncookie=0x%08x\nframes=%u\nsequence=%u\n",
+                 "pid=%u\ngeneration=%u\ncookie=0x%08x\nframes=%u\nsequence=%u\nready=1\n",
                  (unsigned)pid, (unsigned)g_generation,
                  (unsigned)stream_cookie(g_stream),
                  (unsigned)g_frame->frame_count,
