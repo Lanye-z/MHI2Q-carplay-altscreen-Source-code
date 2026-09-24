@@ -104,15 +104,9 @@ same_bytes(){
 }
 
 find_original_backup(){
-    if [ -f "$LOWER_ORIGINAL/COMPLETE" ]; then
-        printf '%s\n' "$LOWER_ORIGINAL"
-        return 0
-    fi
-    if [ -f "$UPPER_ORIGINAL/COMPLETE" ]; then
-        printf '%s\n' "$UPPER_ORIGINAL"
-        return 0
-    fi
-    return 1
+    [ -f "$LOWER_ORIGINAL/COMPLETE" ] || return 1
+    printf '%s\n' "$LOWER_ORIGINAL"
+    return 0
 }
 
 find_startup(){
@@ -233,21 +227,270 @@ oem_restore_verified(){
     return 0
 }
 
-trusted_backup(){
-    original=""
-    if [ -f "$LOWER_ORIGINAL/COMPLETE" ]; then
-        original="$LOWER_ORIGINAL"
-    elif [ -f "$UPPER_ORIGINAL/COMPLETE" ]; then
-        original="$UPPER_ORIGINAL"
-    else
-        log "BACKUP_TRUST=FAIL reason=ORIGINAL_COMPLETE_MISSING"
-        return 1
-    fi
-    [ -f "$UNIVERSAL_BACKUP/COMPLETE" ] || {
-        log "BACKUP_TRUST=FAIL reason=UNIVERSAL_HOOK_COMPLETE_MISSING"
+hmi_backup_project_managed(){
+    jar=$1
+    [ -f "$jar" ] || return 1
+    grep -Fq 'com/luka/carplay/cluster/ClusterStateController.class' "$jar" 2>/dev/null && return 0
+    grep -Fq 'com/luka/carplay/cluster/WheelZoomBridge.class' "$jar" 2>/dev/null && return 0
+    grep -Fq 'com/luka/carplay/cluster/ClusterLayerController.class' "$jar" 2>/dev/null && return 0
+    set -- $(cksum < "$jar" 2>/dev/null || echo "0 0")
+    sum=${1:-0}
+    size=$(wc -c < "$jar" 2>/dev/null || echo 0)
+    set -- $size
+    size=${1:-0}
+    case "$size:$sum" in
+      143072:1515795662|149510:180684234|149979:2362627699|150026:3028143795) return 0 ;;
+      *) return 1 ;;
+    esac
+}
+
+verify_native_backup_media(){
+    [ -f "$LOWER_ORIGINAL/COMPLETE" ] &&
+    [ -f "$LOWER_ORIGINAL/manifest.txt" ] &&
+    [ -f "$LOWER_ORIGINAL/overlay_present.txt" ] &&
+    [ -f "$LOWER_ORIGINAL/overlay_dir.txt" ] || {
+        if [ -f "$UPPER_ORIGINAL/COMPLETE" ]; then
+            log "BACKUP_TRUST=FAIL reason=CANONICAL_ORIGINAL_MISSING found_legacy_uppercase=YES action=RENAME_ORIGINAL_TO_original_ON_PC"
+        else
+            log "BACKUP_TRUST=FAIL reason=ORIGINAL_BACKUP_INCOMPLETE canonical=$LOWER_ORIGINAL"
+        fi
         return 1
     }
-    log "BACKUP_TRUST=PASS original=$original universal_hook=$UNIVERSAL_BACKUP"
+
+    count=0
+    while IFS= read -r rel; do
+        case "$rel" in
+          /eso/bin/apps/dio_manager|/mnt/app/eso/bin/apps/dio_manager|/eso/lib/libairplay.so|/armle/usr/lib/libNmeBaseClasses.so|/mnt/app/armle/usr/lib/libNmeBaseClasses.so|/eso/lib/libNmeBaseClasses.so|/mnt/system/etc/eso/production/smartphone_integrator.json|/mnt/system/etc/eso/production/dio_manager.json) ;;
+          *) log "BACKUP_TRUST=FAIL reason=UNEXPECTED_NATIVE_MANIFEST_PATH path=$rel"; return 1 ;;
+        esac
+        member="$LOWER_ORIGINAL/files/$(echo "$rel" | tr '/' '_')"
+        [ -s "$member" ] && [ -f "$member.cksum" ] &&
+        [ "$(cksum < "$member")" = "$(cat "$member.cksum")" ] || {
+            log "BACKUP_TRUST=FAIL reason=NATIVE_MEMBER_CKSUM path=$rel"
+            return 1
+        }
+        count=$((count + 1))
+    done < "$LOWER_ORIGINAL/manifest.txt"
+    [ "$count" = 5 ] || {
+        log "BACKUP_TRUST=FAIL reason=NATIVE_MANIFEST_COUNT count=$count expected=5"
+        return 1
+    }
+
+    overlay_dir=$(cat "$LOWER_ORIGINAL/overlay_dir.txt" 2>/dev/null || true)
+    case "$overlay_dir" in
+      /mnt/app/root/carplay-altscreen/lib|/mnt/app/root/lib-target) ;;
+      *) log "BACKUP_TRUST=FAIL reason=OVERLAY_DIR_INVALID path=$overlay_dir"; return 1 ;;
+    esac
+    while IFS= read -r name; do
+        case "$name" in
+          libairplay.so|libairplax.so|libNmeBaseClasses.so) ;;
+          *) log "BACKUP_TRUST=FAIL reason=OVERLAY_MEMBER_INVALID name=$name"; return 1 ;;
+        esac
+        member="$LOWER_ORIGINAL/files/overlay_$name"
+        [ -f "$member" ] && [ -f "$member.cksum" ] &&
+        [ "$(cksum < "$member")" = "$(cat "$member.cksum")" ] || {
+            log "BACKUP_TRUST=FAIL reason=OVERLAY_MEMBER_CKSUM name=$name"
+            return 1
+        }
+    done < "$LOWER_ORIGINAL/overlay_present.txt"
+    return 0
+}
+
+verify_firewall_backup_media(){
+    [ -f "$FIREWALL_BACKUP/COMPLETE" ] &&
+    [ -s "$FIREWALL_BACKUP/pf.conf" ] &&
+    [ -f "$FIREWALL_BACKUP/pf.conf.cksum" ] &&
+    [ "$(cksum < "$FIREWALL_BACKUP/pf.conf")" = "$(cat "$FIREWALL_BACKUP/pf.conf.cksum")" ] || {
+        log "BACKUP_TRUST=FAIL reason=FIREWALL_BACKUP_INVALID"
+        return 1
+    }
+    return 0
+}
+
+verify_universal_backup_media(){
+    [ -f "$UNIVERSAL_BACKUP/COMPLETE" ] &&
+    [ -f "$UNIVERSAL_BACKUP/present" ] || {
+        log "BACKUP_TRUST=FAIL reason=UNIVERSAL_HOOK_BACKUP_INCOMPLETE"
+        return 1
+    }
+    hook_path=$(cat "$UNIVERSAL_BACKUP/path" 2>/dev/null || echo /mnt/app/root/hooks/libcarplay_altscreen.so)
+    case "$hook_path" in
+      /mnt/app/root/carplay-altscreen/lib/libcarplay_altscreen.so|/mnt/app/root/hooks/libcarplay_altscreen.so) ;;
+      *) log "BACKUP_TRUST=FAIL reason=UNIVERSAL_HOOK_PATH_INVALID path=$hook_path"; return 1 ;;
+    esac
+    present=$(cat "$UNIVERSAL_BACKUP/present" 2>/dev/null || echo invalid)
+    case "$present" in
+      0)
+        [ ! -e "$UNIVERSAL_BACKUP/libcarplay_altscreen.so" ] || {
+            log "BACKUP_TRUST=FAIL reason=UNIVERSAL_ABSENT_WITH_STALE_BINARY"
+            return 1
+        }
+        ;;
+      1)
+        [ -s "$UNIVERSAL_BACKUP/libcarplay_altscreen.so" ] &&
+        [ -f "$UNIVERSAL_BACKUP/libcarplay_altscreen.so.cksum" ] &&
+        [ "$(cksum < "$UNIVERSAL_BACKUP/libcarplay_altscreen.so")" = "$(cat "$UNIVERSAL_BACKUP/libcarplay_altscreen.so.cksum")" ] || {
+            log "BACKUP_TRUST=FAIL reason=UNIVERSAL_HOOK_CKSUM"
+            return 1
+        }
+        ;;
+      *)
+        log "BACKUP_TRUST=FAIL reason=UNIVERSAL_HOOK_STATE_INVALID"
+        return 1
+        ;;
+    esac
+    return 0
+}
+
+verify_hmi_backup_media(){
+    [ -f "$HMI_BACKUP/COMPLETE" ] &&
+    [ -f "$HMI_BACKUP/target" ] &&
+    [ "$(cat "$HMI_BACKUP/target" 2>/dev/null || true)" = "/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar" ] || {
+        log "BACKUP_TRUST=FAIL reason=HMI_BACKUP_METADATA"
+        return 1
+    }
+
+    hp=0; ha=0
+    [ ! -f "$HMI_BACKUP/present" ] || hp=1
+    [ ! -f "$HMI_BACKUP/absent" ] || ha=1
+    [ $((hp + ha)) -eq 1 ] || {
+        log "BACKUP_TRUST=FAIL reason=HMI_BACKUP_PRESENCE_AMBIGUOUS"
+        return 1
+    }
+
+    if [ "$hp" = 1 ]; then
+        [ -s "$HMI_BACKUP/carplay_hook.jar" ] &&
+        [ -f "$HMI_BACKUP/cksum" ] &&
+        [ "$(cksum < "$HMI_BACKUP/carplay_hook.jar")" = "$(cat "$HMI_BACKUP/cksum")" ] || {
+            log "BACKUP_TRUST=FAIL reason=HMI_BACKUP_CKSUM"
+            return 1
+        }
+        hmi_backup_project_managed "$HMI_BACKUP/carplay_hook.jar" && {
+            log "BACKUP_TRUST=FAIL reason=HMI_BACKUP_PROJECT_MANAGED"
+            return 1
+        }
+    else
+        [ ! -e "$HMI_BACKUP/carplay_hook.jar" ] && [ ! -e "$HMI_BACKUP/cksum" ] || {
+            log "BACKUP_TRUST=FAIL reason=HMI_ABSENT_WITH_STALE_PAYLOAD"
+            return 1
+        }
+    fi
+    return 0
+}
+
+trusted_backup(){
+    verify_native_backup_media || return 1
+    verify_firewall_backup_media || return 1
+    verify_universal_backup_media || return 1
+    verify_hmi_backup_media || return 1
+    [ -f "$SD_ROOT/backup/boot-diagnostics/COMPLETE" ] || {
+        log "BACKUP_TRUST=FAIL reason=BOOT_DIAGNOSTICS_BACKUP_INCOMPLETE"
+        return 1
+    }
+    log "BACKUP_TRUST=PASS original=$LOWER_ORIGINAL firewall=$FIREWALL_BACKUP universal_hook=$UNIVERSAL_BACKUP hmi=$HMI_BACKUP"
+    return 0
+}
+
+strip_startup_blocks_preflight(){
+    awk '
+      {
+        key=$0
+        sub(/\r$/, "", key)
+        trimmed=key
+        gsub(/^[ \t]+/, "", trimmed)
+        gsub(/[ \t]+$/, "", trimmed)
+        if (trimmed == "# BEGIN ALT111 MIRROR AUTOSTART") {
+          if (block != "") bad=8
+          block="old"; next
+        }
+        if (trimmed == "# END ALT111 MIRROR AUTOSTART") {
+          if (block != "old") bad=8
+          block=""; next
+        }
+        if (trimmed == "# BEGIN ALT111 BASEVIDEO3 AUTOSTART") {
+          if (block != "") bad=8
+          block="new"; next
+        }
+        if (trimmed == "# END ALT111 BASEVIDEO3 AUTOSTART") {
+          if (block != "new") bad=8
+          block=""; next
+        }
+        if (block == "") print
+      }
+      END {
+        if (bad) exit bad
+        if (block != "") exit 9
+      }
+    ' "$1"
+}
+
+restore_hmi_live_preflight(){
+    hp=0
+    [ ! -f "$HMI_BACKUP/present" ] || hp=1
+    if [ "$hp" = 1 ]; then
+        if [ -f "$JAR" ] && ! hmi_backup_project_managed "$JAR" && ! same_bytes "$HMI_BACKUP/carplay_hook.jar" "$JAR"; then
+            log "RESTORE_READINESS=FAIL reason=LIVE_HMI_CONFLICT_WITH_TRUSTED_BACKUP"
+            return 1
+        fi
+    else
+        if [ -f "$JAR" ] && ! hmi_backup_project_managed "$JAR"; then
+            log "RESTORE_READINESS=FAIL reason=ABSENT_BACKUP_LIVE_JAR_NOT_PROJECT_MANAGED"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+restore_startup_preflight(){
+    startup=$(find_startup) || {
+        log "RESTORE_READINESS=FAIL reason=STARTUP_NOT_FOUND"
+        return 1
+    }
+    stage="$SD_ROOT/staging"
+    ensure_dirs "$stage" || return 1
+    tmp="$stage/rescue-startup-preflight.tmp"
+    rm -f "$tmp" 2>/dev/null || true
+    strip_startup_blocks_preflight "$startup" > "$tmp" || {
+        rm -f "$tmp" 2>/dev/null || true
+        log "RESTORE_READINESS=FAIL reason=AUTOSTART_BLOCK_INVALID"
+        return 1
+    }
+    /bin/sh -n "$tmp" >/dev/null 2>&1 || {
+        rm -f "$tmp" 2>/dev/null || true
+        log "RESTORE_READINESS=FAIL reason=CLEANED_STARTUP_SYNTAX_INVALID"
+        return 1
+    }
+    rm -f "$tmp" 2>/dev/null || true
+    return 0
+}
+
+run_v34_restore_precheck(){
+    controller="$VOLUME/Toolbox/scripts/altscreen_chain_test.sh"
+    [ -f "$controller" ] || {
+        log "RESTORE_READINESS=FAIL reason=V3_4_CONTROLLER_MISSING"
+        return 1
+    }
+    trusted_backup || return 1
+    restore_hmi_live_preflight || return 1
+    restore_startup_preflight || return 1
+
+    precheck_log="$LOG_DIR/.restore-precheck.$"
+    rm -f "$precheck_log" 2>/dev/null || true
+    if [ "$TESTING" = 1 ]; then
+        ALTSCREEN_CHAIN_TESTING=1 ALTSCREEN_CHAIN_ROOT="$DEVICE_ROOT" ALTSCREEN_CHAIN_VOLUME="$VOLUME"           /bin/sh "$controller" restore-precheck > "$precheck_log" 2>&1
+    else
+        /bin/sh "$controller" restore-precheck > "$precheck_log" 2>&1
+    fi
+    rc=$?
+    if [ -f "$precheck_log" ]; then
+        while IFS= read -r line; do log "V34_PRECHECK $line"; done < "$precheck_log"
+        rm -f "$precheck_log" 2>/dev/null || true
+    fi
+    [ "$rc" = 0 ] || {
+        log "RESTORE_READINESS=FAIL reason=V3_4_RESTORE_PRECHECK rc=$rc"
+        return 1
+    }
+    log "RESTORE_READINESS=PASS controller=V3_4 hmi=SAFE startup=SAFE runtime_cleanup=SAFE recovery_media=TRUSTED"
     return 0
 }
 
@@ -645,8 +888,28 @@ do_quarantine(){
         return 1
     }
 
-    log "QUARANTINE=PASS from=/mnt/app/root/carplay-altscreen to=/mnt/app/root/.carplay-altscreen.rescue-v1 deletion=NONE reversible=YES"
-    log "NEXT_ACTION=RUN_V3_4_INSTALL"
+    if ! run_v34_restore_precheck; then
+        log "QUARANTINE_POSTCHECK=FAIL action=ROLLBACK_TO_ORIGINAL_PATH"
+        mount_app_rw || {
+            log "QUARANTINE_ROLLBACK=FAIL reason=MOUNT_APP_RW_FAILED recovery_required=YES"
+            return 1
+        }
+        if [ ! -e "$ROOT" ] && mv "$QUARANTINE" "$ROOT"; then
+            sync >/dev/null 2>&1 || true
+            if mount_app_ro; then
+                log "QUARANTINE_ROLLBACK=PASS restored=/mnt/app/root/carplay-altscreen production_state=PRE_QUARANTINE"
+            else
+                log "QUARANTINE_ROLLBACK=FAIL reason=REMOUNT_APP_RO_FAILED runtime_restored=YES recovery_required=YES"
+            fi
+        else
+            mount_app_ro >/dev/null 2>&1 || true
+            log "QUARANTINE_ROLLBACK=FAIL reason=MOVE_BACK_FAILED recovery_required=YES"
+        fi
+        return 1
+    fi
+
+    log "QUARANTINE=PASS from=/mnt/app/root/carplay-altscreen to=/mnt/app/root/.carplay-altscreen.rescue-v1 deletion=NONE reversible=YES restore_preflight=PASS"
+    log "NEXT_ACTION=RUN_V3_4_RESTORE_ORIGINAL recommended=YES alternative=V3_4_INSTALL"
     return 0
 }
 
