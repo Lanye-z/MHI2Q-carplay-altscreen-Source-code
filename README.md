@@ -1,3 +1,5 @@
+> **V3.4 实车修正（2026-09-24）**：上一版通过 `rgActive/rgiDataValid + Fct17/Fct39` 激活 OEM Route Guidance，实车会错误拉起 maneuver/箭头小窗。当前 V3.4 已撤销该 presentation 激活路径，改为直接镜像 CarPlay 的当前道路、剩余距离和 ETA 到 `ClusterService/KOMO follow-info`，目标仅更新地图底部灰色 route-info 条；不写 RGStatus/ActiveRGType，不置 RGI valid，不主动激活箭头窗。
+
 <!-- BRANCH_STATUS_BEGIN -->
 > [!IMPORTANT]
 > **分支用途：** P0915 / 历史半卸载状态专用急救分支。基于当前 V3.4，只额外增加 `/mnt/app/root/carplay-altscreen` unowned runtime 的检查、隔离、原路恢复、OEM 恢复后校验、最终删除前 SD 完整备份以及紧急从 SD 重建 quarantine 的工具。
