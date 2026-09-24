@@ -59,7 +59,7 @@ grep -Fq 'branch_zip_policy=GITHUB_BRANCH_ZIP_INSTALLABLE' "$HMI_INFO" ||
     fail "HMI BUILD_INFO direct-download policy missing"
 mode=$(sed -n 's/^mode=//p' "$HMI_INFO")
 case "$mode" in
-  PRIVATE111_DIRECT_DISPLAY_V3_WHEEL_ZOOM|PRIVATE111_DIRECT_DISPLAY_V3_3_OEM_LOWER_BAR|PRIVATE111_DIRECT_DISPLAY_V3_4_STREAM_DRIVEN) ;;
+  PRIVATE111_DIRECT_DISPLAY_V3_WHEEL_ZOOM|PRIVATE111_DIRECT_DISPLAY_V3_3_OEM_LOWER_BAR|PRIVATE111_DIRECT_DISPLAY_V3_4_STREAM_DRIVEN|PRIVATE111_DIRECT_DISPLAY_V3_5_COLD_START) ;;
   *) fail "unsupported HMI mode: $mode" ;;
 esac
 grep -Fq 'wheel_zoom_build_status=COMPILED_READY_FOR_VEHICLE_TEST' "$HMI_INFO" ||
@@ -109,6 +109,57 @@ if [ "$mode" = PRIVATE111_DIRECT_DISPLAY_V3_3_OEM_LOWER_BAR ]; then
         fail "V3.3 SMALL safeArea ready marker mismatch"
     grep -Fq "rgi_metadata_sha256=$actual_rgi_sha" "$READY" ||
         fail "V3.3 ready marker RGI SHA mismatch"
+fi
+
+if grep -Fq 'branch=experiment/oem-layout-second-screen_v3.5' "$READY"; then
+    [ "$mode" = PRIVATE111_DIRECT_DISPLAY_V3_5_COLD_START ] ||
+        fail "V3.5 HMI mode mismatch"
+    [ -s "$RGI_META" ] || fail "V3.5 RGI metadata hook missing"
+    actual_rgi_sha=$(sha256_file "$RGI_META")
+    [ "$actual_rgi_sha" = 87d10f67fbb3dc142642d899977bab0a6eb4009f61d3bcd873d0cce9e01511f7 ] ||
+        fail "V3.5 RGI metadata hook identity mismatch"
+    grep -Fq "rgi_metadata_sha256=$actual_rgi_sha" "$READY" ||
+        fail "V3.5 ready marker RGI SHA mismatch"
+    grep -Fq 'oem_lower_bar_map_scale=FCT45_STOCK_PASSTHROUGH' "$HMI_INFO" ||
+        fail "V3.5 OEM map-scale passthrough missing"
+    grep -Fq 'safearea_policy=V33_OEM_X_VERTICAL_68_450' "$HMI_INFO" ||
+        fail "V3.5 HMI safeArea policy is not top68/bottom450"
+    grep -Fq 'geometry_safearea_space=OEM_X_VERTICAL_68_450' "$HMI_INFO" ||
+        fail "V3.5 HMI safeArea coordinate-space marker missing"
+    grep -Fq 'safearea_full=370,68,700,382' "$READY" ||
+        fail "V3.5 FULL safeArea ready marker mismatch"
+    grep -Fq 'safearea_small=490,68,460,382' "$READY" ||
+        fail "V3.5 SMALL safeArea ready marker mismatch"
+    grep -Fq 'mode=PRIVATE111_DIRECT_DISPLAY_V3_5_COLD_START' "$READY" ||
+        fail "V3.5 ready marker mode mismatch"
+    grep -Fq 'vehicle_zip_status=READY_FOR_V3_5_VEHICLE_TEST' "$READY" ||
+        fail "V3.5 ready marker vehicle status mismatch"
+    grep -Fq 'negotiation_policy=V35_EARLY_PROTOCOL_READY' "$READY" ||
+        fail "V3.5 early negotiation policy missing"
+    grep -Fq 'cold_start_policy=EARLY_NEGOTIATION_READY' "$READY" ||
+        fail "V3.5 cold-start policy missing"
+    grep -Fq 'cold_start_capability_wait_ms=500' "$READY" ||
+        fail "V3.5 capability wait contract missing"
+    grep -Fq 'cold_start_geometry_gate=ASYNC' "$READY" ||
+        fail "V3.5 async geometry gate missing"
+    grep -Fq 'cold_start_bootstrap_canvas=1440x542_NEGOTIATION_ONLY' "$READY" ||
+        fail "V3.5 negotiation-only bootstrap canvas missing"
+    grep -Fq 'cold_start_renderer_geometry=LIVE_SCREEN_MATCH_REQUIRED' "$READY" ||
+        fail "V3.5 renderer live-match fence missing"
+    grep -Fq 'sd_runtime_gate=DISABLED' "$READY" ||
+        fail "V3.5 SD runtime gate is not disabled"
+    grep -Fq 'display_start_policy=STREAM_DRIVEN' "$READY" ||
+        fail "V3.5 display policy is not stream-driven"
+    grep -Fq 'stream_ready_stable_decoded_frames=2' "$READY" ||
+        fail "V3.5 stable-frame threshold missing"
+    grep -Fq 'fixed_display_delay=NONE' "$READY" ||
+        fail "V3.5 unexpectedly uses a fixed display delay"
+    grep -Fq 'sidecar_attach_policy=RECOVER_CURRENT_SESSION' "$READY" ||
+        fail "V3.5 current-session attach policy missing"
+    grep -Fq 'oem_lower_bar=CARPLAY_RGI_FCT19_21_22_PLUS_KOMO_GRAY_BAR_V4' "$READY" ||
+        fail "V3.5 OEM gray-bar contract missing"
+    grep -Fq 'lower_bar_context_policy=KOMO_FOLLOW_INFO_NO_RGI_PRESENTATION' "$READY" ||
+        fail "V3.5 KOMO gray-bar context contract missing"
 fi
 
 if grep -Fq 'branch=experiment/oem-layout-second-screen_v3.4' "$READY"; then
