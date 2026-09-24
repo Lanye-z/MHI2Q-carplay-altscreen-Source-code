@@ -1,10 +1,10 @@
 <!-- BRANCH_STATUS_BEGIN -->
 > [!IMPORTANT]
-> **分支用途：** 当前候选实验主线。继承 V3.1 后期 `OEM_TARGET_FOLLOW_V1` 滚轮逻辑，重点修复 V3.1 的纵向几何：保留 OEM 横向安全范围，同时把纵向 safeArea 从局部 `y=49,h=300` 放开到地图有效高度 `y=0,h=455`；另修复 future frame timestamp 可能误报 stall 的边缘问题。
+> **分支用途：** P0915 / 历史半卸载状态专用急救分支。基于当前 V3.4，只额外增加 `/mnt/app/root/carplay-altscreen` unowned runtime 的检查、隔离、原路恢复、OEM 恢复后校验、最终删除前 SD 完整备份以及紧急从 SD 重建 quarantine 的工具。
 >
-> **上车测试结论：** 截至 2026-09-23，当前 HEAD 已完成构建、静态校验、CI promotion 和整包 verifier，状态为 `READY_FOR_VEHICLE_TEST`；尚没有一份能够明确绑定到该 exact HEAD 的完整实车验收日志，因此当前正式结论仍是“待实车验证”，不能写成已通过。
+> **安全策略：** 不直接接管未知目录。先识别项目指纹并隔离到固定 quarantine；最终删除前必须验证 V3.4 或 OEM 恢复终态，并把 quarantine 全量复制到 `MMI-Cockpit-Carplay/rescue-backup/runtime-residue-v1/`，通过 cksum/目录 manifest 双向校验后才允许删除。
 >
-> **当前定位：** 最新待测主线；上车重点验证车辆锚点/ETA/指南针纵向位置，以及继承后的 target-follow 滚轮。
+> **日志：** 救援各动作使用独立固定日志；V3.4 RESTORE ORIGINAL 继续使用完整 operation journal。详见 `RUNTIME-RESIDUE-RESCUE-V1.md`。
 <!-- BRANCH_STATUS_END -->
 
 > [!IMPORTANT]
