@@ -149,7 +149,7 @@ grep -Fq 'wheel_zoom_build_status=COMPILED_READY_FOR_VEHICLE_TEST' "$HMI_INFO" 2
     exit 1
 }
 [ -s "$MIRROR_INFO" ] || { echo "FAIL: V2 Mirror BUILD_INFO missing: $MIRROR_INFO"; exit 1; }
-grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$MIRROR_INFO" 2>/dev/null &&
+grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V3_4' "$MIRROR_INFO" 2>/dev/null &&
 grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$MIRROR_INFO" 2>/dev/null || {
     echo "FAIL: this package is not an approved rebuilt V2 vehicle release"
     grep -E '^(release_binary_status|vehicle_zip_status)=' "$MIRROR_INFO" 2>/dev/null || true
@@ -393,7 +393,7 @@ grep -Fq 'wheel_zoom_build_status=COMPILED_READY_FOR_VEHICLE_TEST' "$HMI_INFO" 2
     exit 1
 }
 [ -s "$MIRROR_INFO" ] || { echo "FAIL: V2 Mirror BUILD_INFO missing: $MIRROR_INFO"; exit 1; }
-grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$MIRROR_INFO" 2>/dev/null &&
+grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V3_4' "$MIRROR_INFO" 2>/dev/null &&
 grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$MIRROR_INFO" 2>/dev/null || {
     echo "FAIL: this package is not an approved rebuilt V2 vehicle release"
     grep -E '^(release_binary_status|vehicle_zip_status)=' "$MIRROR_INFO" 2>/dev/null || true
