@@ -106,7 +106,7 @@ int AirPlayReceiverSessionStart(void *session, const void *params) {
     rc=real_session_start(session,params);
     altscreen_log("PHASE=SESSION_START_RETURN receiver=%p rc=%d",session,rc);
     if (!rc && p1404_identity_ok && p1404_armed && p1404_mutate_armed &&
-        (!altscreen_runtime_is_ready || altscreen_runtime_is_ready()) &&
+        alt_runtime_negotiation_ready("session-start") &&
         alt_flag_create111 && alt_private111_backend_ready())
         bootstrap_note(session,0);
     return rc;
@@ -448,7 +448,7 @@ int AirPlayReceiverSessionPlatformControl(void *session, unsigned flags,
     altscreen_runtime_ensure_initialized();
     if (!real_session_control) p1404_airplay_bind_lazy();
     if (!real_session_control) return -1;
-    if ((altscreen_runtime_is_ready && !altscreen_runtime_is_ready()) ||
+    if (!alt_runtime_negotiation_ready("platform-control") ||
         !p1404_identity_ok)
         return real_session_control(session, flags, command, qualifier, params, out_params);
     cmd_name = alt_cf_cString((cf_obj)command, scratch, sizeof(scratch));
@@ -525,7 +525,7 @@ int AirPlayReceiverSessionSetup(void *session, const void *params, void **out_pa
     if (!real_session_setup && p1404_direct_stock_symbol_named)
         real_session_setup = (setup_fn)p1404_direct_stock_symbol_named("AirPlayReceiverSessionSetup");
     if (!real_session_setup) return -1;
-    if ((altscreen_runtime_is_ready && !altscreen_runtime_is_ready()) ||
+    if (!alt_runtime_negotiation_ready("session-setup") ||
         !p1404_identity_ok)
         return real_session_setup(session, params, out_params);
 
@@ -561,7 +561,7 @@ int AirPlayReceiverSessionSetup(void *session, const void *params, void **out_pa
                       alt_flag_create111, alt_desc, alt_desc_count);
     }
 
-    if (alt_desc && (!altscreen_runtime_is_ready || altscreen_runtime_is_ready()) &&
+    if (alt_desc && alt_runtime_negotiation_ready("private111-setup") &&
         p1404_armed && p1404_mutate_armed) {
         /* LIVI dispatches an explicit type-111 descriptor by type alone. Prior
          * feature/display observations are diagnostics, never an extra gate. */
@@ -608,14 +608,14 @@ int AirPlayReceiverSessionSetup(void *session, const void *params, void **out_pa
         alt_flag_info && alt_flag_create111 && alt_private111_backend_ready()) {
         /* Like LIVI, declare accessory features in session SETUP without
          * waiting for the phone to ask for altScreen or /info to run first. */
-        feature_contract_ready = p1404_cockpit_native_get_geometry(NULL, NULL);
+        feature_contract_ready = alt_airplay_negotiation_geometry_ready();
         if (feature_contract_ready)
             feature_response_accepted = accept_alt_in_setup_response((cf_obj)*out_params);
         altscreen_log("PHASE=SETUP_FEATURE_NEGOTIATION receiver=%p requested=%d feature_property_advertised=%d display_published=%d geometry_preflight=%d response_patched=%d descriptor_phase=0 backend_ready=1",
                       session, wants_alt,
                       altscreen_get_state()->info_alt_feature_advertised,
                       altscreen_get_state()->info_alt_display,
-                      p1404_cockpit_native_get_geometry(NULL, NULL),
+                      alt_airplay_negotiation_geometry_ready(),
                       feature_response_accepted);
         if (feature_response_accepted)
             altscreen_mark_alt_feature_negotiated();
