@@ -1,4 +1,4 @@
-mode=PRIVATE111_DIRECT_DISPLAY_V3_4_STREAM_DRIVEN
+mode=PRIVATE111_DIRECT_DISPLAY_V3_5_COLD_START
 controller=ClusterStateController
 class_target=Java_1.2_major_46
 context_owner=JAVA_ONLY
@@ -14,7 +14,7 @@ direct_display_source=/carplay111_decoded
 h264_tap=/carplay111_h264
 window58_readback=disabled
 decoded_linearizer=screen_read_window_nv12_then_rgba
-direct_display_revision=experiment-oem-layout-second-screen-v3.4-stream-driven-startup
+direct_display_revision=experiment-oem-layout-second-screen-v3.5-cold-start-negotiation
 oem_geometry_observer=OEM_LAYOUT_OBSERVER_V1
 oem_geometry_state=/tmp/carplay-oem-geometry.state
 oem_geometry_policy=OBSERVE_ONLY_NO_CARPLAY_OR_RENDERER_APPLY
@@ -109,7 +109,7 @@ wheel_zoom_quiet_backlog_pace_ms=150
 lower_bar_context_policy=KOMO_FOLLOW_INFO_NO_RGI_PRESENTATION
 carplay_hook_sd_log=streams/carplay_hook.log
 
-startup_revision=V3_4_PROTOCOL_ALWAYS_ON_DISPLAY_STREAM_DRIVEN
+startup_revision=V3_5_EARLY_PROTOCOL_READY_ASYNC_GEOMETRY
 startup_sd_runtime_gate=DISABLED
 startup_fixed_display_delay=NONE
 startup_stream_ready_marker=/tmp/altscreen-private111.stream-ready
