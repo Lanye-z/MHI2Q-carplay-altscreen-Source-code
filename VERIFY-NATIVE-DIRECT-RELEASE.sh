@@ -200,6 +200,10 @@ grep -Fq 'ALT111_RECOVER_CURRENT_SESSION=1' "$SUPERVISOR" ||
     fail "V3.4 supervisor does not attach to the already-negotiated session"
 grep -Fq 'frames" -ge 2' "$SUPERVISOR" ||
     fail "V3.4 supervisor does not validate stable decoded progress"
+grep -Fq 'complete" = "1"' "$SUPERVISOR" ||
+    fail "V3.4 supervisor does not require a complete stream-ready marker"
+grep -Fq 'ready=1\\n' "$TAP" ||
+    fail "V3.4 native stream-ready marker lacks complete-write sentinel"
 
 SOURCE_ONLY=0
 HOOK_PENDING=0
