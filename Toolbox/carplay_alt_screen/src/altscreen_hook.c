@@ -1466,8 +1466,6 @@ static void altscreen_strip_project_hooks_from_child_preload(void) {
     free(clean);
 }
 
-#define ALTSCREEN_STATE_ROOT_WAIT_STEPS 600u
-#define ALTSCREEN_STATE_ROOT_WAIT_US    100000u
 #define ALTSCREEN_GEOMETRY_WAIT_STEPS    30u
 #define ALTSCREEN_GEOMETRY_WAIT_US  1000000u
 
@@ -1482,24 +1480,18 @@ static void *altscreen_runtime_init_worker(void *unused) {
     int native_geometry_ready = 0;
     int process_allowed;
     int force_start;
-    int state_root_ready = 0;
-    unsigned state_root_step;
+    int state_root_ready;
     unsigned geometry_step;
     const char *pname;
     (void)unused;
 
-    /* servicemgr may construct dio_manager before the removable filesystem
-     * aliases are published. Waiting here is safe because this is already the
-     * detached initialization worker: every redirected wrapper remains
-     * stock-only and the application startup thread never waits. */
-    for (state_root_step = 0; state_root_step < ALTSCREEN_STATE_ROOT_WAIT_STEPS;
-         ++state_root_step) {
-        if (altscreen_state_root_is_authoritative()) {
-            state_root_ready = 1;
-            break;
-        }
-        usleep(ALTSCREEN_STATE_ROOT_WAIT_US);
-    }
+    /*
+     * V3.4 removes removable-SD state from the CarPlay runtime authority.
+     * Keep reporting whether an SD state root happens to be visible for
+     * diagnostics, but never wait for it and never let it arm/disarm the
+     * current CarPlay negotiation.
+     */
+    state_root_ready = altscreen_state_root_is_authoritative();
 
     iap2_control_fd_reset();
     altscreen_init();
@@ -1510,15 +1502,8 @@ static void *altscreen_runtime_init_worker(void *unused) {
         return NULL;
     }
     altscreen_paths_report();
-    altscreen_log("PHASE=STATE_ROOT_WAIT result=%s waited_ms=%u startup_thread_blocked=0 stock_until_ready=1",
-                  state_root_ready ? "PASS" : "REFUSED",
-                  state_root_step * (ALTSCREEN_STATE_ROOT_WAIT_US / 1000u));
-    if (!state_root_ready) {
-        p1404_armed = 0;
-        p1404_mutate_armed = 0;
-        __sync_lock_test_and_set(&g_runtime_init_state, 3u);
-        return NULL;
-    }
+    altscreen_log("PHASE=RUNTIME_AUTHORITY policy=INSTALLED_PRELOAD sd_authoritative=%d sd_gate=DISABLED waited_ms=0 startup_thread_blocked=0",
+                  state_root_ready ? 1 : 0);
     (void)p1404_bind_stock_exports();
     native_stock_ready = p1404_cockpit_native_bind_stock();
     nme_io_ready = direct_bind_nme_io();
