@@ -305,7 +305,9 @@ dir_file_manifest(){
         cd "$src" || exit 1
         find . -type f -print 2>/dev/null | sort | while IFS= read -r rel; do
             [ -f "$rel" ] || continue
-            set -- $(cksum < "$rel" 2>/dev/null) || exit 1
+            c=$(cksum < "$rel" 2>/dev/null) || exit 1
+            set -- $c
+            [ "$#" -ge 2 ] || exit 1
             printf '%s|%s|%s\n' "$rel" "${1:-0}" "${2:-0}"
         done
     ) > "$out"
@@ -444,10 +446,14 @@ backup_quarantine_to_sd(){
     }
 
     rm -f "$RESCUE_FINAL_STAGE/meta/copied.files" "$RESCUE_FINAL_STAGE/meta/copied.dirs" 2>/dev/null || true
-    printf '%s\n' "/mnt/app/root/.carplay-altscreen.rescue-v1" > "$RESCUE_FINAL_STAGE/meta/source_path" || return 1
-    printf '%s\n' "${delete_mode:-UNKNOWN}" > "$RESCUE_FINAL_STAGE/meta/target_state" || return 1
-    printf '%s\n' "MMI-Cockpit-Carplay runtime residue rescue v1" > "$RESCUE_FINAL_STAGE/meta/purpose" || return 1
-    touch "$RESCUE_FINAL_STAGE/COMPLETE" || return 1
+    if ! printf '%s\n' "/mnt/app/root/.carplay-altscreen.rescue-v1" > "$RESCUE_FINAL_STAGE/meta/source_path" ||
+       ! printf '%s\n' "${delete_mode:-UNKNOWN}" > "$RESCUE_FINAL_STAGE/meta/target_state" ||
+       ! printf '%s\n' "MMI-Cockpit-Carplay runtime residue rescue v1" > "$RESCUE_FINAL_STAGE/meta/purpose" ||
+       ! touch "$RESCUE_FINAL_STAGE/COMPLETE"; then
+        rm -rf "$RESCUE_FINAL_STAGE" 2>/dev/null || true
+        log "RESCUE_BACKUP=FAIL reason=METADATA_WRITE_FAILED"
+        return 1
+    fi
     sync >/dev/null 2>&1 || {
         log "RESCUE_BACKUP=FAIL reason=SYNC_FAILED"
         return 1
