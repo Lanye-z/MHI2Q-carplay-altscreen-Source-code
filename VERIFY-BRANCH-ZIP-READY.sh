@@ -9,6 +9,7 @@ RGI_META="$ROOT/Toolbox/carplay_alt_screen/rgi_meta/libcarplay_rgi_meta.so"
 SUMS="$ROOT/SHA256SUMS.txt"
 MAP="$ROOT/PACKAGE_SOURCE_MAP.json"
 SD_RW="$ROOT/Toolbox/scripts/altscreen_sd_writable.sh"
+SUPERVISOR="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stream_supervisor.sh"
 
 fail(){ echo "BRANCH_ZIP_VERIFY=FAIL: $*" >&2; exit 1; }
 check_unique_keys(){
@@ -37,10 +38,16 @@ file_cksum(){ cksum < "$1" | awk '{print $1}'; }
 [ -s "$SUMS" ] || fail "SHA256SUMS.txt missing"
 [ -s "$MAP" ] || fail "PACKAGE_SOURCE_MAP.json missing"
 [ -s "$SD_RW" ] || fail "shared SD writable helper missing"
+[ -s "$SUPERVISOR" ] || fail "V3.4 stream supervisor missing"
+sh -n "$SUPERVISOR" || fail "V3.4 stream supervisor shell syntax"
 grep -Fq 'altscreen_sd_ensure_writable()' "$SD_RW" || fail "SD writable helper contract missing"
 grep -Fq 'AFTER_REMOUNT' "$SD_RW" || fail "SD remount re-probe contract missing"
 grep -Fq 'Toolbox/scripts/altscreen_sd_writable.sh' "$MAP" || fail "SD writable helper missing from PACKAGE_SOURCE_MAP"
 grep -Fq 'Toolbox/scripts/altscreen_sd_writable.sh' "$SUMS" || fail "SD writable helper missing from SHA256SUMS"
+grep -Fq 'Toolbox/carplay_alt_screen/mirror_display/release/stream_supervisor.sh' "$MAP" ||
+    fail "V3.4 stream supervisor missing from PACKAGE_SOURCE_MAP"
+grep -Fq 'Toolbox/carplay_alt_screen/mirror_display/release/stream_supervisor.sh' "$SUMS" ||
+    fail "V3.4 stream supervisor missing from SHA256SUMS"
 
 check_unique_keys "$READY"
 check_unique_keys "$HMI_INFO"
@@ -102,6 +109,25 @@ if [ "$mode" = PRIVATE111_DIRECT_DISPLAY_V3_3_OEM_LOWER_BAR ]; then
         fail "V3.3 SMALL safeArea ready marker mismatch"
     grep -Fq "rgi_metadata_sha256=$actual_rgi_sha" "$READY" ||
         fail "V3.3 ready marker RGI SHA mismatch"
+fi
+
+if grep -Fq 'branch=experiment/oem-layout-second-screen_v3.4' "$READY"; then
+    grep -Fq 'mode=PRIVATE111_DIRECT_DISPLAY_V3_4_STREAM_DRIVEN' "$READY" ||
+        fail "V3.4 ready marker mode mismatch"
+    grep -Fq 'vehicle_zip_status=READY_FOR_V3_4_VEHICLE_TEST' "$READY" ||
+        fail "V3.4 ready marker vehicle status mismatch"
+    grep -Fq 'negotiation_policy=ALWAYS_ON_WHILE_PRELOAD_INSTALLED' "$READY" ||
+        fail "V3.4 negotiation policy missing"
+    grep -Fq 'sd_runtime_gate=DISABLED' "$READY" ||
+        fail "V3.4 SD runtime gate is not disabled"
+    grep -Fq 'display_start_policy=STREAM_DRIVEN' "$READY" ||
+        fail "V3.4 display policy is not stream-driven"
+    grep -Fq 'stream_ready_stable_decoded_frames=2' "$READY" ||
+        fail "V3.4 stable-frame threshold missing"
+    grep -Fq 'fixed_display_delay=NONE' "$READY" ||
+        fail "V3.4 unexpectedly uses a fixed display delay"
+    grep -Fq 'sidecar_attach_policy=RECOVER_CURRENT_SESSION' "$READY" ||
+        fail "V3.4 current-session attach policy missing"
 fi
 
 sh "$ROOT/VERIFY-NATIVE-DIRECT-RELEASE.sh"
