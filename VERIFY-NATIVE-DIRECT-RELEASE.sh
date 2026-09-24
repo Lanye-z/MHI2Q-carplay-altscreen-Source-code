@@ -25,6 +25,8 @@ START="$ROOT/Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh"
 CTRL="$ROOT/Toolbox/scripts/altscreen_chain_test_universal.sh"
 LAUNCH="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/start_vehicle.sh"
 RELEASE_STOP="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh"
+SUPERVISOR="$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stream_supervisor.sh"
+HOOK_SRC="$ROOT/Toolbox/carplay_alt_screen/src/altscreen_hook.c"
 STOP="$ROOT/Toolbox/scripts/stop_mmi_cockpit_carplay_test.sh"
 FINISH="$ROOT/Toolbox/scripts/finish_mmi_cockpit_carplay_test.sh"
 INSTALL="$ROOT/Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh"
@@ -49,11 +51,11 @@ sha256_file(){
 }
 binary_strings(){ strings "$1" 2>/dev/null || grep -a -o '[[:print:]][[:print:]]*' "$1"; }
 
-for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$TAP_H" "$AIRPLAY_SRC" "$RESOLVE" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$GL_RENDERER_CPP" "$MAIN_CPP" "$HMI_SRC" "$WHEEL_SRC" "$HMI_BUILD_INFO" "$WHEEL_PACING_TEST" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$STOP" "$FINISH" "$INSTALL" "$STATUS" "$CHAIN" "$INSTALL_TXN" "$RESTORE_TXN" "$RESTORE_APPLY" "$PERSIST_DIAG" "$BOOT_DIAG" "$START_TX_TEST" "$STORAGE_POLICY_TEST" "$INSTALL_TX_TEST" "$RESTORE_TX_TEST"; do
+for f in "$HOOK" "$BIN" "$INFO" "$REL" "$NATIVE" "$TAP" "$TAP_H" "$AIRPLAY_SRC" "$RESOLVE" "$SOURCE" "$BACKEND_H" "$BACKEND_CPP" "$CLUSTER_CPP" "$GL_RENDERER_CPP" "$MAIN_CPP" "$HMI_SRC" "$WHEEL_SRC" "$HMI_BUILD_INFO" "$WHEEL_PACING_TEST" "$START" "$CTRL" "$LAUNCH" "$RELEASE_STOP" "$SUPERVISOR" "$HOOK_SRC" "$STOP" "$FINISH" "$INSTALL" "$STATUS" "$CHAIN" "$INSTALL_TXN" "$RESTORE_TXN" "$RESTORE_APPLY" "$PERSIST_DIAG" "$BOOT_DIAG" "$START_TX_TEST" "$STORAGE_POLICY_TEST" "$INSTALL_TX_TEST" "$RESTORE_TX_TEST"; do
     [ -s "$f" ] || fail "missing/empty: $f"
 done
 
-for s in "$START" "$CTRL" "$CHAIN" "$INSTALL_TXN" "$RESTORE_TXN" "$RESTORE_APPLY" "$PERSIST_DIAG" "$LAUNCH" "$STOP" "$FINISH" "$INSTALL" "$BOOT_DIAG" "$START_TX_TEST" "$INSTALL_TX_TEST" "$RESTORE_TX_TEST" "$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh"; do
+for s in "$START" "$CTRL" "$CHAIN" "$INSTALL_TXN" "$RESTORE_TXN" "$RESTORE_APPLY" "$PERSIST_DIAG" "$LAUNCH" "$SUPERVISOR" "$STOP" "$FINISH" "$INSTALL" "$BOOT_DIAG" "$START_TX_TEST" "$INSTALL_TX_TEST" "$RESTORE_TX_TEST" "$ROOT/Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh"; do
     sh -n "$s" || fail "shell syntax: $s"
 done
 
@@ -170,15 +172,34 @@ grep -Fq 'staging/diag-txn' "$PERSIST_DIAG" ||
     fail "persistent diagnostics restore scratch still depends on fragile nested /tmp storage"
 
 
-AUTH_MARKER="/mnt/app/root/carplay-altscreen/state/fullchain_probe"
-LEGACY_AUTH_MARKER="/mnt/app/root/hooks/.mibcarplay_fullchain_probe"
-grep -Fq "#define ALTSCREEN_PROBE_MARKER \"$AUTH_MARKER\"" "$RESOLVE" ||
-    fail "native authorization marker source is not aligned with persistent runtime"
-grep -Fq "PROBE_MARKER=\"\$(p $AUTH_MARKER)\"" "$CTRL" ||
-    fail "controller authorization marker is not aligned with native hook"
-if grep -Fq "$LEGACY_AUTH_MARKER" "$RESOLVE"; then
-    fail "legacy authorization marker remains in native source"
+# ---- V3.4 protocol-always-on / display-stream-driven contract ----
+grep -Fq 'int requested_armed = 1;' "$RESOLVE" ||
+    fail "V3.4 private111 runtime is still gated by removable authorization markers"
+grep -Fq 'int requested_mutate = 1;' "$RESOLVE" ||
+    fail "V3.4 feature mutation is not enabled by installed-preload policy"
+grep -Fq 'policy=V34_ALWAYS_ON' "$AIRPLAY_SRC" ||
+    fail "V3.4 AirPlay feature flags are not fixed to always-on policy"
+grep -Fq 'alt_flag_create111 = 1;' "$AIRPLAY_SRC" ||
+    fail "V3.4 private111 creation is still marker-gated"
+grep -Fq 'alt_flag_iap2      = 0;' "$AIRPLAY_SRC" ||
+    fail "V3.4 unexpectedly re-enabled legacy ThemeAssets iAP2 mutation"
+grep -Fq 'PHASE=RUNTIME_AUTHORITY policy=INSTALLED_PRELOAD' "$HOOK_SRC" ||
+    fail "V3.4 installed-preload runtime authority marker missing"
+if grep -Fq 'PHASE=STATE_ROOT_WAIT result=' "$HOOK_SRC"; then
+    fail "V3.4 still waits on removable-SD authoritative state"
 fi
+grep -Fq '#define P111_STREAM_READY_PATH "/tmp/altscreen-private111.stream-ready"' "$TAP" ||
+    fail "V3.4 native stream-ready handoff is missing"
+grep -Fq 'g_frame->frame_count < 2u' "$TAP" ||
+    fail "V3.4 stream-ready marker does not require stable decoded progress"
+grep -Fq 'PHASE=PRIVATE111_STREAM_READY' "$TAP" ||
+    fail "V3.4 stream-ready observability marker missing"
+grep -Fq 'STREAM_READY="$TMP_ROOT/altscreen-private111.stream-ready"' "$SUPERVISOR" ||
+    fail "V3.4 stream supervisor does not consume native readiness marker"
+grep -Fq 'ALT111_RECOVER_CURRENT_SESSION=1' "$SUPERVISOR" ||
+    fail "V3.4 supervisor does not attach to the already-negotiated session"
+grep -Fq 'frames" -ge 2' "$SUPERVISOR" ||
+    fail "V3.4 supervisor does not validate stable decoded progress"
 
 SOURCE_ONLY=0
 HOOK_PENDING=0
@@ -880,12 +901,14 @@ fi
 grep -Fq 'stop_guard=RETAINED' "$RELEASE_STOP" ||
     fail "release stop does not advertise retained stop guard"
 
-grep -Fq 'echo observe > "$STATE_DIR/IAP2_PROFILE"' "$CTRL" ||
-    fail "corrected iAP2 observe policy missing"
-grep -Fq 'rm -f "$STATE_DIR/ARMED_IAP2"' "$CTRL" ||
-    fail "retired ThemeAssets arm marker is not disabled"
-grep -Fq 'rm -f "$STATE_DIR/FULL_CHAIN_MODE" "$STATE_DIR/NATIVE_DISPLAY_MODE"' "$CTRL" ||
-    fail "legacy native context route markers are not cleared"
+grep -Fq 'AUTH_PRIVATE111_CORE=V34_ALWAYS_ON authority=installed_preload sd_runtime_gate=DISABLED' "$CTRL" ||
+    fail "V3.4 controller still exposes removable-SD runtime authorization"
+grep -Fq 'NEGOTIATION_POLICY=ONE_CARPLAY_SESSION automatic_main110_then_private111 no_display_gate=YES' "$CTRL" ||
+    fail "V3.4 one-session negotiation policy missing"
+grep -Fq 'IAP2_THEMEASSETS_MUTATION=DISABLED' "$CTRL" ||
+    fail "V3.4 retired ThemeAssets mutation policy missing"
+grep -Fq 'rm -f "$STATE_DIR/ARMED"' "$CTRL" ||
+    fail "V3.4 does not clean legacy SD arming markers"
 grep -Fq 'DISPLAY_PATH=PRIVATE111_DIRECT' "$CTRL" ||
     fail "controller does not report private111 direct path"
 grep -Fq 'decoder_backend=stock_omx_screen_linearized_shm' "$CTRL" ||
@@ -895,8 +918,8 @@ grep -Fq 'ensure_dirs()' "$INSTALL" ||
 if grep -Fq 'mkdir -p "$JAR_TARGET_DIR"' "$INSTALL"; then
     fail "integrated installer still uses fatal EEXIST-prone mkdir -p for HMI target"
 fi
-grep -Fq 'PACKAGE_MODE=CARPLAY_PRIVATE111_DIRECT_DISPLAY_V2' "$INSTALL" ||
-    fail "integrated installer does not identify V2 package"
+grep -Fq 'PACKAGE_MODE=CARPLAY_PRIVATE111_DIRECT_DISPLAY_V3_4_STREAM_DRIVEN' "$INSTALL" ||
+    fail "integrated installer does not identify V3.4 stream-driven package"
 grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$INSTALL" ||
     fail "integrated installer does not gate on rebuilt V2 release status"
 grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$INSTALL" ||
@@ -905,8 +928,10 @@ grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' "$CHAIN" ||
     fail "runtime stager does not gate on rebuilt V2 release"
 grep -Fq 'mode=carplay-private111-direct-display-v2' "$CHAIN" ||
     fail "runtime ownership marker is not V2"
-grep -Fq 'CarPlay private111 Direct Display V2' "$STATUS" ||
-    fail "STATUS still identifies the old V1 display path"
+grep -Fq 'CarPlay private111 Direct Display V3.4' "$STATUS" ||
+    fail "STATUS does not identify the V3.4 display path"
+grep -Fq 'DISPLAY_START_POLICY=STREAM_DRIVEN' "$STATUS" ||
+    fail "STATUS does not surface V3.4 stream-driven startup policy"
 grep -Fq 'FRAME_LINEARIZER_SLOW_EVENTS=' "$STATUS" ||
     fail "STATUS does not surface Screen readback latency evidence"
 grep -Fq 'select_controller_log_source' "$BOOT_DIAG" ||
@@ -930,8 +955,8 @@ grep -Fq '/tmp/altscreen_autostart.log' "$START" ||
 if grep -Eq '/tmp/MMI-Cockpit-Carplay/.+autostart\.log' "$START"; then
     fail "retired nested Mirror autostart log path remains"
 fi
-grep -Fq 'MIRROR_START_RC=' "$START" ||
-    fail "boot autostart launcher return code diagnostic missing"
+grep -Fq 'STREAM_SUPERVISOR_RC=' "$START" ||
+    fail "V3.4 boot supervisor return code diagnostic missing"
 grep -Fq 'ensure_dirs "$STATE"' "$START" ||
     fail "QNX-safe idempotent runtime state creation missing"
 if grep -Fq 'mkdir -p "$STATE"' "$START"; then
@@ -950,10 +975,13 @@ sh "$STORAGE_POLICY_TEST" || fail "storage policy fixture failed"
 sh "$INSTALL_TX_TEST" || fail "install transaction fixture failed"
 sh "$RESTORE_TX_TEST" || fail "RESTORE rollback fault-injection fixture failed"
 
-grep -Fq 'touch /tmp/mmi-mirror-active' "$START" ||
-    fail "Java80 demand boot marker missing"
-grep -Fq '/mnt/app/root/carplay-altscreen/bin/mirror/start_vehicle.sh' "$START" ||
-    fail "direct-display sidecar boot launch missing"
+if grep -Fq 'touch /tmp/mmi-mirror-active' "$START"; then
+    fail "V3.4 still asserts Java80 demand at boot before private111 stream-ready"
+fi
+grep -Fq '/mnt/app/root/carplay-altscreen/bin/mirror/stream_supervisor.sh' "$START" ||
+    fail "V3.4 boot does not launch the lightweight stream supervisor"
+grep -Fq 'fixed_delay=NONE' "$START" ||
+    fail "V3.4 START does not declare dynamic no-fixed-delay display policy"
 grep -Fq 'meaning=destination_first_successful_gles_present' "$START" ||
     fail "destination-ready semantics missing"
 grep -Fq 'LD_PRELOAD= "$BIN"' "$LAUNCH" ||
@@ -974,6 +1002,7 @@ check_release_sha "BUILD_INFO.txt" "$INFO"
 check_release_sha "carplay-alt111-mirror-display" "$BIN"
 check_release_sha "start_vehicle.sh" "$LAUNCH"
 check_release_sha "stop_vehicle.sh" "$RELEASE_STOP"
+check_release_sha "stream_supervisor.sh" "$SUPERVISOR"
 
 bin_sha=$(sha256_file "$BIN")
 
