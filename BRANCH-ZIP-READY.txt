@@ -1,6 +1,6 @@
 BRANCH_ZIP_READY=YES
 branch=experiment/oem-layout-second-screen_v3.3
-validated_source_commit=22a6371750690b91387f2b70d508ce1f7ab50095
+validated_source_commit=9144dc887568213c683b6c97882bcd38e4bd89e0
 mode=PRIVATE111_DIRECT_DISPLAY_V3_3_OEM_LOWER_BAR
 jar_size=113781
 jar_cksum=1699756523
