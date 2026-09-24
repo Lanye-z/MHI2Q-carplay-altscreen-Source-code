@@ -302,6 +302,7 @@ jobs:
           hmi_info = root / "Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt"
           text = hmi_info.read_text()
           for k, v in {
+              "mode": "PRIVATE111_DIRECT_DISPLAY_V3_4_STREAM_DRIVEN",
               "universal_runtime_sha256": hook_sha,
               "jar_size": jar_size,
               "jar_cksum": jar_cksum,
