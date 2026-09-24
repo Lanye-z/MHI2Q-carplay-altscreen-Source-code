@@ -171,9 +171,9 @@ validate_runtime_sources(){
     for name in carplay-alt111-mirror-display start_vehicle.sh stop_vehicle.sh stream_supervisor.sh BUILD_INFO.txt; do
         [ -s "$MIRROR_SD/$name" ] || { echo "FAIL: integrated direct-display sidecar missing/empty: $MIRROR_SD/$name" >&2; return 1; }
     done
-    grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V3_4' "$MIRROR_SD/BUILD_INFO.txt" 2>/dev/null &&
+    grep -Fq 'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V3_5' "$MIRROR_SD/BUILD_INFO.txt" 2>/dev/null &&
     grep -Fq 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' "$MIRROR_SD/BUILD_INFO.txt" 2>/dev/null || {
-        echo "FAIL: direct-display release is not vehicle-ready V2; rebuild/promote QNX sidecar first" >&2
+        echo "FAIL: direct-display release is not vehicle-ready V3.5; rebuild/promote runtime first" >&2
         return 1
     }
     sh -n "$MIRROR_SD/start_vehicle.sh" || return 1
@@ -252,7 +252,7 @@ install_runtime_scripts(){
         mount_app_ro >/dev/null 2>&1 || true
         return 1
     }
-    printf '%s\n' 'owner=MMI-Cockpit-Carplay' 'mode=carplay-private111-direct-display-v3.4' > "$RUNTIME_STAGE/bin/mirror/$MIRROR_OWNER" || return 1
+    printf '%s\n' 'owner=MMI-Cockpit-Carplay' 'mode=carplay-private111-direct-display-v3.5' > "$RUNTIME_STAGE/bin/mirror/$MIRROR_OWNER" || return 1
     printf '%s\n' 'owner=MMI-Cockpit-Carplay' 'runtime=carplay-altscreen' > "$RUNTIME_STAGE/$RUNTIME_OWNER" || {
         rm -rf "$RUNTIME_STAGE" 2>/dev/null || true
         mount_app_ro >/dev/null 2>&1 || true
