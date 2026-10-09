@@ -174,6 +174,51 @@ bool Mhi2qBackend::create_native_window() {
     return true;
 }
 
+bool Mhi2qBackend::sample_window_state(Mhi2qWindowState *state) const {
+    if (!state) return false;
+
+    memset(state, 0, sizeof(*state));
+    state->backend_ready = ready_;
+    state->native_window_present = native_window_ != 0;
+    state->visible = -1;
+    state->native_window_value =
+        (unsigned long)(uintptr_t)native_window_;
+    state->kd_window = kd_window_;
+    state->displayable_id = cfg_.displayable_id;
+
+    if (!native_window_)
+        return false;
+
+    if (screen_get_window_property_iv_) {
+        int visible = -1;
+        errno = 0;
+        const int rc = screen_get_window_property_iv_(
+            (void *)(uintptr_t)native_window_, SCR_PROP_VISIBLE, &visible);
+        if (rc == 0) {
+            state->visible_valid = true;
+            state->visible = visible;
+        }
+    }
+
+    if (screen_get_window_property_cv_) {
+        char manager[96];
+        memset(manager, 0, sizeof(manager));
+        errno = 0;
+        const int rc = screen_get_window_property_cv_(
+            (void *)(uintptr_t)native_window_,
+            SCR_PROP_MANAGER_STRING,
+            (int)sizeof(manager) - 1,
+            manager);
+        if (rc == 0) {
+            state->manager_valid = true;
+            strncpy(state->manager, manager, sizeof(state->manager) - 1);
+            state->manager[sizeof(state->manager) - 1] = 0;
+        }
+    }
+
+    return state->visible_valid || state->manager_valid;
+}
+
 void Mhi2qBackend::probe_managed_window() {
     if (!native_window_) return;
     usleep(150000);

@@ -1,147 +1,134 @@
 #!/bin/sh
-# private111 direct-display V1 RESTORE ORIGINAL.
-# Releases Java80 demand, restores the exact pre-install carplay_hook.jar, then
-# restores the native AltScreen/preload transaction. No MMI Mirror is involved.
+# V3 RESTORE ORIGINAL entry point.
+# All persistent mutations are delegated to the SD-resident transactional
+# orchestrator so recovery still works when /mnt/app runtime is partial/missing.
 set -u
 
-BASE="$0"
-RESOLVED=$(command -v -- "$BASE" 2>/dev/null)
-[ -n "$RESOLVED" ] || RESOLVED="$BASE"
-SCRIPTDIR=$(cd -P -- "$(dirname -- "$RESOLVED")" 2>/dev/null && pwd -P)
-[ -n "$SCRIPTDIR" ] || { echo "FAIL: cannot resolve RESTORE directory"; exit 126; }
+ensure_dirs() {
+    for dir in "$@"; do
+        [ -d "$dir" ] && continue
+        mkdir -p "$dir" || return 1
+    done
+    return 0
+}
+
+# Persist the complete RESTORE ORIGINAL transaction on the active SD card before
+# any restore mutation starts.  STORE LOGS + RESTORE sets ALTS_OPLOG_CAPTURED
+# itself, so direct RESTORE gets one log while the combined action gets one
+# outer log rather than nested duplicates.
+if [ "${ALTS_OPLOG_CAPTURED:-0}" != 1 ]; then
+    CAPTURE_ENTRY="$0"
+    RESOLVED_CAPTURE=$(command -v -- "$CAPTURE_ENTRY" 2>/dev/null)
+    [ -n "$RESOLVED_CAPTURE" ] && CAPTURE_ENTRY="$RESOLVED_CAPTURE"
+
+    journal_volume=""
+    if [ "${ALTSCREEN_CHAIN_TESTING:-0}" = 1 ]; then
+        journal_volume=${ALTSCREEN_CHAIN_VOLUME:-}
+        case "$journal_volume" in /tmp/*|/var/tmp/*) ;; *) echo "FAIL: invalid ALTSCREEN_CHAIN_VOLUME"; exit 2 ;; esac
+    else
+        for candidate in /net/mmx/fs/sda0 /net/mmx/fs/sda1 /net/mmx/fs/sdb0 /net/mmx/fs/sdb1 /fs/sda0 /fs/sda1 /fs/sdb0 /fs/sdb1; do
+            if [ -d "$candidate/Toolbox" ]; then journal_volume=$candidate; break; fi
+        done
+    fi
+    [ -n "$journal_volume" ] && [ -d "$journal_volume/Toolbox" ] || {
+        echo "RESTORE=REFUSED reason=SD_WITH_TOOLBOX_NOT_FOUND production_changed=NO"
+        exit 1
+    }
+    SD_RW_HELPER="$journal_volume/Toolbox/scripts/altscreen_sd_writable.sh"
+    [ -f "$SD_RW_HELPER" ] || { echo "RESTORE=REFUSED reason=SD_WRITABLE_HELPER_MISSING production_changed=NO"; exit 127; }
+    . "$SD_RW_HELPER"
+    altscreen_sd_ensure_writable "$journal_volume" RESTORE_JOURNAL || { echo "RESTORE=REFUSED reason=SD_NOT_WRITABLE production_changed=NO"; exit 1; }
+
+    journal_stamp=$(date +%Y%m%d_%H%M%S 2>/dev/null || echo unknown)
+    journal_dir="$journal_volume/MMI-Cockpit-Carplay/logs/operations"
+    journal_storage=SD
+    if ensure_dirs "$journal_dir" 2>/dev/null; then
+        journal_base="$journal_dir/restore_${journal_stamp}"
+        journal="$journal_base.log"
+        journal_n=0
+        while [ -e "$journal" ]; do
+            journal_n=$((journal_n + 1))
+            journal="${journal_base}_${journal_n}.log"
+        done
+    else
+        journal_storage=TMP
+        journal_root=""
+        if [ "${ALTSCREEN_CHAIN_TESTING:-0}" = 1 ]; then journal_root=${ALTSCREEN_CHAIN_ROOT:-}; fi
+        journal="$journal_root/tmp/altscreen_restore_${journal_stamp}.log"
+    fi
+
+    if ! (printf 'OP_BEGIN action=RESTORE_ORIGINAL script=%s storage=%s\n' "$CAPTURE_ENTRY" "$journal_storage" > "$journal") 2>/dev/null; then
+        if [ "$journal_storage" = SD ]; then
+            journal_storage=TMP
+            journal_root=""
+            if [ "${ALTSCREEN_CHAIN_TESTING:-0}" = 1 ]; then journal_root=${ALTSCREEN_CHAIN_ROOT:-}; fi
+            journal="$journal_root/tmp/altscreen_restore_${journal_stamp}.log"
+            (printf 'OP_BEGIN action=RESTORE_ORIGINAL script=%s storage=%s\n' "$CAPTURE_ENTRY" "$journal_storage" > "$journal") 2>/dev/null || {
+                echo "WARN: RESTORE operation journal unavailable on SD and /tmp; recovery will continue unjournaled"
+                ALTS_OPLOG_CAPTURED=1; export ALTS_OPLOG_CAPTURED
+                if [ "$#" -gt 0 ]; then exec /bin/sh "$CAPTURE_ENTRY" "$@"; else exec /bin/sh "$CAPTURE_ENTRY"; fi
+            }
+            printf 'RESTORE_JOURNAL_FALLBACK=TMP reason=sd_write_failed\n' >> "$journal"
+        else
+            echo "WARN: RESTORE operation journal unavailable on /tmp; recovery will continue unjournaled"
+            ALTS_OPLOG_CAPTURED=1; export ALTS_OPLOG_CAPTURED
+            if [ "$#" -gt 0 ]; then exec /bin/sh "$CAPTURE_ENTRY" "$@"; else exec /bin/sh "$CAPTURE_ENTRY"; fi
+        fi
+    fi
+    printf 'DIAGNOSTICS_VOLUME=%s\n' "$journal_volume" >> "$journal"
+
+    if [ "$#" -gt 0 ]; then
+        ALTS_OPLOG_CAPTURED=1 /bin/sh "$CAPTURE_ENTRY" "$@" >> "$journal" 2>&1
+    else
+        ALTS_OPLOG_CAPTURED=1 /bin/sh "$CAPTURE_ENTRY" >> "$journal" 2>&1
+    fi
+    journal_rc=$?
+    printf 'OP_END action=RESTORE_ORIGINAL rc=%s\n' "$journal_rc" >> "$journal"
+    printf 'OPERATION_LOG=%s\n' "$journal" >> "$journal"
+
+    if [ "$journal_storage" = TMP ]; then
+        target_dir="$journal_volume/MMI-Cockpit-Carplay/logs/operations"
+        if ensure_dirs "$target_dir" 2>/dev/null; then
+            target="$target_dir/restore_${journal_stamp}_recovered.log"
+            cp "$journal" "$target.new" 2>/dev/null &&
+                mv "$target.new" "$target" 2>/dev/null &&
+                printf 'RESTORE_JOURNAL_FLUSHED_TO_SD=%s\n' "$target" >> "$journal" ||
+                rm -f "$target.new" 2>/dev/null || true
+        fi
+    fi
+    sync >/dev/null 2>&1 || true
+    cat "$journal"
+    exit "$journal_rc"
+fi
 
 TESTING=${ALTSCREEN_CHAIN_TESTING:-0}
-DEVICE_ROOT=""
 VOLUME=""
 if [ "$TESTING" = 1 ]; then
-    DEVICE_ROOT=${ALTSCREEN_CHAIN_ROOT:-}
     VOLUME=${ALTSCREEN_CHAIN_VOLUME:-}
+    case "$VOLUME" in /tmp/*|/var/tmp/*) ;; *) echo "FAIL: invalid ALTSCREEN_CHAIN_VOLUME" >&2; exit 2 ;; esac
 else
     for candidate in /net/mmx/fs/sda0 /net/mmx/fs/sda1 /net/mmx/fs/sdb0 /net/mmx/fs/sdb1 /fs/sda0 /fs/sda1 /fs/sdb0 /fs/sdb1; do
-        if [ -d "$candidate/Toolbox" ]; then VOLUME=$candidate; break; fi
+        if [ -d "$candidate/Toolbox" ]; then
+            VOLUME=$candidate
+            break
+        fi
     done
 fi
 
-APP_BIN="$DEVICE_ROOT/mnt/app/root/carplay-altscreen/bin"
-APP_SELF="$APP_BIN/stop_mmi_cockpit_carplay_test.sh"
-if [ "$SCRIPTDIR" != "$APP_BIN" ] && [ -f "$APP_SELF" ] && [ -f "$APP_BIN/altscreen_chain_test.sh" ]; then
-    echo "APP_RUNTIME_FORWARD action=RESTORE from=$SCRIPTDIR to=/mnt/app/root/carplay-altscreen/bin"
-    if [ "$#" -gt 0 ]; then
-        exec /bin/sh "$APP_SELF" "$@"
-    else
-        exec /bin/sh "$APP_SELF"
-    fi
-fi
-
-CONTROLLER="$SCRIPTDIR/altscreen_chain_test.sh"
-[ -f "$CONTROLLER" ] || { echo "FAIL: installed chain controller missing"; exit 127; }
-[ -n "$VOLUME" ] || { echo "FAIL: SD card required to restore original Java HMI JAR"; exit 1; }
-
-RUNTIME="$DEVICE_ROOT/mnt/app/root/carplay-altscreen"
-ENABLED="$RUNTIME/state/basevideo3.enabled"
-JAR="$DEVICE_ROOT/mnt/app/eso/hmi/lsd/jars/carplay_hook.jar"
-JAR_DIR=$(dirname -- "$JAR")
-BACKUP="$VOLUME/MMI-Cockpit-Carplay/backup/basevideo3-hmi-original"
-ACTIVE="$DEVICE_ROOT/tmp/mmi-mirror-active"
-READY="$DEVICE_ROOT/tmp/mmi-mirror-basevideo.ready"
-STARTED="$DEVICE_ROOT/tmp/mmi-mirror-controller.started"
-MIRROR_STOP="$RUNTIME/bin/mirror/stop_vehicle.sh"
-
-mount_app_rw(){ [ "$TESTING" = 1 ] || mount -uw /mnt/app; }
-mount_app_ro(){ [ "$TESTING" = 1 ] || mount -ur /mnt/app; }
-mount_system_rw(){ [ "$TESTING" = 1 ] || mount -uw /mnt/system; }
-mount_system_ro(){ [ "$TESTING" = 1 ] || mount -ur /mnt/system; }
-
-verify_backup(){
-    [ -f "$BACKUP/COMPLETE" ] || return 1
-    if [ -f "$BACKUP/present" ]; then
-        [ -s "$BACKUP/carplay_hook.jar" ] || return 1
-        if [ -f "$BACKUP/cksum" ] && command -v cksum >/dev/null 2>&1; then
-            [ "$(cksum < "$BACKUP/carplay_hook.jar")" = "$(cat "$BACKUP/cksum")" ] || return 1
-        fi
-    elif [ -f "$BACKUP/absent" ]; then
-        :
-    else
-        return 1
-    fi
+[ -n "$VOLUME" ] || {
+    echo "RESTORE=REFUSED reason=SD_WITH_TOOLBOX_NOT_FOUND production_changed=NO"
+    exit 1
 }
 
-strip_blocks(){
-    awk '
-      $0 == "# BEGIN ALT111 MIRROR AUTOSTART" { in_old=1; next }
-      $0 == "# END ALT111 MIRROR AUTOSTART"   { in_old=0; next }
-      $0 == "# BEGIN ALT111 BASEVIDEO3 AUTOSTART" { in_new=1; next }
-      $0 == "# END ALT111 BASEVIDEO3 AUTOSTART"   { in_new=0; next }
-      !in_old && !in_new { print }
-      END { if (in_old || in_new) exit 9 }
-    ' "$1"
+TXN="$VOLUME/Toolbox/scripts/altscreen_restore_transaction.sh"
+[ -f "$TXN" ] || {
+    echo "RESTORE=REFUSED reason=TRANSACTIONAL_RESTORE_SCRIPT_MISSING production_changed=NO"
+    exit 127
 }
 
-# Stop the pixel sidecar first. It has no context writer in this branch.
-[ ! -x "$MIRROR_STOP" ] || /bin/sh "$MIRROR_STOP" >/dev/null 2>&1 || true
-# Release demand while the current Java controller is still resident. It will
-# observe active/ready withdrawal and return terminal1 to its stock context.
-rm -f "$ACTIVE" "$READY" 2>/dev/null || true
-sleep 1
-
-if [ -f "$ENABLED" ]; then
-    mount_app_rw || { echo "FAIL: cannot mount /mnt/app to disable BaseVideo3"; exit 1; }
-    rm -f "$ENABLED" || { mount_app_ro >/dev/null 2>&1 || true; echo "FAIL: cannot remove BaseVideo3 enable marker"; exit 1; }
-    sync >/dev/null 2>&1 || true
-    mount_app_ro || { echo "FAIL: cannot remount /mnt/app read-only"; exit 1; }
-fi
-
-STARTUP=""
-for candidate in "$DEVICE_ROOT/mnt/system/etc/boot/startup.sh" "$DEVICE_ROOT/etc/boot/startup.sh"; do
-    if [ -f "$candidate" ]; then STARTUP=$candidate; break; fi
-done
-if [ -n "$STARTUP" ]; then
-    CLEAN="$STARTUP.basevideo3.restore.$$"
-    mount_system_rw || { echo "FAIL: cannot mount /mnt/system writable"; exit 1; }
-    strip_blocks "$STARTUP" > "$CLEAN" || {
-        rm -f "$CLEAN"; mount_system_ro >/dev/null 2>&1 || true
-        echo "FAIL: invalid BaseVideo3/Mirror autostart block"; exit 1; }
-    sh -n "$CLEAN" || {
-        rm -f "$CLEAN"; mount_system_ro >/dev/null 2>&1 || true
-        echo "FAIL: startup.sh invalid after BaseVideo3 block removal"; exit 1; }
-    cp "$CLEAN" "$STARTUP" && chmod 755 "$STARTUP" || {
-        rm -f "$CLEAN"; mount_system_ro >/dev/null 2>&1 || true
-        echo "FAIL: cannot publish cleaned startup.sh"; exit 1; }
-    rm -f "$CLEAN"
-    sync >/dev/null 2>&1 || true
-    mount_system_ro || { echo "FAIL: cannot remount /mnt/system read-only"; exit 1; }
-fi
-
-verify_backup || { echo "FAIL: original Java HMI backup unavailable or damaged: $BACKUP"; exit 1; }
-mount_app_rw || { echo "FAIL: cannot mount /mnt/app to restore Java HMI"; exit 1; }
-mkdir -p "$JAR_DIR" || { mount_app_ro >/dev/null 2>&1 || true; echo "FAIL: cannot create JAR directory"; exit 1; }
-TMP="$JAR.basevideo3.restore.tmp"
-rm -f "$TMP" 2>/dev/null || true
-if [ -f "$BACKUP/present" ]; then
-    cp "$BACKUP/carplay_hook.jar" "$TMP" && chmod 644 "$TMP" && mv "$TMP" "$JAR" || {
-        mount_app_ro >/dev/null 2>&1 || true
-        echo "FAIL: cannot restore original carplay_hook.jar"; exit 1; }
-    if command -v cksum >/dev/null 2>&1 && [ -f "$BACKUP/cksum" ]; then
-        [ "$(cksum < "$JAR")" = "$(cat "$BACKUP/cksum")" ] || {
-            mount_app_ro >/dev/null 2>&1 || true
-            echo "FAIL: restored carplay_hook.jar checksum mismatch"; exit 1; }
-    fi
-    echo "HMI_CONTROL_PLANE=RESTORED original=present"
+echo "RESTORE_ENTRY=TRANSACTIONAL_V3 source=$TXN"
+if [ "$#" -gt 0 ]; then
+    exec /bin/sh "$TXN" "$@"
 else
-    rm -f "$JAR" "$TMP" || {
-        mount_app_ro >/dev/null 2>&1 || true
-        echo "FAIL: cannot remove standalone carplay_hook.jar"; exit 1; }
-    echo "HMI_CONTROL_PLANE=RESTORED original=absent"
+    exec /bin/sh "$TXN"
 fi
-sync >/dev/null 2>&1 || true
-mount_app_ro || { echo "FAIL: cannot remount /mnt/app read-only"; exit 1; }
-
-rm -f "$STARTED" 2>/dev/null || true
-/bin/sh "$CONTROLLER" restore
-RC=$?
-[ "$RC" -eq 0 ] || exit "$RC"
-
-echo "BASEVIDEO3_BOOT_DEMAND=DISABLED"
-echo "DIRECT_DISPLAY_SIDECAR=STOPPED native_dmdt=DISABLED"
-echo "RESTORE=PASS integrated=AltScreen+H264Tap+DecoderTap+Displayable3+Java80 reboot_required=YES"
-exit 0

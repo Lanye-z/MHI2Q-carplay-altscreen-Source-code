@@ -1,0 +1,298 @@
+name: AltScreen Probe Marker Contract Rebuild
+
+on:
+  push:
+    branches:
+      - experiment/oem-layout-second-screen_v2
+      - experiment/oem-layout-second-screen_v3
+    paths:
+      - 'Toolbox/carplay_alt_screen/src/**'
+      - 'Toolbox/carplay_alt_screen/mirror_display/src/**'
+      - 'Toolbox/carplay_alt_screen/mirror_display/build_qnx.sh'
+      - 'Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt'
+      - 'Toolbox/carplay_alt_screen/mirror_display/release/carplay-alt111-mirror-display'
+      - 'Toolbox/carplay_alt_screen/mirror_display/release/start_vehicle.sh'
+      - 'Toolbox/carplay_alt_screen/mirror_display/release/stop_vehicle.sh'
+      - 'Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS'
+      - 'Toolbox/scripts/altscreen_chain_test.sh'
+      - 'Toolbox/scripts/altscreen_chain_test_universal.sh'
+      - 'Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh'
+      - 'Toolbox/scripts/stop_mmi_cockpit_carplay_test.sh'
+      - 'Toolbox/scripts/altscreen_persistent_diag.sh'
+      - 'Toolbox/scripts/altscreen_adaptive_diag.sh'
+      - 'Toolbox/scripts/altscreen_boot_diag.sh'
+      - 'Toolbox/scripts/altscreen_live_diag.sh'
+      - 'Toolbox/scripts/altscreen_chain_test_known.sh'
+      - 'Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh'
+      - 'Toolbox/scripts/status_mmi_cockpit_carplay_test.sh'
+      - 'Toolbox/carplay_alt_screen/tests/test_start_autostart_transaction.sh'
+      - 'Toolbox/carplay_alt_screen/tests/test_storage_policy.sh'
+      - 'Toolbox/carplay_alt_screen/tests/test_restore_transaction.sh'
+      - 'VERIFY-NATIVE-DIRECT-RELEASE.sh'
+      - 'VERIFY-BRANCH-ZIP-READY.sh'
+      - 'Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt'
+      - 'BRANCH-ZIP-READY.txt'
+      - '.github/workflows/altscreen-probe-marker-contract.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: altscreen-probe-marker-contract-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  rebuild-universal-hook:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install ARM build inspection tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang lld g++ libgles2-mesa-dev binutils-arm-linux-gnueabihf python3-pyelftools
+
+      - name: Syntax-check V3.1 sidecar geometry sources
+        if: github.ref == 'refs/heads/experiment/oem-layout-second-screen_v3.1'
+        run: |
+          set -euo pipefail
+          g++ -std=c++98 -Wall -Wextra -Werror -fsyntax-only \
+            -IToolbox/carplay_alt_screen/mirror_display/src \
+            -IToolbox/carplay_alt_screen/src \
+            Toolbox/carplay_alt_screen/mirror_display/src/main.cpp
+          g++ -std=c++98 -Wall -Wextra -Werror -fsyntax-only \
+            -IToolbox/carplay_alt_screen/mirror_display/src \
+            Toolbox/carplay_alt_screen/mirror_display/src/gl_renderer.cpp
+          echo "V31_SIDECAR_SOURCE_SYNTAX=PASS"
+
+      - name: Verify authorization marker source contract
+        run: |
+          set -euo pipefail
+          expected='/mnt/app/root/carplay-altscreen/state/fullchain_probe'
+          legacy='/mnt/app/root/hooks/.mibcarplay_fullchain_probe'
+          grep -Fq "#define ALTSCREEN_PROBE_MARKER \"$expected\"" Toolbox/carplay_alt_screen/src/p1404_resolve.c
+          grep -Fq "PROBE_MARKER=\"\$(p $expected)\"" Toolbox/scripts/altscreen_chain_test_universal.sh
+          if grep -Fq "$legacy" Toolbox/carplay_alt_screen/src/p1404_resolve.c; then
+            echo "legacy authorization marker still present in source" >&2
+            exit 1
+          fi
+          echo "AUTH_MARKER_SOURCE_CONTRACT=PASS path=$expected"
+
+      - name: Rebuild universal QNX hook
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/altscreen-marker-contract"
+          sh Toolbox/carplay_alt_screen/build_source_snapshot.sh universal "$out"
+          test -s "$out/libcarplay_altscreen.so"
+          expected='/mnt/app/root/carplay-altscreen/state/fullchain_probe'
+          legacy='/mnt/app/root/hooks/.mibcarplay_fullchain_probe'
+          strings "$out/libcarplay_altscreen.so" | grep -Fq "$expected"
+          if strings "$out/libcarplay_altscreen.so" | grep -Fq "$legacy"; then
+            echo "legacy authorization marker leaked into rebuilt runtime" >&2
+            exit 1
+          fi
+          strings "$out/libcarplay_altscreen.so" | grep -Fq 'PHASE=RUNTIME_AUTHORIZATION'
+          strings "$out/libcarplay_altscreen.so" | grep -Fq 'FORCED_BYPASS'
+          arm-linux-gnueabihf-readelf -d "$out/libcarplay_altscreen.so" | grep -q 'libc.so.3'
+          arm-linux-gnueabihf-readelf -d "$out/libcarplay_altscreen.so" | grep -q 'libm.so.2'
+          echo "AUTH_MARKER_BINARY_CONTRACT=PASS path=$expected"
+
+      - name: Promote rebuilt hook and refresh manifests
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/altscreen-marker-contract"
+          dst='Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so'
+          cp "$out/libcarplay_altscreen.so" "$dst"
+
+          python3 <<'PY'
+          import hashlib, json, os, pathlib, re
+          root = pathlib.Path('.')
+          hook_rel = 'Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so'
+          hmi_rel = 'Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt'
+          jar_rel = 'Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar'
+          ready_rel = 'BRANCH-ZIP-READY.txt'
+          branch_verify_rel = 'VERIFY-BRANCH-ZIP-READY.sh'
+          restore_tx_test_rel = 'Toolbox/carplay_alt_screen/tests/test_restore_transaction.sh'
+          mirror_info_rel = 'Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt'
+          mirror_sums_rel = 'Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS'
+          mirror_bin_rel = 'Toolbox/carplay_alt_screen/mirror_display/release/carplay-alt111-mirror-display'
+
+          def digest(rel):
+              return hashlib.sha256((root / rel).read_bytes()).hexdigest()
+
+          hook_sha = digest(hook_rel)
+          jar_sha = digest(jar_rel)
+          branch = os.environ.get('GITHUB_REF_NAME', 'unknown')
+          is_v31 = branch == 'experiment/oem-layout-second-screen_v3.1'
+
+          # V3.1 changes both the universal safeArea hook and the QNX sidecar.
+          # This workflow can rebuild/promote the hook. Keep the branch ZIP
+          # blocked until the separately rebuilt V3.1 QNX sidecar is present.
+          mirror_info = root / mirror_info_rel
+          mirror_text = mirror_info.read_text()
+
+          def replace_or_add(text, key, value):
+              pattern = r'^' + re.escape(key) + r'=.*$'
+              line = key + '=' + value
+              if re.search(pattern, text, flags=re.M):
+                  return re.sub(pattern, line, text, flags=re.M)
+              if text and not text.endswith('\n'):
+                  text += '\n'
+              return text + line + '\n'
+
+          if is_v31:
+              mirror_text = replace_or_add(
+                  mirror_text, 'hook_runtime_rebuild_required', 'no')
+              mirror_text = replace_or_add(
+                  mirror_text, 'hook_layout_safearea_rebuild_required', 'no')
+
+              if 'release_binary_status=V3_BINARY_STALE_V31_SOURCE_REBUILD_REQUIRED' in mirror_text:
+                  mirror_text = replace_or_add(
+                      mirror_text, 'vehicle_zip_status',
+                      'NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED')
+              elif (
+                  'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' in mirror_text
+                  and 'geometry_policy=OEM_MAP_PLANE_1TO1_CLIP_V31' in mirror_text
+              ):
+                  mirror_text = replace_or_add(
+                      mirror_text, 'vehicle_zip_status',
+                      'READY_FOR_VEHICLE_TEST')
+              else:
+                  raise SystemExit(
+                      'ERROR: V3.1 mirror release state is not recognized'
+                  )
+              mirror_info.write_text(mirror_text)
+
+              release_table = {}
+              release_sums = root / mirror_sums_rel
+              for line in release_sums.read_text().splitlines():
+                  parts = line.split(None, 1)
+                  if len(parts) == 2:
+                      name = parts[1].strip()
+                      rel = 'Toolbox/carplay_alt_screen/mirror_display/release/' + name
+                      if (root / rel).is_file():
+                          release_table[name] = digest(rel)
+              release_table['BUILD_INFO.txt'] = digest(mirror_info_rel)
+              release_table['carplay-alt111-mirror-display'] = digest(mirror_bin_rel)
+              release_sums.write_text(
+                  ''.join(
+                      f"{release_table[name]}  {name}\n"
+                      for name in sorted(release_table)
+                  )
+              )
+
+          mirror_ready = (
+              'release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2' in mirror_text
+              and 'vehicle_zip_status=READY_FOR_VEHICLE_TEST' in mirror_text
+          )
+          vehicle_ready = (not is_v31) or mirror_ready
+
+          # Keep HMI release metadata aligned with the runtime actually promoted
+          # into the branch. This is what makes GitHub's branch ZIP self-contained.
+          hmi = root / hmi_rel
+          text = hmi.read_text()
+          updates = {
+              'universal_runtime_sha256': hook_sha,
+              'branch_zip_status':
+                  'READY_FOR_VEHICLE_TEST'
+                  if vehicle_ready else 'NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED',
+              'branch_zip_policy':
+                  'GITHUB_BRANCH_ZIP_INSTALLABLE'
+                  if vehicle_ready else 'QNX_SIDECAR_REBUILD_REQUIRED',
+          }
+          for key, value in updates.items():
+              pattern = r'^' + re.escape(key) + r'=.*$'
+              line = key + '=' + value
+              if re.search(pattern, text, flags=re.M):
+                  text = re.sub(pattern, line, text, flags=re.M)
+              else:
+                  if text and not text.endswith('\n'):
+                      text += '\n'
+                  text += line + '\n'
+          hmi.write_text(text)
+
+          # A human-readable, machine-checkable marker for direct branch ZIP use.
+          info = {}
+          for line in text.splitlines():
+              if '=' in line:
+                  key, value = line.split('=', 1)
+                  info[key] = value
+          ready = root / ready_rel
+          ready.write_text(
+              'BRANCH_ZIP_READY=' + ('YES' if vehicle_ready else 'NO') + '\n'
+              'branch=' + branch + '\n'
+              'validated_source_commit=' + os.environ.get('GITHUB_SHA', 'unknown') + '\n'
+              'mode=' + info.get('mode', 'unknown') + '\n'
+              'jar_size=' + info.get('jar_size', 'unknown') + '\n'
+              'jar_cksum=' + info.get('jar_cksum', 'unknown') + '\n'
+              'jar_sha256=' + jar_sha + '\n'
+              'universal_runtime_sha256=' + hook_sha + '\n'
+              'display_chain='
+                  + ('V3_1_OEM_MAP_1TO1_CLIP' if is_v31 else 'V2_UNCHANGED')
+                  + '\n'
+              'install_policy=EXTRACT_BRANCH_ZIP_CONTENTS_TO_SD_ROOT\n'
+              'verifier=VERIFY-BRANCH-ZIP-READY.sh\n'
+          )
+
+          p = root / 'PACKAGE_SOURCE_MAP.json'
+          data = json.loads(p.read_text())
+          for rel in list(data):
+              path = root / rel
+              if path.is_file():
+                  data[rel] = digest(rel)
+          for rel in [hook_rel, hmi_rel, jar_rel, ready_rel, branch_verify_rel,
+                      restore_tx_test_rel, mirror_info_rel, mirror_sums_rel, mirror_bin_rel]:
+              if (root / rel).is_file():
+                  data[rel] = digest(rel)
+          p.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n')
+
+          sums = root / 'SHA256SUMS.txt'
+          table = {}
+          for line in sums.read_text().splitlines():
+              parts = line.split(None, 1)
+              if len(parts) == 2:
+                  rel = parts[1].strip()
+                  path = root / rel
+                  if path.is_file():
+                      table[rel] = digest(rel)
+          for rel in [hook_rel, hmi_rel, jar_rel, ready_rel, branch_verify_rel,
+                      restore_tx_test_rel, mirror_info_rel, mirror_sums_rel,
+                      mirror_bin_rel, 'PACKAGE_SOURCE_MAP.json']:
+              if (root / rel).is_file():
+                  table[rel] = digest(rel)
+          table.pop('SHA256SUMS.txt', None)
+          sums.write_text(
+              ''.join(f"{table[rel]} {rel}\n" for rel in sorted(table))
+          )
+          PY
+
+          sh VERIFY-NATIVE-DIRECT-RELEASE.sh
+          if grep -Fq 'BRANCH_ZIP_READY=YES' BRANCH-ZIP-READY.txt; then
+            sh VERIFY-BRANCH-ZIP-READY.sh
+          else
+            echo "BRANCH_ZIP_VERIFY=SKIPPED reason=QNX_SIDECAR_REBUILD_REQUIRED"
+          fi
+
+      - name: Commit promoted universal runtime
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so \
+            Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt \
+            Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt \
+            Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS \
+            BRANCH-ZIP-READY.txt \
+            VERIFY-BRANCH-ZIP-READY.sh \
+            PACKAGE_SOURCE_MAP.json \
+            SHA256SUMS.txt
+          if ! git diff --cached --quiet; then
+            git commit -m "build(altscreen): promote authorization-marker fix [skip ci]"
+            git fetch origin "$GITHUB_REF_NAME"
+            git rebase "origin/$GITHUB_REF_NAME"
+            git push origin "HEAD:$GITHUB_REF_NAME"
+          fi

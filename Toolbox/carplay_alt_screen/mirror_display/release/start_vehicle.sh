@@ -32,35 +32,27 @@ else
 fi
 
 TMP_ROOT="${ALT111_MIRROR_TMP_ROOT:-/tmp}"
-PROJECT_TMP="$TMP_ROOT/MMI-Cockpit-Carplay"
-VOLATILE="$PROJECT_TMP/mirror"
-if [ ! -d "$PROJECT_TMP" ]; then mkdir "$PROJECT_TMP" 2>/dev/null || true; fi
-if [ -d "$PROJECT_TMP" ] && [ ! -d "$VOLATILE" ]; then mkdir "$VOLATILE" 2>/dev/null || true; fi
+PIDFILE="$TMP_ROOT/altscreen_mirror.pid"
+WATCH_PIDFILE="$TMP_ROOT/altscreen_mirror.lifecycle.pid"
+STOP_GUARD="$TMP_ROOT/altscreen_mirror.stop.requested"
+LOGFILE="$TMP_ROOT/altscreen_mirror.log"
+AUTORESTART_LOG="$TMP_ROOT/altscreen_mirror.autorestart.log"
+RECOVERY_LOCK="$TMP_ROOT/altscreen_mirror.recovery.lock"
+READY="$TMP_ROOT/altscreen_mirror.ready"
+BASE_READY="${ALT111_JAVA_BASE_READY_FILE:-/tmp/mmi-mirror-basevideo.ready}"
+GATE_TOKEN="$TMP_ROOT/altscreen_mirror.phone111.gate"
+HOOK_LOG="$TMP_ROOT/altscreen_hook.log"
+VOLATILE_MODE=FLAT_TMP
 
-if [ -d "$VOLATILE" ]; then
-  PIDFILE="$VOLATILE/pid"
-  WATCH_PIDFILE="$VOLATILE/lifecycle.pid"
-  STOP_GUARD="$VOLATILE/stop.requested"
-  LOGFILE="$VOLATILE/mirror.log"
-  AUTORESTART_LOG="$VOLATILE/autorestart.log"
-  RECOVERY_LOCK="$VOLATILE/recovery.lock"
-  READY="$VOLATILE/ready"
-  BASE_READY="${ALT111_JAVA_BASE_READY_FILE:-/tmp/mmi-mirror-basevideo.ready}"
-  GATE_TOKEN="$VOLATILE/phone111.gate"
-  HOOK_LOG="$PROJECT_TMP/altscreen_hook.log"
-  VOLATILE_MODE=NAMESPACE
-else
-  PIDFILE="$TMP_ROOT/MMI-Cockpit-Carplay.mirror.pid"
-  WATCH_PIDFILE="$TMP_ROOT/MMI-Cockpit-Carplay.mirror.lifecycle.pid"
-  STOP_GUARD="$TMP_ROOT/MMI-Cockpit-Carplay.mirror.stop.requested"
-  LOGFILE="$TMP_ROOT/MMI-Cockpit-Carplay.mirror.log"
-  AUTORESTART_LOG="$TMP_ROOT/MMI-Cockpit-Carplay.mirror.autorestart.log"
-  RECOVERY_LOCK="$TMP_ROOT/MMI-Cockpit-Carplay.mirror.recovery.lock"
-  READY="$TMP_ROOT/MMI-Cockpit-Carplay.mirror.ready"
-  BASE_READY="${ALT111_JAVA_BASE_READY_FILE:-/tmp/mmi-mirror-basevideo.ready}"
-  GATE_TOKEN="$TMP_ROOT/MMI-Cockpit-Carplay.mirror.phone111.gate"
-  HOOK_LOG="$TMP_ROOT/altscreen_hook.log"
-  VOLATILE_MODE=FLAT_TMP
+# Read-only compatibility probe for a pre-upgrade sidecar. New launches never
+# create or write the legacy namespace.
+LEGACY_PIDFILE="$TMP_ROOT/MMI-Cockpit-Carplay/mirror/pid"
+if [ -f "$LEGACY_PIDFILE" ]; then
+  LEGACY_PID="$(cat "$LEGACY_PIDFILE" 2>/dev/null || true)"
+  if [ -n "$LEGACY_PID" ] && kill -0 "$LEGACY_PID" 2>/dev/null; then
+    echo "ALREADY_RUNNING pid=$LEGACY_PID volatile_mode=LEGACY_NAMESPACE"
+    exit 0
+  fi
 fi
 
 DEMAND="${ALT111_MIRROR_ACTIVE_FILE:-/tmp/mmi-mirror-active}"
@@ -68,6 +60,7 @@ RESTART_REASON="${ALT111_MIRROR_RESTART_REASON:-}"
 RESTART_COUNT="${ALT111_MIRROR_RESTART_COUNT:-0}"
 MAX_ABNORMAL_RESTARTS="${ALT111_MIRROR_MAX_ABNORMAL_RESTARTS:-3}"
 RECOVER_CURRENT_SESSION="${ALT111_RECOVER_CURRENT_SESSION:-0}"
+STREAM_SUPERVISED="${ALT111_STREAM_SUPERVISED:-0}"
 export ALT111_RECOVER_CURRENT_SESSION="$RECOVER_CURRENT_SESSION"
 case "$RESTART_COUNT" in ''|*[!0-9]*) RESTART_COUNT=0 ;; esac
 case "$MAX_ABNORMAL_RESTARTS" in ''|*[!0-9]*) MAX_ABNORMAL_RESTARTS=3 ;; esac
@@ -151,7 +144,7 @@ fi
   echo "DECODER_POLICY=stock_omx_then_screen_linearizer decoded_shm=/carplay111_decoded h264_shm=/carplay111_h264 raw_vendor_fallback=DISABLED"
   echo "SHM_POLICY=fstat_size_guard writer_ready_last=1 session_identity=writer_pid+generation+stream_cookie"
   echo "SIDECAR_PRELOAD_POLICY=ISOLATED inherited_preload_ignored=${LD_PRELOAD:-<unset>}"
-  echo "SESSION_END_POLICY=hook_DIRECT111_TAP_STOP after_first_present restart_while_demand=1"
+  echo "SESSION_END_POLICY=hook_DIRECT111_TAP_STOP stream_supervised=$STREAM_SUPERVISED restart_while_demand=$([ "$STREAM_SUPERVISED" = "1" ] && echo 0 || echo 1)"
 } >> "$LOGFILE"
 
 count_tap_stops() {
@@ -173,6 +166,10 @@ sidecar_is_current() {
 
 schedule_abnormal_restart() {
   WHY=$1
+  if [ "$STREAM_SUPERVISED" = "1" ]; then
+    echo "MIRROR_ABNORMAL_RESTART=SUPPRESSED reason=$WHY lifecycle_owner=STREAM_SUPERVISOR"
+    return 1
+  fi
   if ! mkdir "$RECOVERY_LOCK" 2>/dev/null; then
     echo "MIRROR_ABNORMAL_RESTART=ALREADY_SCHEDULED reason=$WHY lock=$RECOVERY_LOCK"
     return 0
@@ -251,7 +248,9 @@ if [ "$SINK_TEST_GRID_MODE" = "0" ]; then
         fi
         rm -f "$PIDFILE" "$READY" "$BASE_READY" "$WATCH_PIDFILE"
 
-        if [ -f "$DEMAND" ] && [ ! -f "$STOP_GUARD" ]; then
+        if [ "$STREAM_SUPERVISED" = "1" ]; then
+          echo "LIFECYCLE_WATCH=NO_RESTART phase=before_first_present lifecycle_owner=STREAM_SUPERVISOR"
+        elif [ -f "$DEMAND" ] && [ ! -f "$STOP_GUARD" ]; then
           echo "LIFECYCLE_WATCH=RESTART_NEXT_SESSION phase=before_first_present demand=$DEMAND gate_policy=next_PHONE_REQUEST_111"
           ALT111_MIRROR_RESTART_REASON=private111_session_end \
           ALT111_MIRROR_RESTART_COUNT=0 \
@@ -297,7 +296,9 @@ if [ "$SINK_TEST_GRID_MODE" = "0" ]; then
         rm -f "$PIDFILE" "$READY" "$BASE_READY"
         rm -f "$WATCH_PIDFILE"
 
-        if [ -f "$DEMAND" ] && [ ! -f "$STOP_GUARD" ]; then
+        if [ "$STREAM_SUPERVISED" = "1" ]; then
+          echo "LIFECYCLE_WATCH=NO_RESTART lifecycle_owner=STREAM_SUPERVISOR"
+        elif [ -f "$DEMAND" ] && [ ! -f "$STOP_GUARD" ]; then
           echo "LIFECYCLE_WATCH=RESTART_NEXT_SESSION demand=$DEMAND gate_policy=next_PHONE_REQUEST_111"
           ALT111_MIRROR_RESTART_REASON=private111_session_end \
           ALT111_MIRROR_RESTART_COUNT=0 \

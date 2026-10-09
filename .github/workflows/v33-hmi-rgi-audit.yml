@@ -1,0 +1,235 @@
+name: V3.3 HMI/RGI audit
+
+on:
+  push:
+    branches:
+      - experiment/oem-layout-second-screen_v3.3
+    paths:
+      - '.github/workflows/v33-hmi-rgi-audit.yml'
+      - 'Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar'
+      - 'Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/**'
+      - 'Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/framework/CarplayBus.java'
+      - 'Toolbox/carplay_alt_screen/hmi/tests/**'
+      - 'Toolbox/carplay_alt_screen/src/altscreen_hook.c'
+      - 'Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java'
+      - 'Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java'
+      - 'Toolbox/carplay_alt_screen/rgi_meta/libcarplay_rgi_meta.so'
+      - 'Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so'
+      - 'Toolbox/scripts/altscreen_chain_test_universal.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+
+      - name: Audit current V3.3 HMI classes and lifecycle invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          JAR=Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar
+          RG=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/RouteGuidance.java
+          BUS=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/framework/CarplayBus.java
+          TESTS=Toolbox/carplay_alt_screen/hmi/tests
+          BAP=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/BAPBridge.java
+          WHEEL=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          CTRL=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java
+          STUB=Toolbox/carplay_alt_screen/hmi/stubs
+          SRC=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance
+          BUILD="$RUNNER_TEMP/v33-hmi-audit-build"
+          OUT="$RUNNER_TEMP/v33-hmi-audit.txt"
+
+          exec > >(tee "$OUT") 2>&1
+          test -s "$JAR"
+          unzip -t "$JAR" >/dev/null
+          unzip -Z1 "$JAR" > "$RUNNER_TEMP/v33-jar.list"
+
+          rm -rf "$BUILD"
+          mkdir -p "$BUILD/stubs" "$BUILD/classes"
+          find "$STUB" -name '*.java' -print | sort > "$BUILD/stubs.list"
+          javac -encoding UTF-8 -source 1.3 -target 1.2             -d "$BUILD/stubs" @"$BUILD/stubs.list"
+          javac -encoding UTF-8 -source 1.3 -target 1.2             -cp "$BUILD/stubs:$JAR" -d "$BUILD/classes" "$BUS"
+          javac -encoding UTF-8 -source 1.3 -target 1.2             -cp "$BUILD/classes:$BUILD/stubs:$JAR" -sourcepath "$SRC"             -d "$BUILD/classes"             "$SRC/RouteGuidance.java"             "$SRC/AmapRouteGuidance.java"             "$SRC/GatedCombiService.java"             "$SRC/BAPBridge.java"
+          javac -encoding UTF-8 -source 1.3 -target 1.2             -cp "$BUILD/stubs:$JAR"             -d "$BUILD/classes" "$CTRL" "$WHEEL"
+
+          echo "V33_HMI_AUDIT=BEGIN"
+          echo "jar_size=$(wc -c < "$JAR" | tr -d ' ')"
+          echo "jar_sha256=$(sha256sum "$JAR" | awk '{print $1}')"
+
+          for cls in             com.luka.carplay.framework.CarplayBus             com.luka.carplay.cursor.CursorController; do
+            member="$(echo "$cls" | tr . /).class"
+            grep -Fxq "$member" "$RUNNER_TEMP/v33-jar.list" || {
+              echo "ERROR: required retained base class missing: $cls" >&2
+              exit 1
+            }
+          done
+
+          for cls in             com.luka.carplay.routeguidance.RouteGuidance             com.luka.carplay.routeguidance.BAPBridge             com.luka.carplay.routeguidance.GatedCombiService             com.luka.carplay.cluster.ClusterStateController             com.luka.carplay.cluster.WheelZoomBridge; do
+            echo
+            echo "--- compiled source $cls ---"
+            javap -classpath "$BUILD/classes:$BUILD/stubs:$JAR" -p -s -c "$cls"
+          done
+
+          if grep -Fxq 'com/luka/carplay/rgd/RouteGuidance.class' "$RUNNER_TEMP/v33-jar.list"; then
+            echo 'ERROR: retired com.luka.carplay.rgd.RouteGuidance still present' >&2
+            exit 1
+          fi
+
+          grep -Fq 'sticky catch-up=LOCAL_LISTENER_REPLAY' "$RG"
+          grep -Fq 'sticky replay to late listener' "$BUS"
+          if grep -Fq 'bus.send(CarplayBus.CMD_SYNC_REQ' "$RG"; then
+            echo 'ERROR: fake CMD_SYNC_REQ returned to RouteGuidance' >&2
+            exit 1
+          fi
+          grep -Fq 'public synchronized void onFrame' "$RG"
+          grep -Fq 'public synchronized void stop' "$RG"
+          grep -Fq 'boolean routeLooksActive' "$RG"
+          grep -Fq 'state.visibleInApp != 0) || routeLooksActive' "$RG"
+          grep -Fq 'if (!running)' "$RG"
+          grep -Fq 'markCachedLowerBarDirty' "$RG"
+          grep -Fq 'clearLowerBarCache' "$RG"
+          grep -Fq 'if (v == 0) hardClear = true;' "$RG"
+          grep -Fq 'amap_soft_inactive_timeout' "$SRC/AmapRouteGuidance.java"
+          grep -Fq 'SOFT_INACTIVE_GRACE_MS = 5000L' "$SRC/AmapRouteGuidance.java"
+          grep -Fq 'sourceAllowsBehaviorProbe' "$SRC/AmapRouteGuidance.java"
+
+          grep -Fq 'partial_takeover=LAZY_PER_FIELD' "$BAP"
+          grep -Fq 'LOWER_BAR_GATE=REINSTALLED reason=cluster_listener_replaced' "$BAP"
+          grep -Fq 'LOWER_BAR_GATE=REMOVED' "$BAP"
+          grep -Fq 'synthetic_clear=NO' "$BAP"
+          grep -Fq 'setBlockedFields(ownFct19, ownFct21, ownFct22)' "$BAP"
+          grep -Fq 'appConnectorNavi.updateCurrentPositionInfo(road)' "$BAP"
+          grep -Fq 'if (road.length() > 0)' "$BAP"
+          grep -Fq 'if (s.distDestM > 0)' "$BAP"
+          if grep -Fq 'clearLowerBar()' "$BAP" ||
+             grep -Fq 'updateCurrentPositionInfo("")' "$BAP" ||
+             grep -Fq 'sendDistanceToDestinationRaw(0' "$BAP" ||
+             grep -Fq 'updateTimeToDestination(0, 0, -1L)' "$BAP"; then
+            echo 'ERROR: synthetic lower-bar clear returned' >&2
+            exit 1
+          fi
+
+          grep -Fq 'WHEEL_CALLBACK_RAW' "$WHEEL"
+          grep -Fq 'WHEEL_LIFECYCLE' "$WHEEL"
+          grep -Fq 'action=OBSERVE_ONLY' "$WHEEL"
+          grep -Fq 'WheelZoomBridge.logCarPlayLifecycle(active);' "$CTRL"
+
+          python3 - "$BUILD/classes/com/luka/carplay/cluster/WheelZoomBridge.class" <<'PY'
+          import pathlib
+          import sys
+
+          wheel = pathlib.Path(sys.argv[1]).read_bytes()
+          for marker in (
+              b"WHEEL_CALLBACK_RAW",
+              b"WHEEL_LIFECYCLE",
+              b"callback_count",
+              b"ignored_not_owned",
+              b"action=OBSERVE_ONLY",
+          ):
+              if marker not in wheel:
+                  raise SystemExit(
+                      "compiled wheel observability marker missing: %r" % (marker,)
+                  )
+          print("V33_WHEEL_OBSERVABILITY=PASS source=V3.2_latest")
+          PY
+
+          mkdir -p "$BUILD/test-classes"
+          javac -encoding UTF-8 -cp "$BUILD/classes:$BUILD/stubs:$JAR"             -d "$BUILD/test-classes"             "$TESTS/CarplayBusStickyReplayTest.java"             "$TESTS/RouteGuidanceHardClearTest.java"             "$TESTS/AmapSoftInactiveTest.java"             "$TESTS/BAPGateReinstallTest.java"
+          java -cp "$BUILD/test-classes:$BUILD/classes:$BUILD/stubs:$JAR"             com.luka.carplay.framework.CarplayBusStickyReplayTest
+          java -cp "$BUILD/test-classes:$BUILD/classes:$BUILD/stubs:$JAR"             com.luka.carplay.routeguidance.RouteGuidanceHardClearTest
+          java -cp "$BUILD/test-classes:$BUILD/classes:$BUILD/stubs:$JAR"             com.luka.carplay.routeguidance.AmapSoftInactiveTest
+          java -cp "$BUILD/test-classes:$BUILD/classes:$BUILD/stubs:$JAR"             com.luka.carplay.routeguidance.BAPGateReinstallTest
+          echo "V33_HMI_AUDIT=PASS packages=current lifecycle=guarded sticky_replay=LOCAL hard_clear=YES"
+          echo "V33_HMI_AUDIT=END"
+
+      - name: Audit dual interposer chain
+        shell: bash
+        run: |
+          set -euo pipefail
+          ALT=Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so
+          META=Toolbox/carplay_alt_screen/rgi_meta/libcarplay_rgi_meta.so
+          CHAIN=Toolbox/scripts/altscreen_chain_test_universal.sh
+
+          test -s "$ALT"
+          test -s "$META"
+
+          python3 - "$ALT" "$META" "$CHAIN" <<'PY'
+          import pathlib
+          import subprocess
+          import sys
+
+          def symbols(path):
+              out = subprocess.check_output(
+                  ["readelf", "-Ws", str(path)],
+                  text=True,
+                  errors="replace",
+              )
+              rows = []
+              for line in out.splitlines():
+                  parts = line.split()
+                  if len(parts) >= 8 and parts[0].endswith(":"):
+                      rows.append((parts[6], parts[7].split("@", 1)[0]))
+              return rows
+
+          alt_path = pathlib.Path(sys.argv[1])
+          meta_path = pathlib.Path(sys.argv[2])
+          expected = {
+              alt_path: ("write", "send", "recv", "close"),
+              meta_path: ("read", "write", "writev", "recv", "open", "close",
+                          "MsgSend", "MsgSendv"),
+          }
+          for path, names in expected.items():
+              rows = symbols(path)
+              for name in names:
+                  if not any(ndx != "UND" and sym == name for ndx, sym in rows):
+                      raise SystemExit(
+                          "missing interposer %s in %s" % (name, path)
+                      )
+              if not any(ndx == "UND" and sym == "dlsym" for ndx, sym in rows):
+                  raise SystemExit("dlsym forwarding dependency missing in %s" % path)
+
+          chain = pathlib.Path(sys.argv[3]).read_text()
+          rgi = chain.find('awk -v hook="$RGI_META_REL"')
+          alt = chain.find('awk -v hook="$UNIVERSAL_REL"', rgi + 1)
+          if rgi < 0 or alt <= rgi:
+              raise SystemExit("preload construction order is no longer RGI-then-Alt insertion")
+          if "final stable order is AltScreen:RGI:other-stock" not in chain:
+              raise SystemExit("stable preload-order invariant marker missing")
+
+          print(
+              "V33_DUAL_INTERPOSER_CHAIN=PASS "
+              "effective_order=AltScreen:RGI:libc "
+              "shared=write,recv,close rgi_extra=read,open,writev,MsgSend,MsgSendv dlsym=present"
+          )
+          PY
+
+          for sym in write recv close; do
+            grep -R -Fq "dlsym(RTLD_NEXT, \"$sym\")" \
+              Toolbox/carplay_alt_screen/src || {
+                echo "ERROR: AltScreen RTLD_NEXT forwarding missing for $sym" >&2
+                exit 1
+              }
+          done
+          HOOKSRC=Toolbox/carplay_alt_screen/src/altscreen_hook.c
+          grep -Fq 'ALTSCREEN_RGI_PRELOAD "/mnt/app/root/carplay-altscreen/lib/libcarplay_rgi_meta.so"' "$HOOKSRC"
+          grep -Fq 'ALTSCREEN_RGI_PRELOAD_LEGACY "/mnt/app/root/hooks/libcarplay_hook.so"' "$HOOKSRC"
+          grep -Fq 'altscreen_strip_project_hooks_from_child_preload();' "$HOOKSRC"
+          echo 'V33_CHILD_PRELOAD_SOURCE=PASS strips=AltScreen,RGI parent_mapping=UNCHANGED'
+
+      - name: Upload audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: v33-hmi-rgi-audit
+          path: ${{ runner.temp }}/v33-hmi-audit.txt
+          if-no-files-found: error

@@ -1,0 +1,1068 @@
+name: CarPlay Cluster Wheel Zoom V3/V3.1/V3.2
+
+on:
+  push:
+    branches:
+      - experiment/oem-layout-second-screen_v3
+      - experiment/oem-layout-second-screen_v3.1
+      - experiment/oem-layout-second-screen_v3.2
+    paths:
+      - '.github/workflows/wheel-zoom-v3.yml'
+      - 'Toolbox/carplay_alt_screen/src/**'
+      - 'Toolbox/carplay_alt_screen/hmi/**'
+      - 'Toolbox/carplay_alt_screen/mirror_display/**'
+      - 'Toolbox/carplay_alt_screen/universal/**'
+      - 'Toolbox/carplay_alt_screen/tests/**'
+      - 'Toolbox/scripts/altscreen_*.sh'
+      - 'Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh'
+      - 'Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh'
+      - 'Toolbox/scripts/stop_mmi_cockpit_carplay_test.sh'
+      - 'Toolbox/scripts/status_mmi_cockpit_carplay_test.sh'
+      - 'VERIFY-NATIVE-DIRECT-RELEASE.sh'
+      - 'PACKAGE_SOURCE_MAP.json'
+      - 'SHA256SUMS.txt'
+      - 'OEM-LAYOUT-SECOND-SCREEN-V3-WHEEL-ZOOM.md'
+      - 'README.md'
+  workflow_dispatch:
+
+concurrency:
+  group: carplay-cluster-wheel-zoom-v3-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+# V3.1/V3.2 use this workflow as the single hook/HMI artifact promoter to avoid
+# manifest races with the generic authorization-marker rebuild workflow.
+
+jobs:
+  build-vehicle-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            clang lld g++ libgles2-mesa-dev \
+            binutils-arm-linux-gnueabihf python3-pyelftools
+
+      - name: Syntax-check V3.1/V3.2 sidecar geometry sources
+        if: github.ref == 'refs/heads/experiment/oem-layout-second-screen_v3.1' || github.ref == 'refs/heads/experiment/oem-layout-second-screen_v3.2'
+        run: |
+          set -euo pipefail
+          g++ -std=c++98 -Wall -Wextra -Werror -fsyntax-only \
+            -IToolbox/carplay_alt_screen/mirror_display/src \
+            -IToolbox/carplay_alt_screen/src \
+            Toolbox/carplay_alt_screen/mirror_display/src/main.cpp
+          g++ -std=c++98 -Wall -Wextra -Werror -fsyntax-only \
+            -IToolbox/carplay_alt_screen/mirror_display/src \
+            Toolbox/carplay_alt_screen/mirror_display/src/gl_renderer.cpp
+          echo "V31_SIDECAR_SOURCE_SYNTAX=PASS"
+
+      - name: Build Java wheel observer into current V3 HMI JAR
+        run: |
+          set -euo pipefail
+
+          BASE_JAR=Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar
+          VENDOR_JAR=Toolbox/carplay_alt_screen/hmi/vendor/carplay_hook-wheel-v25.jar
+          CTRL=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java
+          WHEEL=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          STUB=Toolbox/carplay_alt_screen/hmi/stubs/de/audi/atip/base/IFrameworkAccess.java
+          BUILD="$RUNNER_TEMP/wheel-zoom-v3"
+          CLUSTER_CLASS=de/audi/tghu/navi/app/cluster/ClusterService.class
+
+          rm -rf "$BUILD"
+          mkdir -p "$BUILD/classes" "$BUILD/vendor"
+
+          test -s "$BASE_JAR"
+          test -s "$VENDOR_JAR"
+          test -s "$CTRL"
+          test -s "$WHEEL"
+
+          unzip -Z1 "$BASE_JAR" > "$BUILD/base-list.txt"
+          grep -Fxq "$CLUSTER_CLASS" "$BUILD/base-list.txt"
+
+          if grep -Eq 'META-INF/.*\.(SF|RSA|DSA)$' "$BUILD/base-list.txt"; then
+            echo 'ERROR: refusing to update signed HMI JAR' >&2
+            exit 1
+          fi
+
+          (
+            cd "$BUILD/vendor"
+            jar xf "$GITHUB_WORKSPACE/$VENDOR_JAR" "$CLUSTER_CLASS"
+          )
+          test -s "$BUILD/vendor/$CLUSTER_CLASS"
+
+          javap -classpath "$BASE_JAR" -c -p \
+            de.audi.tghu.navi.app.cluster.ClusterService \
+            > "$BUILD/cluster-current.txt"
+          javap -classpath "$VENDOR_JAR" -c -p \
+            de.audi.tghu.navi.app.cluster.ClusterService \
+            > "$BUILD/cluster-wheel.txt"
+
+          python3 - "$BUILD/cluster-current.txt" "$BUILD/cluster-wheel.txt" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          def strip_target_method(text):
+              lines = text.splitlines()
+              out = []
+              skipping = False
+              for line in lines:
+                  if line.strip() == "public void onMagnificationChanged(int);":
+                      skipping = True
+                      continue
+                  if skipping and re.match(
+                      r"^  (public|private|protected) .*[;{]$", line
+                  ):
+                      skipping = False
+                  if not skipping:
+                      out.append(line.rstrip())
+              return "\n".join(out)
+
+          current = pathlib.Path(sys.argv[1]).read_text()
+          wheel = pathlib.Path(sys.argv[2]).read_text()
+
+          if strip_target_method(current) != strip_target_method(wheel):
+              raise SystemExit(
+                  "ERROR: vehicle-proven wheel ClusterService differs "
+                  "outside onMagnificationChanged"
+              )
+
+          target = wheel.split(
+              "public void onMagnificationChanged(int);", 1
+          )[1]
+          if "WheelZoomBridge.onMagnificationChanged" not in target:
+              raise SystemExit("ERROR: wheel observer call missing")
+          if "onMapScaleChanged" not in target:
+              raise SystemExit("ERROR: stock map-scale callback missing")
+          if target.index("WheelZoomBridge.onMagnificationChanged") > target.index(
+              "onMapScaleChanged"
+          ):
+              raise SystemExit(
+                  "ERROR: observer must precede preserved stock callback"
+              )
+
+          print(
+              "WHEEL_CLUSTER_SERVICE=PASS "
+              "only_target_method_changed=YES stock_callback_preserved=YES"
+          )
+          PY
+
+          javap -classpath "$BASE_JAR" -public -s \
+            com.luka.carplay.cluster.ClusterStateController \
+            > "$BUILD/api-old.txt"
+
+          javac -encoding UTF-8 -source 1.3 -target 1.2 \
+            -cp "$BASE_JAR" \
+            -d "$BUILD/classes" \
+            "$STUB" "$CTRL" "$WHEEL"
+
+          javap -classpath "$BUILD/classes:$BASE_JAR" -public -s \
+            com.luka.carplay.cluster.ClusterStateController \
+            > "$BUILD/api-new.txt"
+
+          python3 - "$BUILD/api-old.txt" "$BUILD/api-new.txt" <<'PY'
+          import pathlib
+          import sys
+
+          def surface(path):
+              lines = pathlib.Path(path).read_text().splitlines()
+              out = []
+              i = 0
+              while i < len(lines):
+                  s = lines[i].strip()
+                  if (
+                      s.startswith("public ")
+                      and not s.startswith("public final class")
+                      and s.endswith(";")
+                  ):
+                      descriptor = ""
+                      if (
+                          i + 1 < len(lines)
+                          and lines[i + 1].strip().startswith("descriptor:")
+                      ):
+                          descriptor = lines[i + 1].strip()
+                          i += 1
+                      out.append(s + " | " + descriptor)
+                  i += 1
+              return set(out)
+
+          old = surface(sys.argv[1])
+          new = surface(sys.argv[2])
+          missing = sorted(old - new)
+          if missing:
+              raise SystemExit(
+                  "ERROR: ClusterStateController public ABI dropped:\n"
+                  + "\n".join(missing)
+              )
+
+          print(
+              "WHEEL_CONTROLLER_ABI=PASS old=%d new=%d"
+              % (len(old), len(new))
+          )
+          PY
+
+          cp "$BASE_JAR" "$BUILD/carplay_hook-basevideo3.jar"
+          jar uf "$BUILD/carplay_hook-basevideo3.jar" \
+            -C "$BUILD/classes" com/luka/carplay/cluster
+          jar uf "$BUILD/carplay_hook-basevideo3.jar" \
+            -C "$BUILD/vendor" "$CLUSTER_CLASS"
+
+          python3 - "$BUILD/carplay_hook-basevideo3.jar" <<'PY'
+          import collections
+          import struct
+          import sys
+          import zipfile
+
+          jar = sys.argv[1]
+          targets = [
+              "com/luka/carplay/cluster/ClusterStateController.class",
+              "com/luka/carplay/cluster/WheelZoomBridge.class",
+              "de/audi/tghu/navi/app/cluster/ClusterService.class",
+          ]
+
+          with zipfile.ZipFile(jar) as zf:
+              bad = zf.testzip()
+              if bad:
+                  raise SystemExit("ERROR: corrupt JAR member: " + bad)
+
+              names = zf.namelist()
+              dup = [
+                  name
+                  for name, count in collections.Counter(names).items()
+                  if count != 1
+              ]
+              if dup:
+                  raise SystemExit(
+                      "ERROR: duplicate JAR members: " + repr(dup)
+                  )
+
+              for target in targets:
+                  data = zf.read(target)
+                  if data[:4] != b"\xca\xfe\xba\xbe":
+                      raise SystemExit("ERROR: bad class magic: " + target)
+                  if struct.unpack(">HH", data[4:8]) != (0, 46):
+                      raise SystemExit(
+                          "ERROR: class is not Java major 46: " + target
+                      )
+
+              wheel = zf.read(
+                  "com/luka/carplay/cluster/WheelZoomBridge.class"
+              )
+              for marker in [
+                  b"mmi-mirror-wheel-zoom.events",
+                  b"WHEEL_ZOOM_INPUT",
+                  b"ZOOM_IN",
+                  b"ZOOM_OUT",
+                  b"OEM_STEPS_V1",
+                  b"step=0",
+                  b"queue_size_rotate",
+              ]:
+                  if marker not in wheel:
+                      raise SystemExit(
+                          "ERROR: WheelZoomBridge marker missing: "
+                          + repr(marker)
+                      )
+
+          print(
+              "WHEEL_HMI_JAR=PASS major46=YES "
+              "signed_step_intent=YES per_step_expansion=NO"
+          )
+          PY
+
+          javap -classpath "$BUILD/carplay_hook-basevideo3.jar" -c -p \
+            de.audi.tghu.navi.app.cluster.ClusterService \
+            > "$BUILD/cluster-final.txt"
+
+          grep -Fq 'WheelZoomBridge.onMagnificationChanged' \
+            "$BUILD/cluster-final.txt"
+          grep -Fq 'onMapScaleChanged' "$BUILD/cluster-final.txt"
+
+          cp "$BUILD/carplay_hook-basevideo3.jar" "$BASE_JAR"
+
+      - name: Build native changeMapZoomLevel sender
+        run: |
+          set -euo pipefail
+
+          OUT="$RUNNER_TEMP/wheel-zoom-v3-hook"
+          sh Toolbox/carplay_alt_screen/build_source_snapshot.sh universal "$OUT"
+          BIN="$OUT/libcarplay_altscreen.so"
+          test -s "$BIN"
+
+          for marker in \
+            'changeMapZoomLevel' \
+            'zoomDirection' \
+            'PHASE=WHEEL_ZOOM_QUEUE' \
+            'PHASE=CLUSTER_ZOOM_SUBMIT' \
+            'PHASE=CLUSTER_ZOOM_RESPONSE' \
+            'maps:/car/instrumentcluster/map?showSpeedLimit=user&showCompass=user&showETA=yes&maneuverLayout=' \
+            '/tmp/mmi-mirror-wheel-zoom.events'
+          do
+            strings "$BIN" | grep -Fq "$marker"
+          done
+
+          arm-linux-gnueabihf-readelf -d "$BIN" | grep -q 'libc.so.3'
+          arm-linux-gnueabihf-readelf -d "$BIN" | grep -q 'libm.so.2'
+
+          BAD="$(
+            arm-linux-gnueabihf-readelf --dyn-syms -W "$BIN" \
+              | grep UND | awk '{print $8}' | sort -u \
+              | grep -E '^(__atomic|__sync|__aeabi|__gnu|__tls|__cxa|_Unwind)' \
+              || true
+          )"
+          test -z "$BAD" || {
+            echo "$BAD" >&2
+            exit 1
+          }
+
+          cp "$BIN" \
+            Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so
+
+          echo "WHEEL_NATIVE_HOOK=PASS"
+
+      - name: Verify V3 control-plane source contract
+        run: |
+          set -euo pipefail
+
+          grep -Fq 'cf_str_new("changeMapZoomLevel", -1)' \
+            Toolbox/carplay_alt_screen/src/p1404_airplay.c
+          grep -Fq 'set_i64(params, "zoomDirection"' \
+            Toolbox/carplay_alt_screen/src/p1404_airplay.c
+          grep -Fq 'direction == 0 ? "ZOOM_IN" : "ZOOM_OUT"' \
+            Toolbox/carplay_alt_screen/src/p1404_airplay.c
+          grep -Fq \
+            'maps:/car/instrumentcluster/map?showSpeedLimit=user&showCompass=user&showETA=yes&maneuverLayout=' \
+            Toolbox/carplay_alt_screen/src/altscreen_core.h
+          grep -Fq 'cf_str_new(CP_ALT_CLUSTER_MAP_URL, -1)' \
+            Toolbox/carplay_alt_screen/src/p1404_airplay.c
+
+          grep -Fq \
+            'WHEEL_ZOOM_EVENT_FILE "/tmp/mmi-mirror-wheel-zoom.events"' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'stale_events_before_attach=discarded' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq \
+            'CLUSTER_OWNERSHIP_STATE_FILE "/tmp/mmi-mirror-cluster-ownership.state"' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'static int native_read_cluster_owned_for_zoom(void)' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'cluster_owned = native_read_cluster_owned_for_zoom();' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'alt_control_fence_is_current(state_generation);' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq \
+            'zoom_gate = route_ready && cluster_owned && wheel_generation_current;' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          if grep -Fq \
+            'zoom_gate = route_ready && visible && native_route_requested();' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c; then
+            echo 'ERROR: V3 wheel gate still depends on retired Context76 route state' >&2
+            exit 1
+          fi
+
+          grep -Fq 'delta < 0 ? 0 : 1' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          grep -Fq 'model=OEM_STEPS_V1' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          grep -Fq 'step=0' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          grep -Fq 'reason=queue_size_rotate' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          grep -Fq 'rotateEventQueueIfNeeded' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          if grep -Fq 'for (i = 1; i <= steps; ++i)' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java; then
+            echo 'ERROR: retired Java per-step wheel expansion remains' >&2
+            exit 1
+          fi
+          grep -Fq 'new FileOutputStream(EVENT_FILE, true)' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          grep -Fq '#define WHEEL_ZOOM_EVENT_MODEL "OEM_STEPS_V1"' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq '#define WHEEL_ZOOM_SCHEDULER_MODEL "OEM_TARGET_FOLLOW_V1"' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq '#define WHEEL_ZOOM_TARGET_LIMIT 12' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq '#define WHEEL_ZOOM_MAX_EVENT_STEPS 16' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'zoom_have_send_time' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'zoom_have_input_time' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'PHASE=WHEEL_ZOOM_TARGET_REBASE' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          if grep -Fq 'zoom_last_send_at == 0' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c; then
+            echo 'ERROR: timestamp-zero send sentinel remains' >&2
+            exit 1
+          fi
+          if grep -Fq 'zoom_last_send_at != 0' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c; then
+            echo 'ERROR: timestamp-nonzero gate sentinel remains' >&2
+            exit 1
+          fi
+          if grep -Fq 'new_burst = !zoom_last_input_at' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c; then
+            echo 'ERROR: timestamp-zero input sentinel remains' >&2
+            exit 1
+          fi
+          if grep -Fq 'zoom_stall_latched && zoom_stall_started_at &&' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c; then
+            echo 'ERROR: timestamp-zero stall sentinel remains' >&2
+            exit 1
+          fi
+          grep -Fq '#define WHEEL_ZOOM_MONITOR_TICK_US 50000u' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq '#define ALT111_VIEW_AREA_POLL_US 100000u' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'wheel_now - view_area_last_poll_at' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq '#define WHEEL_ZOOM_MIN_PACE_US 100000u' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq '#define WHEEL_ZOOM_SEND_RETRY_US 150000u' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'zoom_have_failed_send_time' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'reason=successful_catchup' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq '#define WHEEL_ZOOM_FALLBACK_PACE_US 150000u' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq '#define WHEEL_ZOOM_FRESH_FRAME_AGE_US 100000u' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq '#define WHEEL_ZOOM_STALL_AGE_US 150000u' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq '#define WHEEL_ZOOM_RECOVERY_FRAMES 3u' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq '#define WHEEL_ZOOM_BURST_GAP_US 300000u' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq '#define WHEEL_ZOOM_STALL_ABORT_QUIET_US 350000u' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq '#define WHEEL_ZOOM_STALL_ABORT_US 1200000u' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'static uint32_t wheel_now_us32(void)' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'native_wheel_zoom_target_accumulate' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'p111_frame_tap_get_progress' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'struct p111_frame_progress_snapshot' \
+            Toolbox/carplay_alt_screen/src/private111_direct_tap.h
+          grep -Fq 'PHASE=WHEEL_ZOOM_TARGET' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'PHASE=WHEEL_ZOOM_FRAME_STALL' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'PHASE=WHEEL_ZOOM_FRAME_RECOVERED' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'PHASE=WHEEL_ZOOM_STALL_ABORT' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'PHASE=WHEEL_ZOOM_PACED_SEND' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          grep -Fq 'response_gates_next=0' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          if grep -Fq 'WHEEL_ZOOM_PENDING_HARD_EXPIRE' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c; then
+            echo 'ERROR: retired hard-expire queue model remains' >&2
+            exit 1
+          fi
+          python3 Toolbox/carplay_alt_screen/tests/test_wheel_zoom_pacing.py
+          grep -Fq 'if (!active) WheelZoomBridge.reset();' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java
+          grep -Fq \
+            'return carPlaySessionActive && ownershipIntent && compositeApplied;' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java
+          grep -Fq 'publishClusterOwnershipState();' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java
+          grep -Fq 'mmi-mirror-cluster-ownership.state' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java
+          grep -Fq 'cluster_owned=' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java
+          grep -Fq 'epoch=' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          grep -Fq 'MAX_LOG_BYTES' \
+            Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          grep -Fq 'snap.generation != state_generation' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          if grep -Fq 'snap.generation != generation || snap.alt_screen_stream != stream' \
+            Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c; then
+            echo 'ERROR: native local generation is still compared to control-fence generation' >&2
+            exit 1
+          fi
+          grep -Fq 'REUSE_ORIGINAL_SD_BACKUP_OR_RESTORE_STOCK_FIRST' \
+            Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh
+          grep -Fq 'mode=PRIVATE111_DIRECT_DISPLAY_V3_WHEEL_ZOOM' \
+            Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh
+          grep -Fq 'wheel_zoom_build_status=COMPILED_READY_FOR_VEHICLE_TEST' \
+            Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh
+
+          sh -n Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh
+          sh -n Toolbox/scripts/status_mmi_cockpit_carplay_test.sh
+
+          echo "WHEEL_PROTOCOL_STATIC=PASS wire=changeMapZoomLevel params=uuid+zoomDirection direction=0_in_1_out event_model=OEM_STEPS_V1 scheduler=OEM_TARGET_FOLLOW_V1 tick_ms=50 min_pace_ms=100 send_retry_ms=150 fallback_ms=150 recovery_frames=3 stall_age_ms=150 burst_gap_ms=300 stall_abort_quiet_ms=350 stall_abort_ms=1200 outstanding_limit=12 settled_rebase=IMMEDIATE submit_failure_advances_state=NO u32_zero_sentinel=NO opposite=retarget local_pixel_zoom=NO gate=java80_verified_ownership"
+
+      - name: Refresh package identities in test artifact
+        run: |
+          set -euo pipefail
+
+          JAR=Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar
+          HOOK=Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so
+
+          SIZE="$(wc -c < "$JAR" | tr -d ' ')"
+          CKSUM="$(cksum < "$JAR" | awk '{print $1}')"
+          JAR_SHA="$(sha256sum "$JAR" | awk '{print tolower($1)}')"
+          HOOK_SHA="$(sha256sum "$HOOK" | awk '{print tolower($1)}')"
+
+          export SIZE CKSUM JAR_SHA HOOK_SHA
+
+          python3 <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import re
+
+          root = pathlib.Path(".")
+
+          def upsert_unique_line(text, key, value):
+              prefix = key + "="
+              line = prefix + value
+              out = []
+              found = False
+              for existing in text.splitlines():
+                  if existing.startswith(prefix):
+                      if not found:
+                          out.append(line)
+                          found = True
+                      continue
+                  out.append(existing)
+              if not found:
+                  out.append(line)
+              return "\n".join(out) + "\n"
+
+          info = root / "Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt"
+          text = info.read_text()
+
+          ref_name = os.environ.get("GITHUB_REF_NAME")
+          is_v31 = ref_name == "experiment/oem-layout-second-screen_v3.1"
+          is_v32 = ref_name == "experiment/oem-layout-second-screen_v3.2"
+          is_oem_1to1 = is_v31 or is_v32
+          mirror_info = (
+              root
+              / "Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt"
+          )
+          mirror_text = mirror_info.read_text()
+          sidecar_ready = (
+              is_oem_1to1
+              and "release_binary_status=PRIVATE111_DIRECT_DISPLAY_V2"
+                  in mirror_text
+              and "sidecar_source_driven_rebuild_required=no"
+                  in mirror_text
+              and "geometry_policy=OEM_MAP_PLANE_1TO1_CLIP_V31"
+                  in mirror_text
+          )
+
+          if is_v32 and sidecar_ready:
+              mirror_updates = {
+                  "vehicle_zip_status": "READY_FOR_VEHICLE_TEST",
+                  "hook_runtime_rebuild_required": "no",
+                  "hook_layout_safearea_rebuild_required": "no",
+                  "hook_safearea_policy": "V32_OEM_X_VISIBLE_Y",
+                  "oem_layout_full_safearea_reference_455":
+                      "370,0,700,455",
+                  "oem_layout_small_safearea_reference_455":
+                      "490,0,460,455",
+                  "oem_layout_safearea_canvas_yh_mapping":
+                      "vertical_full_visible_0_455",
+                  "oem_layout_classic_full_safearea_physical":
+                      "370,0,700,455",
+                  "oem_layout_classic_small_safearea_physical":
+                      "490,0,460,455",
+                  "oem_layout_sport_full_safearea_physical":
+                      "370,0,700,455",
+                  "oem_layout_sport_small_safearea_physical":
+                      "14,0,460,455",
+              }
+              for key, value in mirror_updates.items():
+                  mirror_text = upsert_unique_line(
+                      mirror_text, key, value
+                  )
+              mirror_info.write_text(mirror_text)
+
+              release_sums = mirror_info.parent / "SHA256SUMS"
+              release_text = release_sums.read_text()
+              build_info_sha = hashlib.sha256(
+                  mirror_info.read_bytes()
+              ).hexdigest()
+              release_text, count = re.subn(
+                  r"^[0-9a-fA-F]{64}[ \t]+BUILD_INFO\.txt$",
+                  build_info_sha + "  BUILD_INFO.txt",
+                  release_text,
+                  flags=re.M,
+              )
+              if count != 1:
+                  raise SystemExit(
+                      "V32_RELEASE_SUMS_FAIL expected one BUILD_INFO.txt entry"
+                  )
+              release_sums.write_text(release_text)
+
+          mirror_ready = (
+              sidecar_ready
+              and "vehicle_zip_status=READY_FOR_VEHICLE_TEST" in mirror_text
+              and "hook_layout_safearea_rebuild_required=no" in mirror_text
+          )
+
+          updates = {
+              "mode": "PRIVATE111_DIRECT_DISPLAY_V3_WHEEL_ZOOM",
+              "jar_size": os.environ["SIZE"],
+              "jar_cksum": os.environ["CKSUM"],
+              "jar_sha256": os.environ["JAR_SHA"],
+              "universal_runtime_sha256": os.environ["HOOK_SHA"],
+              "direct_display_revision":
+                  "experiment-oem-layout-second-screen-v3.2-oem-x-visible-y"
+                  if is_v32 else
+                  "experiment-oem-layout-second-screen-v3.1-oem-map-1to1-clip"
+                  if is_v31 else
+                  "experiment-oem-layout-second-screen-v3-wheel-zoom",
+              "cluster_appearance_model":
+                  "CARPLAY_SIMULATOR_QUERY_V1",
+              "cluster_show_speed_limit": "user",
+              "cluster_show_compass": "user",
+              "cluster_show_eta": "yes",
+              "cluster_maneuver_layout": "empty",
+              "cluster_appearance_build_status":
+                  "COMPILED_READY_FOR_VEHICLE_TEST",
+              "wheel_zoom_control":
+                  "CARPLAY_CHANGE_MAP_ZOOM_LEVEL_V1",
+              "wheel_zoom_wire":
+                  "changeMapZoomLevel_uuid_zoomDirection",
+              "wheel_zoom_direction": "0_in_1_out",
+              "wheel_zoom_queue":
+                  "/tmp/mmi-mirror-wheel-zoom.events",
+              "wheel_zoom_queue_rotation":
+                  "EPOCH_RESET_AT_256K",
+              "wheel_zoom_java_log":
+                  "/tmp/mmi-mirror-wheel-zoom.log",
+              "wheel_zoom_event_model": "OEM_STEPS_V1",
+              "wheel_zoom_model": "OEM_TARGET_FOLLOW_V1",
+              "wheel_zoom_dispatch":
+                  "DESIRED_TARGET_FOLLOW_ONE_STEP_DRAIN",
+              "wheel_zoom_event_expansion":
+                  "DISABLED_ONE_RECORD_PER_CALLBACK",
+              "wheel_zoom_pacing": "TARGET_FOLLOW_STALL_GUARD",
+              "wheel_zoom_scheduler_tick_ms": "50",
+              "wheel_zoom_min_pace_ms": "100",
+              "wheel_zoom_send_retry_ms": "150",
+              "wheel_zoom_submit_failure":
+                  "DO_NOT_ADVANCE_SENT_OR_SUCCESS_BASELINE",
+              "wheel_zoom_catchup_rebase": "IMMEDIATE_AFTER_SUCCESS",
+              "wheel_zoom_fallback_pace_ms": "150",
+              "wheel_zoom_recovery_frames": "3",
+              "wheel_zoom_fresh_frame_age_ms": "100",
+              "wheel_zoom_stall_age_ms": "150",
+              "wheel_zoom_burst_gap_ms": "300",
+              "wheel_zoom_stall_abort_quiet_ms": "350",
+              "wheel_zoom_stall_abort_ms": "1200",
+              "wheel_zoom_outstanding_limit": "12",
+              "wheel_zoom_settled_rebase": "TARGET_AND_SENT_TO_ZERO",
+              "wheel_zoom_time_sentinels": "EXPLICIT_FLAGS_AND_STALL_LATCH",
+              "wheel_zoom_max_event_steps": "16",
+              "wheel_zoom_opposite_direction": "RETARGETS_DESIRED_LEVEL",
+              "wheel_zoom_response_gate":
+                  "NO_ACCEPTANCE_CALLBACK_IS_OBSERVE_ONLY",
+              "wheel_zoom_frame_feedback":
+                  "PROCESS_LOCAL_DECODED_PROGRESS_NO_SHM_ABI_CHANGE",
+              "wheel_zoom_stall_policy":
+                  "BLOCK_ONLY_ON_POST_SEND_STALL_RECOVER_AFTER_3_FRESH_FRAMES",
+              "wheel_zoom_telemetry_fallback":
+                  "150MS_TIMER",
+              "wheel_zoom_timebase":
+                  "DEDICATED_MODULAR_US32_MATCHES_DECODED_TAP",
+              "wheel_zoom_build_status":
+                  "COMPILED_READY_FOR_VEHICLE_TEST",
+          }
+
+          if is_v32:
+              updates["safearea_policy"] = "V32_OEM_X_VISIBLE_Y"
+              updates["geometry_safearea_space"] = "OEM_X_VISIBLE_Y_0_455"
+
+          if is_oem_1to1:
+              updates["branch_zip_status"] = (
+                  "READY_FOR_VEHICLE_TEST"
+                  if mirror_ready
+                  else "NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED"
+              )
+              updates["branch_zip_policy"] = (
+                  "GITHUB_BRANCH_ZIP_INSTALLABLE"
+                  if mirror_ready
+                  else "QNX_SIDECAR_REBUILD_REQUIRED"
+              )
+
+          for key, value in updates.items():
+              text = upsert_unique_line(text, key, value)
+
+          for retired_key in [
+              "wheel_zoom_fresh_frames",
+              "wheel_zoom_input_quiet_ms",
+              "wheel_zoom_pending_hard_expire_ms",
+              "wheel_zoom_pending_limit",
+              "wheel_zoom_target_limit",
+          ]:
+              text = re.sub(
+                  r"^" + re.escape(retired_key) + r"=.*\n?",
+                  "",
+                  text,
+                  flags=re.M,
+              )
+          info.write_text(text)
+
+          for rel in [
+              "Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh",
+              "Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh",
+              "Toolbox/scripts/status_mmi_cockpit_carplay_test.sh",
+          ]:
+              path = root / rel
+              source = path.read_text()
+              source = re.sub(
+                  r"^EXPECTED_SIZE=\d+$",
+                  "EXPECTED_SIZE=" + os.environ["SIZE"],
+                  source,
+                  flags=re.M,
+              )
+              source = re.sub(
+                  r"^EXPECTED_CKSUM=\d+$",
+                  "EXPECTED_CKSUM=" + os.environ["CKSUM"],
+                  source,
+                  flags=re.M,
+              )
+              path.write_text(source)
+
+          if is_oem_1to1:
+              ready = root / "BRANCH-ZIP-READY.txt"
+              ready_text = ready.read_text()
+              ready_updates = {
+                  "BRANCH_ZIP_READY":
+                      "YES" if mirror_ready else "NO",
+                  "branch": os.environ["GITHUB_REF_NAME"],
+                  "validated_source_commit": os.environ["GITHUB_SHA"],
+                  "mode": "PRIVATE111_DIRECT_DISPLAY_V3_WHEEL_ZOOM",
+                  "jar_size": os.environ["SIZE"],
+                  "jar_cksum": os.environ["CKSUM"],
+                  "jar_sha256": os.environ["JAR_SHA"],
+                  "universal_runtime_sha256": os.environ["HOOK_SHA"],
+                  "display_chain": "V3_1_OEM_MAP_1TO1_CLIP",
+                  "cluster_appearance_model":
+                      "CARPLAY_SIMULATOR_QUERY_V1",
+                  "cluster_show_speed_limit": "user",
+                  "cluster_show_compass": "user",
+                  "cluster_show_eta": "yes",
+                  "cluster_maneuver_layout": "empty",
+                  "wheel_zoom_event_model": "OEM_STEPS_V1",
+                  "wheel_zoom_model": "OEM_TARGET_FOLLOW_V1",
+                  "wheel_zoom_pacing": "TARGET_FOLLOW_STALL_GUARD",
+                  "wheel_zoom_scheduler_tick_ms": "50",
+                  "wheel_zoom_min_pace_ms": "100",
+                  "wheel_zoom_send_retry_ms": "150",
+                  "wheel_zoom_submit_failure":
+                      "DO_NOT_ADVANCE_SENT_OR_SUCCESS_BASELINE",
+                  "wheel_zoom_catchup_rebase": "IMMEDIATE_AFTER_SUCCESS",
+                  "wheel_zoom_fallback_pace_ms": "150",
+                  "wheel_zoom_recovery_frames": "3",
+                  "wheel_zoom_fresh_frame_age_ms": "100",
+                  "wheel_zoom_stall_age_ms": "150",
+                  "wheel_zoom_burst_gap_ms": "300",
+                  "wheel_zoom_stall_abort_quiet_ms": "350",
+                  "wheel_zoom_stall_abort_ms": "1200",
+                  "wheel_zoom_outstanding_limit": "12",
+                  "wheel_zoom_settled_rebase": "TARGET_AND_SENT_TO_ZERO",
+                  "wheel_zoom_time_sentinels": "EXPLICIT_FLAGS_AND_STALL_LATCH",
+                  "wheel_zoom_max_event_steps": "16",
+                  "install_policy": "EXTRACT_BRANCH_ZIP_CONTENTS_TO_SD_ROOT",
+                  "verifier": "VERIFY-BRANCH-ZIP-READY.sh",
+              }
+              if is_v32:
+                  ready_updates.update({
+                      "safearea_policy": "V3_2_OEM_X_VISIBLE_Y",
+                      "safearea_full": "370,0,700,455",
+                      "safearea_small": "490,0,460,455",
+                      "rebuild_required":
+                          "none" if mirror_ready else
+                          "carplay-alt111-mirror-display",
+                      "vehicle_zip_status":
+                          "READY_FOR_VEHICLE_TEST"
+                          if mirror_ready else
+                          "NOT_READY_QNX_SIDECAR_REBUILD_REQUIRED",
+                  })
+
+              for key, value in ready_updates.items():
+                  ready_text = upsert_unique_line(
+                      ready_text, key, value
+                  )
+              # Remove retired short-queue metadata if present.
+              for retired_key in [
+                  "wheel_zoom_fresh_frames",
+                  "wheel_zoom_input_quiet_ms",
+                  "wheel_zoom_pending_expire_ms",
+                  "wheel_zoom_pending_hard_expire_ms",
+                  "wheel_zoom_pending_limit",
+                  "wheel_zoom_target_limit",
+              ]:
+                  ready_text = re.sub(
+                      r"^" + re.escape(retired_key) + r"=.*\n?",
+                      "",
+                      ready_text,
+                      flags=re.M,
+                  )
+              ready.write_text(ready_text)
+
+          required = [
+              ".github/workflows/wheel-zoom-v3.yml",
+              "OEM-LAYOUT-SECOND-SCREEN-V3-WHEEL-ZOOM.md",
+              "README.md",
+              "Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar",
+              "Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt",
+              "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java",
+              "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java",
+              "Toolbox/carplay_alt_screen/hmi/vendor/carplay_hook-wheel-v25.jar",
+              "Toolbox/carplay_alt_screen/src/p1404_abi.h",
+              "Toolbox/carplay_alt_screen/src/p1404_airplay.c",
+              "Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c",
+              "Toolbox/carplay_alt_screen/tests/test_install_transaction.sh",
+              "Toolbox/carplay_alt_screen/tests/test_restore_transaction.sh",
+              "Toolbox/carplay_alt_screen/tests/test_storage_policy.sh",
+              "Toolbox/carplay_alt_screen/tests/test_wheel_zoom_pacing.py",
+              "Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so",
+              "Toolbox/scripts/altscreen_chain_test.sh",
+              "Toolbox/scripts/altscreen_chain_test_universal.sh",
+              "Toolbox/scripts/altscreen_install_transaction.sh",
+              "Toolbox/scripts/altscreen_restore_transaction.sh",
+              "Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh",
+              "Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh",
+              "Toolbox/scripts/status_mmi_cockpit_carplay_test.sh",
+              "VERIFY-NATIVE-DIRECT-RELEASE.sh",
+          ]
+
+          package = root / "PACKAGE_SOURCE_MAP.json"
+          data = json.loads(package.read_text())
+          for rel in set(data).union(required):
+              path = root / rel
+              if path.is_file():
+                  data[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+          package.write_text(
+              json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+          )
+
+          sums = root / "SHA256SUMS.txt"
+          table = {}
+          for line in sums.read_text().splitlines():
+              parts = line.split(None, 1)
+              if len(parts) == 2:
+                  table[parts[1].strip()] = parts[0].lower()
+
+          for rel in set(table).union(required).union(
+              ["PACKAGE_SOURCE_MAP.json"]
+          ):
+              path = root / rel
+              if path.is_file():
+                  table[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+
+          sums.write_text(
+              "".join(
+                  "%s %s\n" % (table[rel], rel)
+                  for rel in sorted(table)
+              )
+          )
+          PY
+
+          echo "WHEEL_V3_HMI_SIZE=$SIZE"
+          echo "WHEEL_V3_HMI_CKSUM=$CKSUM"
+          echo "WHEEL_V3_HMI_SHA256=$JAR_SHA"
+          echo "WHEEL_V3_HOOK_SHA256=$HOOK_SHA"
+
+      - name: Run full proven V2 release verifier plus V3-specific checks
+        run: |
+          set -euo pipefail
+
+          sh VERIFY-NATIVE-DIRECT-RELEASE.sh
+
+          JAR=Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar
+          HOOK=Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so
+
+          strings "$HOOK" | grep -Fq 'changeMapZoomLevel'
+          strings "$HOOK" | grep -Fq 'PHASE=CLUSTER_ZOOM_SUBMIT'
+          strings "$HOOK" | grep -Fq 'PHASE=CLUSTER_ZOOM_RESPONSE'
+          strings "$HOOK" | grep -Fq 'maps:/car/instrumentcluster/map?showSpeedLimit=user&showCompass=user&showETA=yes&maneuverLayout='
+          strings "$HOOK" | grep -Fq 'OEM_STEPS_V1'
+          strings "$HOOK" | grep -Fq 'OEM_TARGET_FOLLOW_V1'
+          strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_TARGET'
+          strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_TARGET_REBASE'
+          strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_FRAME_STALL'
+          strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_FRAME_RECOVERED'
+          strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_STALL_ABORT'
+          strings "$HOOK" | grep -Fq 'PHASE=WHEEL_ZOOM_PACED_SEND'
+          python3 Toolbox/carplay_alt_screen/tests/test_wheel_zoom_pacing.py
+
+          python3 - "$JAR" <<'PY'
+          import sys
+          import zipfile
+
+          with zipfile.ZipFile(sys.argv[1]) as zf:
+              wheel = zf.read(
+                  "com/luka/carplay/cluster/WheelZoomBridge.class"
+              )
+              for marker in [
+                  b"mmi-mirror-wheel-zoom.events",
+                  b"OEM_STEPS_V1",
+                  b"step=0",
+                  b"queue_size_rotate",
+              ]:
+                  if marker not in wheel:
+                      raise SystemExit(
+                          "ERROR: V3.1 wheel class marker missing: "
+                          + repr(marker)
+                      )
+          print("WHEEL_V3_FINAL_JAR=PASS model=OEM_STEPS_V1")
+          PY
+
+          grep -Fq 'CARPLAY_WHEEL_ZOOM_PROTOCOL=changeMapZoomLevel' \
+            Toolbox/scripts/status_mmi_cockpit_carplay_test.sh
+          grep -Fq 'mode=PRIVATE111_DIRECT_DISPLAY_V3_WHEEL_ZOOM' \
+            Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt
+          grep -Fq 'wheel_zoom_build_status=COMPILED_READY_FOR_VEHICLE_TEST' \
+            Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt
+          grep -Fq 'cluster_appearance_model=CARPLAY_SIMULATOR_QUERY_V1' \
+            Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt
+          grep -Fq 'cluster_show_speed_limit=user' \
+            Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt
+          grep -Fq 'cluster_show_compass=user' \
+            Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt
+          grep -Fq 'cluster_show_eta=yes' \
+            Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt
+          grep -Fq 'ACTION=RUN_WHEEL_ZOOM_V3_BUILD' \
+            Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh
+
+          if grep -Fq 'BRANCH_ZIP_READY=YES' BRANCH-ZIP-READY.txt; then
+            sh VERIFY-BRANCH-ZIP-READY.sh
+          else
+            echo "BRANCH_ZIP_VERIFY=SKIPPED reason=qnx_sidecar_rebuild_pending"
+          fi
+
+          echo "V3_VEHICLE_TEST_CONTRACT=PASS gate=java80_verified_ownership installer_fail_closed=YES"
+
+      - name: Promote rebuilt V3.1/V3.2 wheel JAR and package identities
+        if: github.ref == 'refs/heads/experiment/oem-layout-second-screen_v3.1' || github.ref == 'refs/heads/experiment/oem-layout-second-screen_v3.2'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            BRANCH-ZIP-READY.txt \
+            Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar \
+            Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt \
+            Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt \
+            Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS \
+            Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so \
+            Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh \
+            Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh \
+            Toolbox/scripts/status_mmi_cockpit_carplay_test.sh \
+            PACKAGE_SOURCE_MAP.json \
+            SHA256SUMS.txt
+          if ! git diff --cached --quiet; then
+            git commit -m "build(oem-layout): promote wheel/hook vehicle package [skip ci]"
+            git fetch origin "$GITHUB_REF_NAME"
+            git rebase "origin/$GITHUB_REF_NAME"
+            git push origin "HEAD:$GITHUB_REF_NAME"
+          fi
+
+      - name: Stage complete vehicle-test SD package
+        if: github.ref != 'refs/heads/experiment/oem-layout-second-screen_v3.1' && github.ref != 'refs/heads/experiment/oem-layout-second-screen_v3.2'
+        run: |
+          set -euo pipefail
+
+          PKG="$RUNNER_TEMP/carplay-wheel-zoom-v3-sd"
+          rm -rf "$PKG"
+          mkdir -p "$PKG"
+
+          tar \
+            --exclude=.git \
+            --exclude=.github \
+            -cf - . \
+            | (cd "$PKG" && tar xf -)
+
+          cat > "$PKG/VEHICLE_TEST_READY.txt" <<EOF
+          V3_VEHICLE_TEST_READY=YES
+          source_commit=${GITHUB_SHA}
+          protocol=changeMapZoomLevel
+          params=uuid+zoomDirection
+          zoom_in=0
+          zoom_out=1
+          zoomFactor=absent
+          display_chain=V2_UNCHANGED
+          test_apps=Apple_Maps,Amap
+          EOF
+
+          python3 - "$PKG" <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import sys
+
+          root = pathlib.Path(sys.argv[1])
+
+          def digest(path):
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+
+          package_path = root / "PACKAGE_SOURCE_MAP.json"
+          data = json.loads(package_path.read_text())
+          filtered = {}
+          for rel in sorted(data):
+              path = root / rel
+              if path.is_file():
+                  filtered[rel] = digest(path)
+          filtered["VEHICLE_TEST_READY.txt"] = digest(
+              root / "VEHICLE_TEST_READY.txt"
+          )
+          package_path.write_text(
+              json.dumps(filtered, indent=2, ensure_ascii=False) + "\n"
+          )
+
+          sums_path = root / "SHA256SUMS.txt"
+          tracked = set()
+          for line in sums_path.read_text().splitlines():
+              parts = line.split(None, 1)
+              if len(parts) == 2 and (root / parts[1].strip()).is_file():
+                  tracked.add(parts[1].strip())
+          tracked.add("PACKAGE_SOURCE_MAP.json")
+          tracked.add("VEHICLE_TEST_READY.txt")
+          tracked.discard("SHA256SUMS.txt")
+          sums_path.write_text(
+              "".join(
+                  "%s %s\n" % (digest(root / rel), rel)
+                  for rel in sorted(tracked)
+              )
+          )
+          PY
+
+          test -s "$PKG/Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar"
+          test -s "$PKG/Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so"
+          test -s "$PKG/VEHICLE_TEST_READY.txt"
+          (
+            cd "$PKG"
+            sha256sum -c SHA256SUMS.txt
+          )
+
+      - name: Upload V3 vehicle-test package
+        if: github.ref != 'refs/heads/experiment/oem-layout-second-screen_v3.1' && github.ref != 'refs/heads/experiment/oem-layout-second-screen_v3.2'
+        uses: actions/upload-artifact@v4
+        with:
+          name: carplay-wheel-zoom-v3-sd
+          path: ${{ runner.temp }}/carplay-wheel-zoom-v3-sd/
+          if-no-files-found: error
+          retention-days: 14

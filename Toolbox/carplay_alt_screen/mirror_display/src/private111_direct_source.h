@@ -25,6 +25,7 @@ public:
     uint32_t h264_packets() const { return last_h264_packets_; }
     uint32_t h264_bytes() const { return last_h264_bytes_; }
     uint32_t decoded_frames() const { return last_frame_count_; }
+    uint32_t sequence() const { return last_sequence_; }
 
 private:
     Private111DirectSource(const Private111DirectSource &);

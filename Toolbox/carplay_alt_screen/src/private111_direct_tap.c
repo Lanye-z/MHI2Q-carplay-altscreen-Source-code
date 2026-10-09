@@ -25,6 +25,9 @@ extern void altscreen_log(const char *fmt, ...);
 #define P111_QNX_NV12_FORMAT 65548u
 #define P111_QNX_NV12_FORMAT_LEGACY 12u
 
+/* V3.4 fixed volatile handoff: never written to persistent /mnt/app or SD. */
+#define P111_STREAM_READY_PATH "/tmp/altscreen-private111.stream-ready"
+
 struct p111_avcc_cache {
     void *stream;
     uint32_t bytes;
@@ -45,6 +48,7 @@ static uint32_t g_generation;
 static uint32_t g_stale_callback_count;
 static uint32_t g_attach_logged_generation;
 static uint32_t g_frame_reserve_seq;
+static uint32_t g_last_frame_publish_us32;
 /* Process-local slot ownership. A slot being copied must never be reused, and
  * the currently published slot must never be overwritten before a newer frame
  * is fully ready. This keeps the existing SHM v1 ABI while closing the
@@ -58,6 +62,7 @@ static int g_seen_sps;
 static int g_seen_pps;
 static int g_seen_idr;
 static uint32_t g_layout_error_logged_generation;
+static uint32_t g_stream_ready_generation;
 static struct p111_avcc_cache g_avcc[P111_AVCC_CACHE_SLOTS];
 static unsigned g_avcc_recycle;
 
@@ -88,6 +93,68 @@ static uint32_t tap_now_us32(void) {
     /* Modular 32-bit microseconds are sufficient for sub-second readback timing
      * and avoid pulling 64-bit divide helpers into the freestanding ARM hook. */
     return (uint32_t)tv.tv_sec * 1000000u + (uint32_t)tv.tv_usec;
+}
+
+static void stream_ready_clear_locked(void) {
+    (void)unlink(P111_STREAM_READY_PATH);
+    g_stream_ready_generation = 0u;
+}
+
+static int stream_ready_publish_locked(void) {
+    char payload[192];
+    int fd, n;
+    ssize_t wr;
+    uint32_t pid;
+
+    if (!g_stream || !g_generation || !g_h264 || !g_frame) return 0;
+    pid = (uint32_t)getpid();
+    if (!g_h264->active || !g_frame->active ||
+        g_h264->writer_pid != pid || g_frame->writer_pid != pid ||
+        g_h264->generation != g_generation ||
+        g_frame->generation != g_generation ||
+        !g_h264->packet_count || g_frame->frame_count < 2u ||
+        !g_frame->sequence)
+        return 0;
+    if (g_stream_ready_generation == g_generation) return 1;
+
+    n = snprintf(payload, sizeof(payload),
+                 "pid=%u\ngeneration=%u\ncookie=0x%08x\nframes=%u\nsequence=%u\nready=1\n",
+                 (unsigned)pid, (unsigned)g_generation,
+                 (unsigned)stream_cookie(g_stream),
+                 (unsigned)g_frame->frame_count,
+                 (unsigned)g_frame->sequence);
+    if (n <= 0 || (size_t)n >= sizeof(payload)) return 0;
+
+    /*
+     * QNX target headers used by this hook do not expose rename() in the
+     * freestanding build profile. Publish the fixed volatile marker in-place.
+     * A short/partial write is immediately unlinked; the supervisor also
+     * validates every field plus producer PID/generation before acting, so a
+     * concurrently observed partial file is fail-closed for display startup.
+     */
+    fd = open(P111_STREAM_READY_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) {
+        altscreen_log("WARN PHASE=PRIVATE111_STREAM_READY marker_open_failed errno=%d fail_open=YES",
+                      errno);
+        return 0;
+    }
+    wr = write(fd, payload, (size_t)n);
+    (void)close(fd);
+    if (wr != (ssize_t)n) {
+        int saved = errno;
+        (void)unlink(P111_STREAM_READY_PATH);
+        altscreen_log("WARN PHASE=PRIVATE111_STREAM_READY marker_publish_failed errno=%d fail_open=YES",
+                      saved);
+        return 0;
+    }
+
+    g_stream_ready_generation = g_generation;
+    altscreen_log("PHASE=PRIVATE111_STREAM_READY pid=%u generation=%u cookie=0x%08x frames=%u sequence=%u policy=two_fresh_decoded_frames",
+                  (unsigned)pid, (unsigned)g_generation,
+                  (unsigned)stream_cookie(g_stream),
+                  (unsigned)g_frame->frame_count,
+                  (unsigned)g_frame->sequence);
+    return 1;
 }
 
 static uint8_t byte_or_zero(const uint8_t *d, size_t n, size_t i) {
@@ -541,6 +608,7 @@ static void reset_frame_for_generation_locked(int force) {
     g_frame->drop_count = 0;
     g_frame->last_copy_bytes = 0;
     g_frame_reserve_seq = 0;
+    g_last_frame_publish_us32 = 0u;
     /*
      * Do not clear g_frame_slot_owner here. A callback from the previous
      * process-local generation may still be outside the lock copying its slot.
@@ -584,6 +652,9 @@ static int begin_stream_locked(void *stream) {
     }
 
     if (!g_stream || !g_generation) {
+        /* A new producer generation must never inherit a prior stream-ready
+         * marker. The supervisor will wait for two fresh decoded frames. */
+        stream_ready_clear_locked();
         g_stream = stream;
         ++g_generation;
         if (!g_generation) ++g_generation;
@@ -1396,7 +1467,6 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
     int packed = 0;
     int backend;
     int published;
-    uint32_t requests;
     uint32_t t0, t1, elapsed;
 
     if (!stream || !screen_window || !width || !height) return 0;
@@ -1417,7 +1487,7 @@ int p111_frame_tap_write_window(void *stream, void *screen_window,
     tap_unlock();
 
     linearizer_lock();
-    requests = ++g_linearizer.requests;
+    ++g_linearizer.requests;
 
     /*
      * Do not rate-limit the producer here. Every valid stock private111 render
@@ -1695,6 +1765,13 @@ int p111_frame_tap_write(void *stream, const unsigned char *buffer,
     if (g_frame_slot_owner[slot] == seq)
         g_frame_slot_owner[slot] = 0u;
     ++g_frame->frame_count;
+    g_last_frame_publish_us32 = tap_now_us32();
+
+    /* Display is event-driven in V3.4. Publish only after both the compressed
+     * producer and at least two decoded frames are live in this generation. */
+    if (g_frame->frame_count >= 2u &&
+        g_stream_ready_generation != generation)
+        (void)stream_ready_publish_locked();
 
     if (!g_seen_frame) {
         g_seen_frame = 1;
@@ -1724,6 +1801,29 @@ int p111_frame_tap_write(void *stream, const unsigned char *buffer,
 
 }
 
+int p111_frame_tap_get_progress(
+        void *stream, struct p111_frame_progress_snapshot *out) {
+    int ok = 0;
+
+    if (!out) return 0;
+    memset(out, 0, sizeof(*out));
+
+    tap_lock();
+    if (stream && g_stream == stream && g_generation &&
+        g_frame && g_frame->active && g_frame->writer_pid &&
+        g_frame->frame_count && g_frame->sequence &&
+        g_last_frame_publish_us32) {
+        out->generation = g_generation;
+        out->frame_count = g_frame->frame_count;
+        out->sequence = g_frame->sequence;
+        out->last_publish_us32 = g_last_frame_publish_us32;
+        out->active = 1;
+        ok = 1;
+    }
+    tap_unlock();
+    return ok;
+}
+
 void p111_direct_tap_stream_end(void *stream) {
     unsigned i;
     int ended_current = 0;
@@ -1743,6 +1843,8 @@ void p111_direct_tap_stream_end(void *stream) {
                       stream, g_generation,
                       g_h264 ? g_h264->packet_count : 0u,
                       g_frame ? g_frame->frame_count : 0u);
+        stream_ready_clear_locked();
+        g_last_frame_publish_us32 = 0u;
         g_stream = NULL;
     } else {
         altscreen_log("PHASE=DIRECT111_TAP_STOP_STALE stream=%p current_stream=%p generation=%u action=IGNORE_LINEARIZER_TEARDOWN",

@@ -1414,21 +1414,42 @@ int altscreen_hook_test_pending_drains(void) {
 }
 void altscreen_runtime_ensure_initialized(void) { }
 int altscreen_runtime_is_ready(void) { return 1; }
+int altscreen_runtime_wait_ready(unsigned timeout_ms) { (void)timeout_ms; return 1; }
 #else
-static volatile unsigned g_runtime_init_state; /* 0 idle, 1 worker, 2 ready, 3 inert */
+static volatile unsigned g_runtime_init_state; /* 0 idle, 1 worker, 2 negotiation-ready, 3 inert */
+static volatile unsigned g_runtime_display_state; /* 0 pending, 1 verified, 2 deferred */
+#define ALTSCREEN_NEGOTIATION_WAIT_SLICE_US 5000u
 
-/* Stream 111 firewall setup spawns /bin/sh and pfctl. The universal hook must
- * not propagate into those helpers through inherited LD_PRELOAD. */
+int altscreen_runtime_wait_ready(unsigned timeout_ms) {
+    unsigned waited_ms = 0u;
+    while (__sync_fetch_and_add(&g_runtime_init_state, 0u) == 1u &&
+           waited_ms < timeout_ms) {
+        usleep(ALTSCREEN_NEGOTIATION_WAIT_SLICE_US);
+        waited_ms += 5u;
+    }
+    return altscreen_runtime_is_ready();
+}
+
+/* Stream 111 firewall setup spawns /bin/sh and pfctl. Neither project hook
+ * may propagate into those helper exec() descendants. Parent mappings are
+ * already established; only the inherited environment is cleaned here. */
 #define ALTSCREEN_SELF_PRELOAD "/mnt/app/root/carplay-altscreen/lib/libcarplay_altscreen.so"
 #define ALTSCREEN_SELF_PRELOAD_LEGACY "/mnt/app/root/hooks/libcarplay_altscreen.so"
+#define ALTSCREEN_RGI_PRELOAD "/mnt/app/root/carplay-altscreen/lib/libcarplay_rgi_meta.so"
+#define ALTSCREEN_RGI_PRELOAD_LEGACY "/mnt/app/root/hooks/libcarplay_hook.so"
 
-static int altscreen_preload_token_is_self(const char *token, size_t length) {
+static int altscreen_preload_token_is_project_hook(const char *token, size_t length) {
     const size_t current_len = sizeof(ALTSCREEN_SELF_PRELOAD) - 1u;
     const size_t legacy_len = sizeof(ALTSCREEN_SELF_PRELOAD_LEGACY) - 1u;
+    const size_t rgi_len = sizeof(ALTSCREEN_RGI_PRELOAD) - 1u;
+    const size_t rgi_legacy_len = sizeof(ALTSCREEN_RGI_PRELOAD_LEGACY) - 1u;
     return (length == current_len && !memcmp(token, ALTSCREEN_SELF_PRELOAD, current_len)) ||
-           (length == legacy_len && !memcmp(token, ALTSCREEN_SELF_PRELOAD_LEGACY, legacy_len));
+           (length == legacy_len && !memcmp(token, ALTSCREEN_SELF_PRELOAD_LEGACY, legacy_len)) ||
+           (length == rgi_len && !memcmp(token, ALTSCREEN_RGI_PRELOAD, rgi_len)) ||
+           (length == rgi_legacy_len &&
+            !memcmp(token, ALTSCREEN_RGI_PRELOAD_LEGACY, rgi_legacy_len));
 }
-static void altscreen_strip_self_from_child_preload(void) {
+static void altscreen_strip_project_hooks_from_child_preload(void) {
     const char *value = getenv("LD_PRELOAD");
     const char *cursor;
     char *clean, *out;
@@ -1438,14 +1459,14 @@ static void altscreen_strip_self_from_child_preload(void) {
     value_len = strlen(value);
     clean = (char *)malloc(value_len + 1u);
     if (!clean) {
-        if (altscreen_preload_token_is_self(value, value_len)) (void)unsetenv("LD_PRELOAD");
+        if (altscreen_preload_token_is_project_hook(value, value_len)) (void)unsetenv("LD_PRELOAD");
         return;
     }
     cursor = value; out = clean;
     while (*cursor) {
         const char *end = strchr(cursor, ':');
         size_t length = end ? (size_t)(end - cursor) : strlen(cursor);
-        if (length && !altscreen_preload_token_is_self(cursor, length)) {
+        if (length && !altscreen_preload_token_is_project_hook(cursor, length)) {
             if (kept) *out++ = ':';
             memcpy(out, cursor, length); out += length; kept = 1;
         }
@@ -1458,8 +1479,6 @@ static void altscreen_strip_self_from_child_preload(void) {
     free(clean);
 }
 
-#define ALTSCREEN_STATE_ROOT_WAIT_STEPS 600u
-#define ALTSCREEN_STATE_ROOT_WAIT_US    100000u
 #define ALTSCREEN_GEOMETRY_WAIT_STEPS    30u
 #define ALTSCREEN_GEOMETRY_WAIT_US  1000000u
 
@@ -1473,25 +1492,18 @@ static void *altscreen_runtime_init_worker(void *unused) {
     int nme_io_ready;
     int native_geometry_ready = 0;
     int process_allowed;
-    int force_start;
-    int state_root_ready = 0;
-    unsigned state_root_step;
+    int state_root_ready;
     unsigned geometry_step;
     const char *pname;
     (void)unused;
 
-    /* servicemgr may construct dio_manager before the removable filesystem
-     * aliases are published. Waiting here is safe because this is already the
-     * detached initialization worker: every redirected wrapper remains
-     * stock-only and the application startup thread never waits. */
-    for (state_root_step = 0; state_root_step < ALTSCREEN_STATE_ROOT_WAIT_STEPS;
-         ++state_root_step) {
-        if (altscreen_state_root_is_authoritative()) {
-            state_root_ready = 1;
-            break;
-        }
-        usleep(ALTSCREEN_STATE_ROOT_WAIT_US);
-    }
+    /*
+     * V3.4 removes removable-SD state from the CarPlay runtime authority.
+     * Keep reporting whether an SD state root happens to be visible for
+     * diagnostics, but never wait for it and never let it arm/disarm the
+     * current CarPlay negotiation.
+     */
+    state_root_ready = altscreen_state_root_is_authoritative();
 
     iap2_control_fd_reset();
     altscreen_init();
@@ -1502,15 +1514,8 @@ static void *altscreen_runtime_init_worker(void *unused) {
         return NULL;
     }
     altscreen_paths_report();
-    altscreen_log("PHASE=STATE_ROOT_WAIT result=%s waited_ms=%u startup_thread_blocked=0 stock_until_ready=1",
-                  state_root_ready ? "PASS" : "REFUSED",
-                  state_root_step * (ALTSCREEN_STATE_ROOT_WAIT_US / 1000u));
-    if (!state_root_ready) {
-        p1404_armed = 0;
-        p1404_mutate_armed = 0;
-        __sync_lock_test_and_set(&g_runtime_init_state, 3u);
-        return NULL;
-    }
+    altscreen_log("PHASE=RUNTIME_AUTHORITY policy=INSTALLED_PRELOAD sd_authoritative=%d sd_gate=DISABLED waited_ms=0 startup_thread_blocked=0",
+                  state_root_ready ? 1 : 0);
     (void)p1404_bind_stock_exports();
     native_stock_ready = p1404_cockpit_native_bind_stock();
     nme_io_ready = direct_bind_nme_io();
@@ -1524,11 +1529,9 @@ static void *altscreen_runtime_init_worker(void *unused) {
         return NULL;
     }
     pname = p1404_process_name();
-    force_start = altscreen_marker_present("FORCE_START");
     process_allowed = process_is_allowed(pname);
-    altscreen_log("PHASE=RUNTIME_PROCESS_IDENTITY result=%s process=%s force_start=%d identity_override=DISABLED worker_started=1 stock_until_ready=1",
-                  process_allowed ? "PASS" : "REFUSED",
-                  pname, force_start);
+    altscreen_log("PHASE=RUNTIME_PROCESS_IDENTITY result=%s process=%s policy=INSTALLED_PRELOAD identity_override=DISABLED worker_started=1 stock_until_ready=1",
+                  process_allowed ? "PASS" : "REFUSED", pname);
     if (!process_allowed || !p1404_probe_stack()) {
         p1404_armed = 0;
         p1404_mutate_armed = 0;
@@ -1546,7 +1549,10 @@ static void *altscreen_runtime_init_worker(void *unused) {
     }
     altscreen_log("PHASE=RUNTIME_FORWARDING_GATE result=PASS libc_forward=1 native_stock=1 nme_exact_io=1");
     altscreen_log("PHASE=LOG_WRITER_READY mode=bounded_async queue_slots=256 line_bytes=768 max_bytes=16777216 no_truncate=1 deferred_worker=1 startup_thread_blocked=0");
-    altscreen_profile_load(NULL);
+    /* V3.4 fixes the legacy iAP2 profile to observe-only in-process. No SD
+     * profile file participates in normal CarPlay negotiation. */
+    altscreen_profile_set(&altscreen_prof_observe);
+    altscreen_log("PROFILE policy=V34_FIXED_OBSERVE removable_state_dependency=NONE");
     p1404_airplay_bind();
     p1404_airplay_load_flags();
     backend_ready = p1404_private111_backend_install();
@@ -1560,10 +1566,20 @@ static void *altscreen_runtime_init_worker(void *unused) {
         return NULL;
     }
 
-    /* CarPlay performs initial feature SETUP before /info on some iOS builds.
-     * Resolve display-1 geometry before READY so that accepting altScreen in
-     * that first transaction cannot later produce a feature/display mismatch.
-     * Screen service readiness is retried only on this background worker. */
+    /*
+     * V3.5 separates protocol readiness from physical-display readiness.
+     * Once the exact stock ABI, CF bindings and private111 backend are ready,
+     * the first AirPlay capability transaction may safely advertise AltScreen.
+     * Display-1 geometry remains an asynchronous confirmation step and must not
+     * make an early /info or descriptor-free SETUP fall back to stock forever.
+     */
+    __sync_synchronize();
+    __sync_lock_test_and_set(&g_runtime_init_state, 2u);
+    altscreen_log("PHASE=NEGOTIATION_READY result=PASS policy=V35_EARLY_PROTOCOL_READY geometry_ready=0 geometry_gate_async=1 first_capability_can_wait_bounded=1");
+
+    /* Confirm live Screen display-1 geometry in the background.  Private111
+     * attach performs its own just-in-time refresh, so a slow Screen service
+     * no longer disables the whole CarPlay session. */
     for (geometry_step = 0; geometry_step < ALTSCREEN_GEOMETRY_WAIT_STEPS;
          ++geometry_step) {
         if (p1404_cockpit_native_refresh_geometry()) {
@@ -1572,19 +1588,17 @@ static void *altscreen_runtime_init_worker(void *unused) {
         }
         usleep(ALTSCREEN_GEOMETRY_WAIT_US);
     }
-    altscreen_log("PHASE=RUNTIME_GEOMETRY_GATE result=%s attempts=%u startup_thread_blocked=0 fixed_fallback=0",
-                  native_geometry_ready ? "PASS" : "REFUSED",
+    g_runtime_display_state = native_geometry_ready ? 1u : 2u;
+    altscreen_log("PHASE=RUNTIME_GEOMETRY_GATE result=%s attempts=%u startup_thread_blocked=0 fixed_fallback=0 negotiation_ready=1 private111_attach_will_retry=1",
+                  native_geometry_ready ? "PASS" : "DEFERRED",
                   native_geometry_ready ? geometry_step + 1u : geometry_step);
     if (!native_geometry_ready) {
-        p1404_armed = 0;
-        p1404_mutate_armed = 0;
-        __sync_synchronize();
-        __sync_lock_test_and_set(&g_runtime_init_state, 3u);
-        return NULL;
+        altscreen_log("WARN PHASE=DISPLAY_GEOMETRY_DEFERRED reason=screen_service_not_ready_within_background_window negotiation_kept=1 renderer_attach_requires_live_refresh=1");
     }
-    altscreen_log("RUNTIME ready process=%s identity=%d armed=%d mutate=%d bearer=%d profile=%s private111_backend=%d",
+    altscreen_log("RUNTIME ready process=%s identity=%d armed=%d mutate=%d bearer=%d profile=%s private111_backend=%d negotiation_ready=1 display_geometry_ready=%d",
                   pname, p1404_identity_ok, p1404_armed, p1404_mutate_armed,
-                  g_forward_ready, altscreen_profile_name(), backend_ready);
+                  g_forward_ready, altscreen_profile_name(), backend_ready,
+                  native_geometry_ready ? 1 : 0);
     altscreen_log("RUNTIME bearer open64=%p read=%p write=%p send=%p recv=%p close=%p dup=%p nme_create=%p nme_write=%p nme_read=%p nme_delete=%p",
                   (void *)real_open64, (void *)real_read, (void *)real_write, (void *)real_send,
                   (void *)real_recv, (void *)real_close, (void *)real_dup,
@@ -1596,8 +1610,6 @@ static void *altscreen_runtime_init_worker(void *unused) {
                   NULL, NULL, NULL, NULL
 #endif
                   );
-    __sync_synchronize();
-    __sync_lock_test_and_set(&g_runtime_init_state, 2u);
     return NULL;
 }
 
@@ -1621,7 +1633,7 @@ __attribute__((constructor)) static void altscreen_ctor(void) {
 
     /* Remove only this hook from the inherited preload before dio_manager can
      * spawn shell/pfctl helpers. Preserve every unrelated preload token. */
-    altscreen_strip_self_from_child_preload();
+    altscreen_strip_project_hooks_from_child_preload();
 
     /* Defense in depth: even if a helper is launched with an explicit preload,
      * do not bind libc forwarding, patch GOT slots or start the runtime worker

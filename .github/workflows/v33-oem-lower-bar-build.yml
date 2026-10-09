@@ -1,0 +1,775 @@
+name: V3.3 OEM Lower Bar Build
+# Restore hardening closeout is enforced by the transaction regression suite.
+
+on:
+  push:
+    branches:
+      - experiment/oem-layout-second-screen_v3.3
+    paths:
+      - '.github/workflows/v33-oem-lower-bar-build.yml'
+      - 'Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/**'
+      - 'Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/framework/CarplayBus.java'
+      - 'Toolbox/carplay_alt_screen/hmi/tests/**'
+      - 'Toolbox/carplay_alt_screen/src/**'
+      - 'Toolbox/carplay_alt_screen/build_source_snapshot.sh'
+      - 'Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java'
+      - 'Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java'
+      - 'Toolbox/carplay_alt_screen/hmi/stubs/**'
+      - 'Toolbox/carplay_alt_screen/tests/test_storage_policy.sh'
+      - 'Toolbox/carplay_alt_screen/tests/test_restore_transaction.sh'
+      - 'Toolbox/scripts/altscreen_chain_test.sh'
+      - 'Toolbox/scripts/altscreen_sd_writable.sh'
+      - 'Toolbox/scripts/altscreen_restore_transaction.sh'
+      - 'Toolbox/carplay_alt_screen/tests/test_wheel_zoom_pacing.py'
+      - 'Toolbox/scripts/altscreen_boot_diag.sh'
+      - 'Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar'
+      - 'Toolbox/carplay_alt_screen/rgi_meta/**'
+      - 'Toolbox/scripts/altscreen_v33_rgi_config.sh'
+      - 'Toolbox/scripts/altscreen_chain_test_universal.sh'
+      - 'Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh'
+      - 'Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh'
+      - 'Toolbox/scripts/status_mmi_cockpit_carplay_test.sh'
+      - 'VERIFY-BRANCH-ZIP-READY.sh'
+      - 'VERIFY-NATIVE-DIRECT-RELEASE.sh'
+      - 'BRANCH-ZIP-READY.txt'
+      - 'OEM-LAYOUT-SECOND-SCREEN-V3.3.md'
+  workflow_dispatch:
+
+concurrency:
+  group: v33-oem-lower-bar-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+
+      - name: Install ARM build inspection tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang lld binutils-arm-linux-gnueabihf python3-pyelftools
+
+      - name: Rebuild child-isolated universal AltScreen runtime
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/v33-universal-runtime"
+          sh Toolbox/carplay_alt_screen/build_source_snapshot.sh universal "$OUT"
+          test -s "$OUT/libcarplay_altscreen.so"
+          strings "$OUT/libcarplay_altscreen.so" | grep -Fq '/mnt/app/root/carplay-altscreen/lib/libcarplay_altscreen.so'
+          strings "$OUT/libcarplay_altscreen.so" | grep -Fq '/mnt/app/root/carplay-altscreen/lib/libcarplay_rgi_meta.so'
+          cp "$OUT/libcarplay_altscreen.so" Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so
+          HOOK_SHA="$(sha256sum Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so | awk '{print tolower($1)}')"
+          echo "HOOK_SHA=$HOOK_SHA" >> "$GITHUB_ENV"
+          echo "V33_UNIVERSAL_RUNTIME=PASS child_preload=ALTSCREEN_AND_RGI_REMOVED sha256=$HOOK_SHA"
+
+      - name: Verify V3.3 wheel pacing contract
+        run: |
+          set -euo pipefail
+          NATIVE=Toolbox/carplay_alt_screen/src/p1404_cockpit_native.c
+          HOOK=Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so
+          grep -Fq '#define WHEEL_ZOOM_SCHEDULER_MODEL "OEM_TARGET_FOLLOW_V1"' "$NATIVE"
+          grep -Fq '#define WHEEL_ZOOM_PACING_MODEL "BURST_ADAPTIVE_100_150_200_V2"' "$NATIVE"
+          grep -Fq '#define WHEEL_ZOOM_ACTIVE_SHORT_PACE_US 100000u' "$NATIVE"
+          grep -Fq '#define WHEEL_ZOOM_ACTIVE_NORMAL_PACE_US 150000u' "$NATIVE"
+          grep -Fq '#define WHEEL_ZOOM_ACTIVE_LONG_PACE_US 200000u' "$NATIVE"
+          grep -Fq '#define WHEEL_ZOOM_QUIET_SMALL_BACKLOG_PACE_US 100000u' "$NATIVE"
+          grep -Fq '#define WHEEL_ZOOM_QUIET_BACKLOG_PACE_US 150000u' "$NATIVE"
+          grep -Fq '#define WHEEL_ZOOM_INPUT_ACTIVE_US 300000u' "$NATIVE"
+          grep -Fq '#define WHEEL_ZOOM_FALLBACK_PACE_US 250000u' "$NATIVE"
+          grep -Fq '#define WHEEL_ZOOM_SEND_RETRY_US 150000u' "$NATIVE"
+          strings "$HOOK" | grep -Fq 'BURST_ADAPTIVE_100_150_200_V2'
+          python3 Toolbox/carplay_alt_screen/tests/test_wheel_zoom_pacing.py
+          echo 'V33_WHEEL_PACING=PASS scheduler=OEM_TARGET_FOLLOW_V1 pacing=BURST_ADAPTIVE_100_150_200_V2 active=100/150/200 quiet=100/150 fallback=250 first_send=IMMEDIATE decoded_feedback=LIVENESS_ONLY'
+
+      - name: Compile clean V3.3 lower-bar control plane
+        run: |
+          set -euo pipefail
+
+          BASE=Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar
+          SRC=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance
+          BUS=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/framework/CarplayBus.java
+          TESTS=Toolbox/carplay_alt_screen/hmi/tests
+          CTRL=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java
+          WHEEL=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          STUB=Toolbox/carplay_alt_screen/hmi/stubs
+          BUILD="$RUNNER_TEMP/v33-oem-lower-bar"
+
+          rm -rf "$BUILD"
+          mkdir -p "$BUILD/stubs" "$BUILD/classes" "$BUILD/jar"
+
+          test -s "$BASE"
+          unzip -t "$BASE" >/dev/null
+
+          find "$STUB" -name '*.java' -print | sort > "$BUILD/stubs.list"
+          javac -encoding UTF-8 -source 1.3 -target 1.2             -d "$BUILD/stubs" @"$BUILD/stubs.list"
+
+          javac -encoding UTF-8 -source 1.3 -target 1.2             -cp "$BUILD/stubs:$BASE"             -d "$BUILD/classes" "$BUS"
+          javac -encoding UTF-8 -source 1.3 -target 1.2             -cp "$BUILD/classes:$BUILD/stubs:$BASE"             -sourcepath "$SRC"             -d "$BUILD/classes"             "$SRC/RouteGuidance.java"             "$SRC/AmapRouteGuidance.java"             "$SRC/GatedCombiService.java"             "$SRC/BAPBridge.java"
+
+          # V3.3 inherits the latest V3.2 observability-only wheel classes.
+          # Rebuild them in the same authoritative JAR promotion to avoid two
+          # independent workflows racing to replace the same HMI artifact.
+          javac -encoding UTF-8 -source 1.3 -target 1.2             -cp "$BUILD/stubs:$BASE"             -d "$BUILD/classes"             "$CTRL" "$WHEEL"
+
+          python3 - "$BASE" "$BUILD/classes" "$BUILD/jar/carplay_hook-basevideo3.jar" <<'PY'
+          import collections
+          import pathlib
+          import struct
+          import sys
+          import zipfile
+
+          src = pathlib.Path(sys.argv[1])
+          classes = pathlib.Path(sys.argv[2])
+          dst = pathlib.Path(sys.argv[3])
+
+          with zipfile.ZipFile(src, "r") as zin, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
+              for info in zin.infolist():
+                  name = info.filename
+                  replace_class = (
+                      name.startswith("com/luka/carplay/routeguidance/")
+                      or name == "com/luka/carplay/framework/CarplayBus.class"
+                      or name.startswith("com/luka/carplay/framework/CarplayBus$")
+                      or name == "com/luka/carplay/cluster/ClusterStateController.class"
+                      or name.startswith("com/luka/carplay/cluster/ClusterStateController$")
+                      or name == "com/luka/carplay/cluster/WheelZoomBridge.class"
+                      or name.startswith("com/luka/carplay/cluster/WheelZoomBridge$")
+                  ) and name.endswith(".class")
+                  if replace_class:
+                      continue
+                  zout.writestr(info, zin.read(name))
+
+              roots = [
+                  (classes / "com/luka/carplay/framework",
+                   "com/luka/carplay/framework/"),
+                  (classes / "com/luka/carplay/routeguidance",
+                   "com/luka/carplay/routeguidance/"),
+                  (classes / "com/luka/carplay/cluster",
+                   "com/luka/carplay/cluster/"),
+              ]
+              for root, prefix in roots:
+                  for path in sorted(root.glob("*.class")):
+                      if prefix.endswith("/framework/") and not path.name.startswith("CarplayBus"):
+                          continue
+                      if prefix.endswith("/cluster/") and not (
+                          path.name.startswith("ClusterStateController")
+                          or path.name.startswith("WheelZoomBridge")
+                      ):
+                          continue
+                      arc = prefix + path.name
+                      info = zipfile.ZipInfo(arc, date_time=(2026, 9, 23, 0, 0, 0))
+                      info.compress_type = zipfile.ZIP_DEFLATED
+                      info.create_system = 3
+                      info.external_attr = 0o100644 << 16
+                      zout.writestr(info, path.read_bytes())
+
+          with zipfile.ZipFile(dst, "r") as zf:
+              bad = zf.testzip()
+              if bad:
+                  raise SystemExit("corrupt JAR member: " + bad)
+              names = zf.namelist()
+              dup = [n for n, c in collections.Counter(names).items() if c != 1]
+              if dup:
+                  raise SystemExit("duplicate JAR members: " + repr(dup))
+
+              required = [
+                  "com/luka/carplay/framework/CarplayBus.class",
+                  "com/luka/carplay/framework/CarplayBus$Data.class",
+                  "com/luka/carplay/framework/CarplayBus$Listener.class",
+                  "com/luka/carplay/routeguidance/RouteGuidance.class",
+                  "com/luka/carplay/routeguidance/RouteGuidance$State.class",
+                  "com/luka/carplay/routeguidance/AmapRouteGuidance.class",
+                  "com/luka/carplay/routeguidance/GatedCombiService.class",
+                  "com/luka/carplay/routeguidance/BAPBridge.class",
+                  "com/luka/carplay/routeguidance/BAPBridge$FormattedDistance.class",
+                  "com/luka/carplay/routeguidance/BAPBridge$SilentLogChannel.class",
+                  "com/luka/carplay/cluster/WheelZoomBridge.class",
+                  "com/luka/carplay/cluster/ClusterStateController.class",
+              ]
+              for name in required:
+                  data = zf.read(name)
+                  if data[:4] != b"\xca\xfe\xba\xbe":
+                      raise SystemExit("bad class magic: " + name)
+                  if struct.unpack(">HH", data[4:8]) != (0, 46):
+                      raise SystemExit("not Java major 46: " + name)
+
+              retired = [
+                  n for n in names
+                  if n.startswith("com/luka/carplay/routeguidance/")
+                  and (
+                      "Renderer" in n
+                      or "ManeuverMapper" in n
+                      or "SideStreets" in n
+                  )
+              ]
+              if retired:
+                  raise SystemExit("retired RGI rendering classes remain: " + repr(retired))
+
+              # Touch and wheel input are deliberately retained.
+              for name in [
+                  "com/luka/carplay/cursor/CursorController.class",
+                  "com/luka/carplay/cluster/WheelZoomBridge.class",
+                  "com/luka/carplay/cluster/ClusterStateController.class",
+              ]:
+                  if name not in names:
+                      raise SystemExit("required retained class missing: " + name)
+
+              wheel = zf.read("com/luka/carplay/cluster/WheelZoomBridge.class")
+              for marker in [
+                  b"WHEEL_CALLBACK_RAW",
+                  b"WHEEL_LIFECYCLE",
+                  b"callback_count",
+                  b"ignored_not_owned",
+                  b"action=OBSERVE_ONLY",
+              ]:
+                  if marker not in wheel:
+                      raise SystemExit(
+                          "latest V3.2 wheel observability marker missing: "
+                          + repr(marker)
+                      )
+
+          print("V33_JAR_REBUILD=PASS old_routeguidance_removed=YES sticky_bus=LOCAL_REPLAY touch_retained=YES wheel_observability=V32_LATEST")
+          PY
+
+          cp "$BUILD/jar/carplay_hook-basevideo3.jar" "$BASE"
+
+          mkdir -p "$BUILD/test-classes"
+          javac -encoding UTF-8 -cp "$BUILD/classes:$BUILD/stubs:$BASE"             -d "$BUILD/test-classes"             "$TESTS/CarplayBusStickyReplayTest.java"             "$TESTS/RouteGuidanceHardClearTest.java"             "$TESTS/AmapSoftInactiveTest.java"             "$TESTS/BAPGateReinstallTest.java"
+          java -cp "$BUILD/test-classes:$BUILD/classes:$BUILD/stubs:$BASE"             com.luka.carplay.framework.CarplayBusStickyReplayTest
+          java -cp "$BUILD/test-classes:$BUILD/classes:$BUILD/stubs:$BASE"             com.luka.carplay.routeguidance.RouteGuidanceHardClearTest
+          java -cp "$BUILD/test-classes:$BUILD/classes:$BUILD/stubs:$BASE"             com.luka.carplay.routeguidance.AmapSoftInactiveTest
+          java -cp "$BUILD/test-classes:$BUILD/classes:$BUILD/stubs:$BASE"             com.luka.carplay.routeguidance.BAPGateReinstallTest
+
+      - name: Verify CarPlayHook ABI and OEM lower-bar scope
+        run: |
+          set -euo pipefail
+          JAR=Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar
+          SRC=Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance
+          BUILD="$RUNNER_TEMP/v33-oem-lower-bar"
+
+          javap -classpath "$JAR" -p -s com.luka.carplay.CarPlayHook > "$BUILD/hook.sig"
+          javap -classpath "$JAR" -p -s com.luka.carplay.routeguidance.BAPBridge > "$BUILD/bap.sig"
+          javap -classpath "$JAR" -p -s com.luka.carplay.routeguidance.GatedCombiService > "$BUILD/gate.sig"
+          javap -classpath "$JAR" -p -s com.luka.carplay.routeguidance.RouteGuidance > "$BUILD/rg.sig"
+          unzip -Z1 "$JAR" > "$BUILD/jar.list"
+
+          grep -Fq 'com.luka.carplay.routeguidance.RouteGuidance' "$BUILD/hook.sig"
+          grep -Fq 'public boolean init(java.lang.Object);' "$BUILD/rg.sig"
+          grep -Fq 'public synchronized void start();' "$BUILD/rg.sig"
+          grep -Fq 'public synchronized void stop();' "$BUILD/rg.sig"
+          grep -Fq 'public boolean isRunning();' "$BUILD/rg.sig"
+          grep -Fq 'public void update(com.luka.carplay.routeguidance.RouteGuidance$State);' "$BUILD/bap.sig"
+
+          grep -Fxq 'com/luka/carplay/cursor/CursorController.class' "$BUILD/jar.list"
+          grep -Fxq 'com/luka/carplay/cluster/WheelZoomBridge.class' "$BUILD/jar.list"
+          grep -Fxq 'com/luka/carplay/cluster/ClusterStateController.class' "$BUILD/jar.list"
+
+          grep -Fq 'updateCurrentPositionInfo' "$SRC/BAPBridge.java"
+          grep -Fq 'updateDistanceToDestination' "$SRC/BAPBridge.java"
+          grep -Fq 'updateTimeToDestination' "$SRC/BAPBridge.java"
+          if grep -Fq 'updateMapScale(' "$SRC/BAPBridge.java"; then
+            echo 'ERROR: V3.3 BAPBridge must not synthesize FctID45 MapScale' >&2
+            exit 1
+          fi
+          for retired in updateManeuverDescriptor updateLaneGuidance updateDistanceToNextManeuver updateExitView updateActiveRGType; do
+            if grep -Fq "$retired" "$SRC/BAPBridge.java"; then
+              echo "ERROR: retired RGI output remains in V3.3 BAPBridge: $retired" >&2
+              exit 1
+            fi
+          done
+
+          grep -Fq 'public void updateMapScale' "$SRC/GatedCombiService.java"
+          grep -Fq 'real.updateMapScale' "$SRC/GatedCombiService.java"
+          grep -Fq 'public void updateAltitude' "$SRC/GatedCombiService.java"
+          grep -Fq 'real.updateAltitude' "$SRC/GatedCombiService.java"
+          grep -Fq 'setBlockedFields' "$SRC/GatedCombiService.java"
+          grep -Fq 'isFct19Blocked' "$SRC/GatedCombiService.java"
+          grep -Fq 'isFct21Blocked' "$SRC/GatedCombiService.java"
+          grep -Fq 'isFct22Blocked' "$SRC/GatedCombiService.java"
+
+          grep -Fq 'EVT_RGD_UPDATE' "$SRC/RouteGuidance.java"
+          grep -Fq '"dist_dest_m"' "$SRC/RouteGuidance.java"
+          grep -Fq '"eta_seconds"' "$SRC/RouteGuidance.java"
+          grep -Fq '"current_road"' "$SRC/RouteGuidance.java"
+          grep -Fq 'markCachedLowerBarDirty' "$SRC/RouteGuidance.java"
+          grep -Fq 'sticky catch-up=LOCAL_LISTENER_REPLAY' "$SRC/RouteGuidance.java"
+          grep -Fq 'sticky replay to late listener' Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/framework/CarplayBus.java
+          if grep -Fq 'bus.send(CarplayBus.CMD_SYNC_REQ' "$SRC/RouteGuidance.java"; then
+            echo 'ERROR: fake CMD_SYNC_REQ returned to V3.3' >&2
+            exit 1
+          fi
+          grep -Fq 'clearLowerBarCache' "$SRC/RouteGuidance.java"
+          grep -Fq 'if (v == 0) hardClear = true;' "$SRC/RouteGuidance.java"
+          grep -Fq 'amap_soft_inactive_timeout' "$SRC/AmapRouteGuidance.java"
+          grep -Fq 'SOFT_INACTIVE_GRACE_MS = 5000L' "$SRC/AmapRouteGuidance.java"
+          grep -Fq 'sourceAllowsBehaviorProbe' "$SRC/AmapRouteGuidance.java"
+          grep -Fq 'public synchronized void onFrame' "$SRC/RouteGuidance.java"
+          grep -Fq 'public synchronized void stop' "$SRC/RouteGuidance.java"
+          grep -Fq 'boolean routeLooksActive' "$SRC/RouteGuidance.java"
+          grep -Fq 'state.visibleInApp != 0) || routeLooksActive' "$SRC/RouteGuidance.java"
+          grep -Fq 'partial_takeover=LAZY_PER_FIELD' "$SRC/BAPBridge.java"
+          grep -Fq 'LOWER_BAR_GATE=REINSTALLED reason=cluster_listener_replaced' "$SRC/BAPBridge.java"
+          grep -Fq 'LOWER_BAR_GATE=REMOVED' "$SRC/BAPBridge.java"
+          grep -Fq 'synthetic_clear=NO' "$SRC/BAPBridge.java"
+          grep -Fq 'setBlockedFields(ownFct19, ownFct21, ownFct22)' "$SRC/BAPBridge.java"
+          if grep -Fq 'clearLowerBar()' "$SRC/BAPBridge.java" ||
+             grep -Fq 'updateCurrentPositionInfo("")' "$SRC/BAPBridge.java" ||
+             grep -Fq 'sendDistanceToDestinationRaw(0' "$SRC/BAPBridge.java" ||
+             grep -Fq 'updateTimeToDestination(0, 0, -1L)' "$SRC/BAPBridge.java"; then
+            echo 'ERROR: V3.3 partial takeover must never synthesize lower-bar clears' >&2
+            exit 1
+          fi
+
+          grep -Fq 'WHEEL_CALLBACK_RAW' Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          grep -Fq 'WHEEL_LIFECYCLE' Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          grep -Fq 'action=OBSERVE_ONLY' Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java
+          grep -Fq 'WheelZoomBridge.logCarPlayLifecycle(active);' Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java
+          grep -Fq 'CURSOR_PREFIX="$ROOT/tmp/altscreen_diag_cursor"' Toolbox/scripts/altscreen_boot_diag.sh
+          grep -Fq 'flat_file_signature' Toolbox/scripts/altscreen_boot_diag.sh
+          grep -Fq 'select_carplay_hook_log_source' Toolbox/scripts/altscreen_boot_diag.sh
+          grep -Fq 'streams/carplay_hook.log' Toolbox/scripts/altscreen_boot_diag.sh
+          if grep -Fq '.capture-cursors' Toolbox/scripts/altscreen_boot_diag.sh; then
+            echo 'ERROR: boot diagnostic cursors must remain volatile' >&2
+            exit 1
+          fi
+          sh -n Toolbox/scripts/altscreen_boot_diag.sh
+          sh Toolbox/carplay_alt_screen/tests/test_storage_policy.sh
+          sh Toolbox/carplay_alt_screen/tests/test_restore_transaction.sh
+
+          echo 'V33_OEM_LOWER_BAR_ABI=PASS fct=19,21,22 fct45=STOCK touch=RETAINED wheel_observability=V32_LATEST'
+
+      - name: Verify pinned RGI metadata transport
+        run: |
+          set -euo pipefail
+          META=Toolbox/carplay_alt_screen/rgi_meta/libcarplay_rgi_meta.so
+          test -s "$META"
+          ACTUAL="$(sha256sum "$META" | awk '{print $1}')"
+          EXPECTED='87d10f67fbb3dc142642d899977bab0a6eb4009f61d3bcd873d0cce9e01511f7'
+          [ "$ACTUAL" = "$EXPECTED" ] || {
+            echo "ERROR: V3.3 RGI metadata binary drift: $ACTUAL" >&2
+            exit 1
+          }
+          for id in 0x5200 0x5201 0x5202 0x5203 0x5204; do
+            grep -Fq "$id" Toolbox/scripts/altscreen_v33_rgi_config.sh
+          done
+          echo "V33_RGI_METADATA=PASS sha256=$ACTUAL messages=0x5200-0x5204"
+
+      - name: Audit dual LD_PRELOAD interposer chain
+        run: |
+          set -euo pipefail
+          ALT=Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so
+          META=Toolbox/carplay_alt_screen/rgi_meta/libcarplay_rgi_meta.so
+          CHAIN=Toolbox/scripts/altscreen_chain_test_universal.sh
+
+          test -s "$ALT"
+          test -s "$META"
+          test -s "$CHAIN"
+
+          python3 - "$ALT" "$META" "$CHAIN" <<'PY'
+          import pathlib
+          import subprocess
+          import sys
+
+          alt = pathlib.Path(sys.argv[1])
+          meta = pathlib.Path(sys.argv[2])
+          chain = pathlib.Path(sys.argv[3])
+
+          def symbols(path):
+              out = subprocess.check_output(
+                  ["readelf", "-Ws", str(path)],
+                  text=True,
+                  errors="replace",
+              )
+              rows = []
+              for line in out.splitlines():
+                  parts = line.split()
+                  if len(parts) < 8 or not parts[0].endswith(":"):
+                      continue
+                  rows.append((parts[6], parts[7].split("@", 1)[0]))
+              return rows
+
+          expected = {
+              alt: ("write", "send", "recv", "close"),
+              meta: ("read", "write", "writev", "recv", "open", "close",
+                     "MsgSend", "MsgSendv"),
+          }
+          for lib, names in expected.items():
+              rows = symbols(lib)
+              for sym in names:
+                  if not any(ndx != "UND" and name == sym for ndx, name in rows):
+                      raise SystemExit(
+                          "missing defined interposer %s in %s" % (sym, lib)
+                      )
+              if not any(ndx == "UND" and name == "dlsym" for ndx, name in rows):
+                  raise SystemExit("interposer does not import dlsym: %s" % lib)
+
+          text = chain.read_text()
+          rgi = text.find('awk -v hook="$RGI_META_REL"')
+          altpos = text.find('awk -v hook="$UNIVERSAL_REL"', rgi + 1)
+          marker = "final stable order is AltScreen:RGI:other-stock"
+          if rgi < 0 or altpos < 0 or altpos <= rgi or marker not in text:
+              raise SystemExit(
+                  "preload construction no longer proves AltScreen:RGI ordering"
+              )
+
+          print(
+              "V33_DUAL_INTERPOSER_CHAIN=PASS "
+              "order=AltScreen:RGI:libc "
+              "shared=write,recv,close rgi_extra=read,open,writev,MsgSend,MsgSendv forwarding=dlsym"
+          )
+          PY
+
+          for sym in write recv close; do
+            grep -R -Fq "dlsym(RTLD_NEXT, \"$sym\")"               Toolbox/carplay_alt_screen/src || {
+                echo "ERROR: AltScreen RTLD_NEXT forwarding missing for $sym" >&2
+                exit 1
+              }
+          done
+          HOOKSRC=Toolbox/carplay_alt_screen/src/altscreen_hook.c
+          grep -Fq 'ALTSCREEN_RGI_PRELOAD "/mnt/app/root/carplay-altscreen/lib/libcarplay_rgi_meta.so"' "$HOOKSRC"
+          grep -Fq 'ALTSCREEN_RGI_PRELOAD_LEGACY "/mnt/app/root/hooks/libcarplay_hook.so"' "$HOOKSRC"
+          grep -Fq 'altscreen_strip_project_hooks_from_child_preload();' "$HOOKSRC"
+
+      - name: Update package identities
+        run: |
+          set -euo pipefail
+          JAR=Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar
+          INFO=Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt
+
+          SIZE="$(wc -c < "$JAR" | tr -d ' ')"
+          CKSUM="$(cksum < "$JAR" | awk '{print $1}')"
+          SHA="$(sha256sum "$JAR" | awk '{print $1}')"
+          export SIZE CKSUM SHA
+
+          python3 <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import re
+
+          root = pathlib.Path(".")
+
+          def upsert(text, key, value):
+              pat = re.compile(r"^" + re.escape(key) + r"=.*$", re.M)
+              line = key + "=" + value
+              if pat.search(text):
+                  return pat.sub(line, text, count=1)
+              if text and not text.endswith("\n"):
+                  text += "\n"
+              return text + line + "\n"
+
+          info = root / "Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt"
+          text = info.read_text()
+          updates = {
+              "mode": "PRIVATE111_DIRECT_DISPLAY_V3_3_OEM_LOWER_BAR",
+              "jar_size": os.environ["SIZE"],
+              "jar_cksum": os.environ["CKSUM"],
+              "jar_sha256": os.environ["SHA"],
+              "universal_runtime_sha256": os.environ["HOOK_SHA"],
+              "universal_runtime_policy":
+                  "PRIVATE111_POSTACCEPT_NONBLOCKING_PF_CHILD_PRELOAD_ALL_PROJECT_HOOKS_ISOLATED",
+              "oem_lower_bar": "CARPLAY_RGI_FCT19_21_22_PARTIAL_V2",
+              "oem_lower_bar_current_road": "FCT19_CARPLAY_WHEN_VALID_ELSE_STOCK",
+              "oem_lower_bar_distance": "FCT21_CARPLAY_WHEN_VALID_ELSE_STOCK",
+              "oem_lower_bar_arrival": "FCT22_CARPLAY_WHEN_VALID_ELSE_STOCK",
+              "oem_lower_bar_map_scale": "FCT45_STOCK_PASSTHROUGH",
+              "oem_lower_bar_remaining_time": "NOT_PUBLISHED",
+              "oem_lower_bar_touch_policy": "RETAIN_EXISTING_CURSOR_CONTROLLER",
+              "oem_lower_bar_build_status": "COMPILED_STATIC_VERIFIED",
+              "oem_lower_bar_activation":
+                  "VISIBLE_OR_ROUTE_ACTIVE_SOURCE_RG_REQUIRED",
+              "oem_lower_bar_sticky_sync": "LOCAL_STICKY_REPLAY_ON_LISTENER_REGISTRATION",
+              "oem_lower_bar_lifecycle": "SYNCHRONIZED_STOP_FRAME_NO_RESURRECT",
+              "oem_lower_bar_teardown":
+                  "RELEASE_FIELDS_NO_SYNTHETIC_CLEAR_RESTORE_STOCK_LISTENER",
+              "oem_lower_bar_empty_state": "INVALID_FIELD_RELEASES_TO_STOCK",
+              "dual_preload_order": "ALTSCREEN_RGI_LIBC",
+              "dual_preload_static_audit": "PASS_REQUIRED",
+              "dual_preload_child_isolation": "ALTSCREEN_AND_RGI_STRIPPED_BEFORE_HELPER_EXEC",
+              "rgi_runtime_scope": "PINNED_FULL_RGI_HOOK_METADATA_CONSUMER_ONLY",
+              "rgi_runtime_extra_modules": "COVERART_PRESENT_NOT_USED_BY_V33_LOWER_BAR",
+              "amap_soft_inactive_policy": "AMAP_OR_UNKNOWN_SIGNATURE_5S_GRACE_WITH_FRESH_GUIDANCE_EXTENSION",
+              "lower_bar_gate_policy":
+                  "LAZY_PER_FIELD_REVALIDATE_UNWRAP_WHEN_IDLE",
+              "lower_bar_context_policy":
+                  "BAP_ONLY_DO_NOT_DRIVE_RGI_PRESENTATION_ACTIVE",
+              "carplay_hook_sd_log": "streams/carplay_hook.log",
+              "sidecar_observability_rebuild_required": "no",
+              "wheel_zoom_observability":
+                  "RAW_CALLBACK_COUNTERS_LIFECYCLE_OBSERVE_ONLY",
+              "wheel_zoom_lifecycle_change": "NONE",
+              "wheel_zoom_model": "OEM_TARGET_FOLLOW_V1",
+              "wheel_zoom_pacing": "TARGET_FOLLOW_BURST_ADAPTIVE",
+              "wheel_zoom_pacing_revision": "BURST_ADAPTIVE_100_150_200_V2",
+              "wheel_zoom_active_pace_ms": "100,150,200",
+              "wheel_zoom_active_threshold_steps": "2,6",
+              "wheel_zoom_input_active_ms": "300",
+              "wheel_zoom_quiet_small_backlog_max_steps": "2",
+              "wheel_zoom_quiet_small_backlog_pace_ms": "100",
+              "wheel_zoom_quiet_backlog_pace_ms": "150",
+              "wheel_zoom_fallback_pace_ms": "250",
+              "wheel_zoom_send_retry_ms": "150",
+              "wheel_zoom_frame_feedback":
+                  "PROCESS_LOCAL_DECODED_PROGRESS_LIVENESS_ONLY_NOT_CAMERA_COMPLETION",
+              "wheel_zoom_telemetry_fallback": "250MS_TIMER",
+              "wheel_zoom_response_gate":
+                  "NO_ACCEPTANCE_CALLBACK_IS_OBSERVE_ONLY",
+              "wheel_zoom_sd_log": "streams/mmi-mirror-wheel-zoom.log",
+              "wheel_zoom_sd_event_snapshot":
+                  "streams/mmi-mirror-wheel-zoom.events",
+              "boot_log_capture":
+                  "VOLATILE_BOOT_FLAT_CURSOR_NO_REPLAY",
+              "direct_display_revision":
+                  "experiment-oem-layout-second-screen-v3.3-oem-lower-bar",
+              "branch_zip_status": "READY_FOR_VEHICLE_TEST",
+              "safearea_policy": "V33_OEM_X_VERTICAL_60_450",
+              "geometry_safearea_space": "OEM_X_VERTICAL_60_450",
+              "safearea_full": "370,60,700,390",
+              "safearea_small": "490,60,460,390",
+          }
+          for key, value in updates.items():
+              text = upsert(text, key, value)
+          info.write_text(text)
+
+          mirror_info = root / "Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt"
+          mirror_text = mirror_info.read_text()
+          mirror_updates = {
+              "hook_runtime_rebuild_required": "no",
+              "release_binary_status": "PRIVATE111_DIRECT_DISPLAY_V2",
+              "vehicle_zip_status": "READY_FOR_VEHICLE_TEST",
+              "hook_layout_safearea_rebuild_required": "no",
+              "hook_safearea_policy": "V33_OEM_X_VERTICAL_60_450",
+              "oem_layout_full_safearea_reference_455": "370,60,700,390",
+              "oem_layout_small_safearea_reference_455": "490,60,460,390",
+              "oem_layout_safearea_canvas_yh_mapping":
+                  "vertical_inset_top60_bottom450",
+              "oem_layout_classic_full_safearea_physical": "370,60,700,390",
+              "oem_layout_classic_small_safearea_physical": "490,60,460,390",
+              "oem_layout_sport_full_safearea_physical": "370,60,700,390",
+              "oem_layout_sport_small_safearea_physical": "14,60,460,390",
+          }
+          for key, value in mirror_updates.items():
+              mirror_text = upsert(mirror_text, key, value)
+          mirror_info.write_text(mirror_text)
+
+          # mirror BUILD_INFO is release evidence. Any V3.3 metadata update
+          # must refresh the release-local SHA table before the full verifier.
+          release_dir = root / "Toolbox/carplay_alt_screen/mirror_display/release"
+          release_sums = release_dir / "SHA256SUMS"
+          release_table = {}
+          for line in release_sums.read_text().splitlines():
+              parts = line.split(None, 1)
+              if len(parts) == 2:
+                  release_table[parts[1].strip()] = parts[0].lower()
+          for rel_name in [
+              "BUILD_INFO.txt",
+              "carplay-alt111-mirror-display",
+              "start_vehicle.sh",
+              "stop_vehicle.sh",
+          ]:
+              release_path = release_dir / rel_name
+              release_table[rel_name] = hashlib.sha256(
+                  release_path.read_bytes()
+              ).hexdigest()
+          release_sums.write_text("".join(
+              "%s %s\n" % (release_table[name], name)
+              for name in sorted(release_table)
+          ))
+
+          for rel in [
+              "Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh",
+              "Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh",
+              "Toolbox/scripts/status_mmi_cockpit_carplay_test.sh",
+          ]:
+              path = root / rel
+              s = path.read_text()
+              s = re.sub(r"^EXPECTED_SIZE=\d+$",
+                         "EXPECTED_SIZE=" + os.environ["SIZE"], s, flags=re.M)
+              s = re.sub(r"^EXPECTED_CKSUM=\d+$",
+                         "EXPECTED_CKSUM=" + os.environ["CKSUM"], s, flags=re.M)
+              path.write_text(s)
+
+          required = [
+              "Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar",
+              "Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt",
+              "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/RouteGuidance.java",
+              "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/AmapRouteGuidance.java",
+              "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/BAPBridge.java",
+              "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/routeguidance/GatedCombiService.java",
+              "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/framework/CarplayBus.java",
+              "Toolbox/carplay_alt_screen/hmi/tests/CarplayBusStickyReplayTest.java",
+              "Toolbox/carplay_alt_screen/hmi/tests/RouteGuidanceHardClearTest.java",
+              "Toolbox/carplay_alt_screen/hmi/tests/AmapSoftInactiveTest.java",
+              "Toolbox/carplay_alt_screen/hmi/tests/BAPGateReinstallTest.java",
+              "Toolbox/carplay_alt_screen/src/altscreen_hook.c",
+              "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/ClusterStateController.java",
+              "Toolbox/carplay_alt_screen/hmi/src/com/luka/carplay/cluster/WheelZoomBridge.java",
+              "Toolbox/carplay_alt_screen/tests/test_storage_policy.sh",
+              "Toolbox/carplay_alt_screen/tests/test_restore_transaction.sh",
+              "Toolbox/carplay_alt_screen/tests/test_wheel_zoom_pacing.py",
+              "Toolbox/scripts/altscreen_boot_diag.sh",
+              "Toolbox/scripts/altscreen_sd_writable.sh",
+              "Toolbox/carplay_alt_screen/rgi_meta/libcarplay_rgi_meta.so",
+              ".github/workflows/v33-oem-lower-bar-build.yml",
+              ".github/workflows/v33-hmi-rgi-audit.yml",
+              "VERIFY-NATIVE-DIRECT-RELEASE.sh",
+              "BRANCH-ZIP-READY.txt",
+              "OEM-LAYOUT-SECOND-SCREEN-V3.3.md",
+          ]
+
+          p = root / "PACKAGE_SOURCE_MAP.json"
+          data = json.loads(p.read_text())
+          for rel in set(data).union(required):
+              path = root / rel
+              if path.is_file():
+                  data[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+          p.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+
+          sums = root / "SHA256SUMS.txt"
+          table = {}
+          for line in sums.read_text().splitlines():
+              parts = line.split(None, 1)
+              if len(parts) == 2:
+                  table[parts[1].strip()] = parts[0].lower()
+          for rel in set(table).union(required).union(["PACKAGE_SOURCE_MAP.json"]):
+              path = root / rel
+              if path.is_file():
+                  table[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+          sums.write_text("".join(
+              "%s %s\n" % (table[rel], rel) for rel in sorted(table)
+          ))
+          PY
+
+          echo "V33_HMI_SIZE=$SIZE"
+          echo "V33_HMI_CKSUM=$CKSUM"
+          cat > BRANCH-ZIP-READY.txt <<EOF
+          BRANCH_ZIP_READY=YES
+          branch=experiment/oem-layout-second-screen_v3.3
+          validated_source_commit=${GITHUB_SHA}
+          mode=PRIVATE111_DIRECT_DISPLAY_V3_3_OEM_LOWER_BAR
+          jar_size=$SIZE
+          jar_cksum=$CKSUM
+          jar_sha256=$SHA
+          universal_runtime_sha256=$HOOK_SHA
+          display_chain=V3_1_OEM_MAP_1TO1_CLIP
+          safearea_policy=V3_3_OEM_X_VERTICAL_60_450
+          safearea_full=370,60,700,390
+          safearea_small=490,60,460,390
+          oem_lower_bar=CARPLAY_RGI_FCT19_21_22_PARTIAL_V2
+          current_road=FCT19_CARPLAY_WHEN_VALID_ELSE_STOCK
+          remaining_distance=FCT21_CARPLAY_WHEN_VALID_ELSE_STOCK
+          arrival_time=FCT22_CARPLAY_WHEN_VALID_ELSE_STOCK
+          map_scale=FCT45_STOCK_PASSTHROUGH
+          remaining_time=NOT_PUBLISHED
+          rgi_activation=VISIBLE_OR_ROUTE_ACTIVE_SOURCE_RG_REQUIRED
+          rgi_sticky_sync=LOCAL_STICKY_REPLAY_ON_LISTENER_REGISTRATION
+          rgi_lifecycle=SYNCHRONIZED_STOP_FRAME_NO_RESURRECT
+          lower_bar_teardown=RELEASE_FIELDS_NO_SYNTHETIC_CLEAR_RESTORE_STOCK_LISTENER
+          lower_bar_empty_state=INVALID_FIELD_RELEASES_TO_STOCK
+          dual_preload_order=ALTSCREEN_RGI_LIBC
+          dual_preload_static_audit=PASS_REQUIRED
+          dual_preload_child_isolation=ALTSCREEN_AND_RGI_STRIPPED_BEFORE_HELPER_EXEC
+          rgi_runtime_scope=PINNED_FULL_RGI_HOOK_METADATA_CONSUMER_ONLY
+          amap_soft_inactive_policy=AMAP_OR_UNKNOWN_SIGNATURE_5S_GRACE_WITH_FRESH_GUIDANCE_EXTENSION
+          lower_bar_gate_policy=LAZY_PER_FIELD_REVALIDATE_UNWRAP_WHEN_IDLE
+          lower_bar_context_policy=BAP_ONLY_DO_NOT_DRIVE_RGI_PRESENTATION_ACTIVE
+          carplay_hook_sd_log=streams/carplay_hook.log
+          touch=RETAINED
+          wheel_zoom=RETAINED_TARGET_FOLLOW_WITH_BURST_ADAPTIVE_PACING
+          wheel_zoom_model=OEM_TARGET_FOLLOW_V1
+          wheel_zoom_pacing=TARGET_FOLLOW_BURST_ADAPTIVE
+          wheel_zoom_pacing_revision=BURST_ADAPTIVE_100_150_200_V2
+          wheel_zoom_active_pace_ms=100,150,200
+          wheel_zoom_active_threshold_steps=2,6
+          wheel_zoom_input_active_ms=300
+          wheel_zoom_quiet_small_backlog_max_steps=2
+          wheel_zoom_quiet_small_backlog_pace_ms=100
+          wheel_zoom_quiet_backlog_pace_ms=150
+          wheel_zoom_fallback_pace_ms=250
+          wheel_zoom_send_retry_ms=150
+          wheel_zoom_frame_feedback=PROCESS_LOCAL_DECODED_PROGRESS_LIVENESS_ONLY_NOT_CAMERA_COMPLETION
+          wheel_zoom_telemetry_fallback=250MS_TIMER
+          wheel_zoom_response_gate=NO_ACCEPTANCE_CALLBACK_IS_OBSERVE_ONLY
+          wheel_zoom_observability=RAW_CALLBACK_COUNTERS_LIFECYCLE_OBSERVE_ONLY
+          boot_log_capture=VOLATILE_BOOT_FLAT_CURSOR_NO_REPLAY
+          rgi_metadata_sha256=87d10f67fbb3dc142642d899977bab0a6eb4009f61d3bcd873d0cce9e01511f7
+          rgi_messages=0x5200,0x5201,0x5202,0x5203,0x5204
+          rebuild_required=none
+          vehicle_zip_status=READY_FOR_V3_3_VEHICLE_TEST
+          install_policy=EXTRACT_BRANCH_ZIP_CONTENTS_TO_SD_ROOT
+          EOF
+
+          # BRANCH-ZIP-READY.txt is generated after the main identity pass.
+          # Refresh its hash, then refresh PACKAGE_SOURCE_MAP itself in the
+          # root SHA table so the final verifier sees one self-consistent set.
+          python3 <<'PY'
+          import hashlib
+          import json
+          import pathlib
+
+          root = pathlib.Path(".")
+          def digest(path):
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+
+          package = root / "PACKAGE_SOURCE_MAP.json"
+          data = json.loads(package.read_text())
+          data["BRANCH-ZIP-READY.txt"] = digest(root / "BRANCH-ZIP-READY.txt")
+          package.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+
+          sums = root / "SHA256SUMS.txt"
+          table = {}
+          for line in sums.read_text().splitlines():
+              parts = line.split(None, 1)
+              if len(parts) == 2:
+                  table[parts[1].strip()] = parts[0].lower()
+          table["BRANCH-ZIP-READY.txt"] = digest(root / "BRANCH-ZIP-READY.txt")
+          table["PACKAGE_SOURCE_MAP.json"] = digest(package)
+          sums.write_text("".join(
+              "%s %s\n" % (table[rel], rel) for rel in sorted(table)
+          ))
+          PY
+
+          echo "V33_HMI_SHA256=$SHA"
+
+      - name: Verify complete V3.3 branch ZIP contract
+        run: |
+          set -euo pipefail
+          sh VERIFY-BRANCH-ZIP-READY.sh
+          grep -Fq 'branch=experiment/oem-layout-second-screen_v3.3' BRANCH-ZIP-READY.txt
+          grep -Fq 'vehicle_zip_status=READY_FOR_V3_3_VEHICLE_TEST' BRANCH-ZIP-READY.txt
+          grep -Fq 'safearea_policy=V3_3_OEM_X_VERTICAL_60_450' BRANCH-ZIP-READY.txt
+          grep -Fq 'safearea_full=370,60,700,390' BRANCH-ZIP-READY.txt
+          grep -Fq 'safearea_small=490,60,460,390' BRANCH-ZIP-READY.txt
+          grep -Fq 'wheel_zoom_pacing_revision=BURST_ADAPTIVE_100_150_200_V2' BRANCH-ZIP-READY.txt
+          grep -Fq 'wheel_zoom_active_pace_ms=100,150,200' BRANCH-ZIP-READY.txt
+          grep -Fq 'wheel_zoom_quiet_small_backlog_pace_ms=100' BRANCH-ZIP-READY.txt
+          grep -Fq 'wheel_zoom_quiet_backlog_pace_ms=150' BRANCH-ZIP-READY.txt
+          grep -Fq 'wheel_zoom_fallback_pace_ms=250' BRANCH-ZIP-READY.txt
+          grep -Fq 'wheel_zoom_frame_feedback=PROCESS_LOCAL_DECODED_PROGRESS_LIVENESS_ONLY_NOT_CAMERA_COMPLETION' BRANCH-ZIP-READY.txt
+          echo 'V33_BRANCH_ZIP_CONTRACT=PASS'
+
+      - name: Promote V3.3 HMI artifact
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add             Toolbox/carplay_alt_screen/hmi/carplay_hook-basevideo3.jar             Toolbox/carplay_alt_screen/universal/libcarplay_altscreen.so             Toolbox/carplay_alt_screen/hmi/BUILD_INFO.txt             Toolbox/carplay_alt_screen/mirror_display/release/BUILD_INFO.txt             Toolbox/carplay_alt_screen/mirror_display/release/SHA256SUMS             Toolbox/scripts/install_mmi_cockpit_carplay_rx.sh             Toolbox/scripts/start_mmi_cockpit_carplay_rx_test.sh             Toolbox/scripts/status_mmi_cockpit_carplay_test.sh             BRANCH-ZIP-READY.txt             PACKAGE_SOURCE_MAP.json             SHA256SUMS.txt
+
+          if ! git diff --cached --quiet; then
+            git commit -m "build(v3.3): promote OEM lower-bar HMI [skip ci]"
+            git fetch origin "$GITHUB_REF_NAME"
+            git rebase "origin/$GITHUB_REF_NAME"
+            git push origin "HEAD:$GITHUB_REF_NAME"
+          fi

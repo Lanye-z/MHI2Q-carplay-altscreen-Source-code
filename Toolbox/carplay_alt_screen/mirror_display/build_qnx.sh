@@ -21,17 +21,38 @@ if [ -x "$READELF" ]; then
   fi
 fi
 
+STRINGS="${STRINGS:-}"
+if [ -z "$STRINGS" ]; then
+  if [ -x "$QNX_HOST/usr/bin/ntoarmv7-strings" ]; then
+    STRINGS="$QNX_HOST/usr/bin/ntoarmv7-strings"
+  elif command -v strings >/dev/null 2>&1; then
+    STRINGS="$(command -v strings)"
+  fi
+fi
+[ -n "$STRINGS" ] || {
+  echo "ERROR: no strings tool found for sidecar verification" >&2
+  exit 1
+}
+
 check_marker() {
   marker=$1
-  if command -v strings >/dev/null 2>&1; then
-    strings "$BIN" | grep -Fq "$marker"
-  else
-    grep -a -Fq "$marker" "$BIN"
-  fi
+  "$STRINGS" "$BIN" | grep -Fq "$marker"
 }
 
 for marker in \
-  'carplay-private111-direct-display-v2' \
+  'carplay-private111-direct-display-v3.1-oem-map-1to1-clip' \
+  'present_policy=source-driven' \
+  'no_success_sleep=1' \
+  'PHASE=OEM_MAP_PLACEMENT' \
+  'PHASE=OEM_MAP_PLACEMENT_STATE_GAP' \
+  'action=retain_previous' \
+  'PHASE=OEM_MAP_RERENDER' \
+  'live_switch=1' \
+  'renderer_scale=0' \
+  'natural_clip=1' \
+  'PHASE=OEM_GEOMETRY_V31' \
+  'geometry_policy=OEM_MAP_PLANE_1TO1_CLIP_V31' \
+  'stall_report_after_ms=' \
   'PHASE=H264_SHM_ATTACHED' \
   'PHASE=DECODED_SHM_WAIT_SIZE' \
   'PHASE=SOURCE_SESSION' \
@@ -46,6 +67,10 @@ for marker in \
   'PHASE=DECODER_FIRST_FRAME' \
   'PHASE=NV12_CSC_READY' \
   'PHASE=DISPLAYABLE3_FIRST_PRESENT' \
+  '/tmp/mmi-mirror-displayable3.state' \
+  'DISPLAYABLE3_OWNERSHIP_V1' \
+  'display_observer_revision=V32_READABLE_STATE_V1' \
+  'PHASE=DISPLAYABLE3_OWNERSHIP' \
   'PHASE=DIRECT111_ACTIVE' \
   'window58_readback=0'
 do
@@ -55,14 +80,15 @@ do
   }
 done
 
-if strings "$BIN" | grep -Fq 'screen_read_window'; then
-  echo "ERROR: Window58 readback leaked into direct-display binary" >&2
-  exit 1
-fi
-if strings "$BIN" | grep -Fq 'WINDOW_MANAGER_CONTEXT event observer ready'; then
-  echo "ERROR: Window58 event observer leaked into direct-display binary" >&2
-  exit 1
-fi
+for marker in \
+  'screen_read_window' \
+  'WINDOW_MANAGER_CONTEXT event observer ready'
+do
+  if "$STRINGS" "$BIN" | grep -Fq "$marker"; then
+    echo "ERROR: forbidden direct-display marker present: $marker" >&2
+    exit 1
+  fi
+done
 
-echo "MIRROR_BUILD_ID=carplay-private111-direct-display-v2"
+echo "MIRROR_BUILD_ID=carplay-private111-direct-display-v3.1-oem-map-1to1-clip"
 echo "MIRROR_BUILD=PASS output=$ROOT/$BIN"

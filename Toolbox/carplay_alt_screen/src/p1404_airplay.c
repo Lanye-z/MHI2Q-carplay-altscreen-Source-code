@@ -8,12 +8,23 @@
 #include <stddef.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <dlfcn.h>
 
 /* Optional outside the exact K1004 direct overlay (not linked by some host
  * fixtures and legacy preload builds). */
 extern void *p1404_direct_stock_symbol_named(const char *name)
     __attribute__((weak));
+extern int altscreen_runtime_wait_ready(unsigned timeout_ms)
+    __attribute__((weak));
+
+#define ALTSCREEN_NEGOTIATION_WAIT_MS 500u
+#define ALT111_BOOTSTRAP_WIDTH 1440u
+#define ALT111_BOOTSTRAP_HEIGHT 542u
+
+static volatile uint32_t g_alt_advertised_width;
+static volatile uint32_t g_alt_advertised_height;
+static volatile int g_alt_advertised_geometry_provisional;
 
 int alt_flag_info;
 int alt_flag_feature;
@@ -26,6 +37,45 @@ void *alt_real_screen_stream_create;
 void alt_note_displays_container(const char *tag, void *container);
 static void bind_real(void);
 static void bind_cf(void);
+
+static int alt_runtime_negotiation_ready(const char *phase) {
+    if (!altscreen_runtime_is_ready || altscreen_runtime_is_ready()) return 1;
+    if (altscreen_runtime_wait_ready &&
+        altscreen_runtime_wait_ready(ALTSCREEN_NEGOTIATION_WAIT_MS)) {
+        altscreen_log("PHASE=COLD_START_NEGOTIATION_WAIT result=READY phase=%s max_wait_ms=%u fixed_delay=0",
+                      phase ? phase : "unknown", ALTSCREEN_NEGOTIATION_WAIT_MS);
+        return 1;
+    }
+    altscreen_log("WARN PHASE=COLD_START_NEGOTIATION_WAIT result=TIMEOUT phase=%s max_wait_ms=%u action=STOCK_PASSTHROUGH",
+                  phase ? phase : "unknown", ALTSCREEN_NEGOTIATION_WAIT_MS);
+    return 0;
+}
+
+int alt_airplay_negotiation_geometry_ready(void) {
+    uint32_t width = 0, height = 0;
+    if (p1404_cockpit_native_get_geometry(&width, &height)) return 1;
+    return ALT111_BOOTSTRAP_WIDTH > 0u && ALT111_BOOTSTRAP_HEIGHT > 0u;
+}
+
+int alt_airplay_validate_runtime_geometry(uint32_t width, uint32_t height) {
+    uint32_t advertised_width =
+        __sync_fetch_and_add(&g_alt_advertised_width, 0u);
+    uint32_t advertised_height =
+        __sync_fetch_and_add(&g_alt_advertised_height, 0u);
+    int provisional =
+        __sync_fetch_and_add(&g_alt_advertised_geometry_provisional, 0);
+
+    if (!advertised_width || !advertised_height) return 1;
+    if (advertised_width == width && advertised_height == height) {
+        if (provisional)
+            altscreen_log("PHASE=ALT111_BOOTSTRAP_GEOMETRY_CONFIRMED advertised=%ux%u runtime=%ux%u",
+                          advertised_width, advertised_height, width, height);
+        return 1;
+    }
+    altscreen_log("ERROR PHASE=ALT111_GEOMETRY_CONTRACT_MISMATCH advertised=%ux%u runtime=%ux%u provisional=%d action=REFUSE_PRIVATE_RENDERER reconnect_required=1",
+                  advertised_width, advertised_height, width, height, provisional);
+    return 0;
+}
 
 /* QNX libairplay does not supply the ARM EABI division helpers. Keep geometry
  * arithmetic self-contained so the overlay has no hidden loader dependency. */
@@ -183,11 +233,17 @@ static int cf_dict_set_cstr_obj(cf_obj dict, const char *key, cf_obj value) {
 }
 
 void p1404_airplay_load_flags(void) {
-    alt_flag_info      = altscreen_marker_present("ARMED_INFO");
-    alt_flag_feature   = altscreen_marker_present("ARMED_FEATURE");
-    alt_flag_create111 = altscreen_marker_present("ARMED_CREATE111");
-    alt_flag_iap2      = altscreen_marker_present("ARMED_IAP2");
-    altscreen_log("PHASE=FLAGS_LOADED mutate=%d info=%d feature=%d create111=%d iap2=%d",
+    /*
+     * V3.4: AltScreen is a normal capability of every CarPlay session while
+     * this preload is installed.  INFO/FEATURE/CREATE111 are therefore not
+     * controlled by SD-resident test markers.  Keep the legacy iAP2
+     * ThemeAssets mutation disabled; V3.3 proved private111 without it.
+     */
+    alt_flag_info      = 1;
+    alt_flag_feature   = 1;
+    alt_flag_create111 = 1;
+    alt_flag_iap2      = 0;
+    altscreen_log("PHASE=FLAGS_LOADED policy=V34_ALWAYS_ON mutate=%d info=%d feature=%d create111=%d iap2=%d",
                   p1404_mutate_armed, alt_flag_info, alt_flag_feature,
                   alt_flag_create111, alt_flag_iap2);
 }
@@ -371,11 +427,283 @@ static cf_obj rect_dict(uint32_t w, uint32_t h, uint32_t x, uint32_t y) {
     return d;
 }
 
-static cf_obj make_view_areas(uint32_t w, uint32_t h) {
+struct alt_safe_rect {
+    /* safeArea coordinates sent to CarPlay (source/canvas space). */
+    uint32_t x;
+    uint32_t y;
+    uint32_t w;
+    uint32_t h;
+
+    /* Same safe region after renderer translation, in physical VC space. */
+    int physical_x;
+    int physical_y;
+    uint32_t physical_w;
+    uint32_t physical_h;
+
+    /* Live full-size map-plane translation. No scaling. */
+    int renderer_dx;
+    int renderer_dy;
+
+    char view[16];
+    char layout[128];
+    char source[32];
+};
+
+static void alt_trim_line(char *s) {
+    size_t n;
+    if (!s) return;
+    n = strlen(s);
+    while (n && (s[n - 1] == '\n' || s[n - 1] == '\r' ||
+                 s[n - 1] == ' ' || s[n - 1] == '\t'))
+        s[--n] = 0;
+}
+
+static int alt_kv_text(const char *line, const char *key,
+                       char *out, size_t cap) {
+    size_t n;
+    if (!line || !key || !out || !cap) return 0;
+    n = strlen(key);
+    if (strncmp(line, key, n) || line[n] != '=') return 0;
+    strncpy(out, line + n + 1u, cap - 1u);
+    out[cap - 1u] = 0;
+    alt_trim_line(out);
+    return 1;
+}
+
+static int alt_kv_i32(const char *line, const char *key, int *out) {
+    char *end = NULL;
+    long value;
+    size_t n;
+    if (!line || !key || !out) return 0;
+    n = strlen(key);
+    if (strncmp(line, key, n) || line[n] != '=') return 0;
+    value = strtol(line + n + 1u, &end, 10);
+    if (end == line + n + 1u || value < -8192L || value > 8192L) return 0;
+    *out = (int)value;
+    return 1;
+}
+
+static int alt_safe_rect_valid(const struct alt_safe_rect *r,
+                               uint32_t w, uint32_t h) {
+    if (!r || !r->w || !r->h) return 0;
+    if (r->x > w || r->y > h) return 0;
+    if (r->w > w - r->x || r->h > h - r->y) return 0;
+    return 1;
+}
+
+static int alt_load_hmi_layout(char *view, size_t view_cap,
+                               char *layout, size_t layout_cap,
+                               int *small_dx, int *small_dy) {
+    FILE *f;
+    char line[256];
+    int have_view = 0, have_layout = 0;
+    int have_dx = 0, have_dy = 0;
+    if (!view || !view_cap || !layout || !layout_cap ||
+        !small_dx || !small_dy) return 0;
+    view[0] = 0;
+    layout[0] = 0;
+    *small_dx = 0;
+    *small_dy = 0;
+    f = fopen("/tmp/mmi-mirror-hmi.state", "r");
+    if (!f) return 0;
+    while (fgets(line, sizeof(line), f)) {
+        alt_trim_line(line);
+        if (alt_kv_text(line, "view", view, view_cap))
+            have_view = 1;
+        else if (alt_kv_text(line, "layout_name", layout, layout_cap))
+            have_layout = 1;
+        else if (alt_kv_i32(line, "small_stage_dx", small_dx))
+            have_dx = 1;
+        else if (alt_kv_i32(line, "small_stage_dy", small_dy))
+            have_dy = 1;
+    }
+    fclose(f);
+
+    /*
+     * The vehicle-tested B9Sport layout has the stock map-plane SMALL offset
+     * (-476,0). Prefer the live Layout values from Java, but keep this verified
+     * fallback so a temporarily older state writer cannot silently center the
+     * Sport SMALL map.
+     */
+    if (have_layout && strstr(layout, "LayoutMIB2HighB9Sport")) {
+        if (!have_dx) *small_dx = -476;
+        if (!have_dy) *small_dy = 0;
+    }
+    return have_view && have_layout;
+}
+
+static int alt_is_measured_b9_canvas(uint32_t display_w,
+                                     uint32_t display_h) {
+    /*
+     * Vehicle evidence spans three related vertical extents:
+     *  - 542: negotiated private111 Screen/display canvas,
+     *  - 540: OEM cluster screen model,
+     *  - 455: effective map/displayable3 plane.
+     * The measured FULL/SMALL safe rectangles fit all three. Keep the guard
+     * narrow to these observed B9 geometries instead of accepting arbitrary
+     * 1440-wide displays.
+     */
+    return display_w == 1440u &&
+           (display_h == 542u || display_h == 540u || display_h == 455u);
+}
+
+/*
+ * V3.3 keeps the OEM-measured horizontal safeArea geometry and tunes only the
+ * vertical insets after the first V3.2/V3.3 vehicle observation.
+ *
+ * The private111 coded canvas remains 1440x542 and the V3.1 renderer remains
+ * 1:1 into the 1440x455 displayable3 viewport. CarPlay now receives a vertical
+ * safe region from y=68 through bottom=450:
+ *
+ *   FULL  X/W stays 370/700, Y/H becomes 68/382
+ *   SMALL X/W stays 490/460, Y/H becomes 68/382
+ *
+ * Relative to V3.1, the top edge moves down by 19 px so compass/top controls
+ * have more clearance. Relative to V3.2, the bottom edge moves up by only 5 px
+ * so ETA remains low while no longer using the absolute bottom edge.
+ * The OEM terminal-space map-plane Y=26 remains destination metadata only.
+ */
+static int alt_load_measured_k1004_safe_area(uint32_t display_w,
+                                             uint32_t display_h,
+                                             const char *view,
+                                             const char *layout,
+                                             int small_dx,
+                                             int small_dy,
+                                             struct alt_safe_rect *out) {
+    struct alt_safe_rect r;
+    int64_t physical_x, physical_y;
+    if (!view || !layout || !out) return 0;
+    if (!alt_is_measured_b9_canvas(display_w, display_h)) return 0;
+    if (!strstr(layout, "LayoutMIB2HighB9")) return 0;
+
+    memset(&r, 0, sizeof(r));
+
+    /*
+     * ListModel176 remains the source for the OEM horizontal bounds. V3.5
+     * preserves X/W and applies the vehicle-tuned vertical safe region
+     * y=72,h=378 (bottom=450). The Audi layout may translate the whole map
+     * plane afterwards; that compositor operation remains separate and must
+     * not be cancelled here.
+     */
+    if (!strcmp(view, "SMALL")) {
+        r.x = 490u;
+        r.y = 72u;
+        r.w = 460u;
+        r.h = 378u;
+        r.physical_w = 460u;
+        r.physical_h = 378u;
+        r.renderer_dx = small_dx;
+        r.renderer_dy = small_dy;
+    } else if (!strcmp(view, "FULL")) {
+        r.x = 370u;
+        r.y = 72u;
+        r.w = 700u;
+        r.h = 378u;
+        r.physical_w = 700u;
+        r.physical_h = 378u;
+        r.renderer_dx = 0;
+        r.renderer_dy = 0;
+    } else {
+        return 0;
+    }
+    if (!r.h) return 0;
+
+    /*
+     * Horizontal safe bounds retain the measured OEM map-local geometry.
+     * Vertically, V3.5 uses the tuned 72..450 visible-map range. The whole-map
+     * renderer translation is still applied afterwards (Sport SMALL contributes
+     * -476 on X and normally 0 on Y).
+     */
+    physical_x = (int64_t)(!strcmp(view, "SMALL") ? 490u : 370u) +
+                 (int64_t)r.renderer_dx;
+    physical_y = 72 + (int64_t)r.renderer_dy;
+    if (physical_x < -8192 || physical_x > 8192 ||
+        physical_y < -8192 || physical_y > 8192) {
+        return 0;
+    }
+    r.physical_x = (int)physical_x;
+    r.physical_y = (int)physical_y;
+
+    strncpy(r.view, view, sizeof(r.view) - 1u);
+    r.view[sizeof(r.view) - 1u] = 0;
+    strncpy(r.layout, layout, sizeof(r.layout) - 1u);
+    r.layout[sizeof(r.layout) - 1u] = 0;
+    strncpy(r.source, "k1004-oem-x-vertical-72-450-v35", sizeof(r.source) - 1u);
+    r.source[sizeof(r.source) - 1u] = 0;
+    *out = r;
+    return 1;
+}
+
+static void alt_resolve_cluster_safe_area(uint32_t display_w,
+                                          uint32_t display_h,
+                                          struct alt_safe_rect *out) {
+    char view[16] = "";
+    char layout[128] = "";
+    int small_dx = 0, small_dy = 0;
+    struct alt_safe_rect r;
+    int have_hmi;
+
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    out->renderer_dx = 0;
+    out->renderer_dy = 0;
+    strncpy(out->view, "FULL", sizeof(out->view) - 1u);
+    out->view[sizeof(out->view) - 1u] = 0;
+    strncpy(out->layout, "UNKNOWN", sizeof(out->layout) - 1u);
+    out->layout[sizeof(out->layout) - 1u] = 0;
+
+    /*
+     * /info can be requested before Java has published the first HMI snapshot.
+     * For the measured B9 cluster canvas, predeclare the known FULL safe region
+     * rather than falling back to a one-area/full-bleed shape that would make
+     * same-session FULL<->SMALL switching impossible later.
+     */
+    if (alt_is_measured_b9_canvas(display_w, display_h)) {
+        out->x = 370u;
+        out->y = 72u;
+        out->w = 700u;
+        out->h = 378u;
+        out->physical_x = 370;
+        out->physical_y = 75;
+        out->physical_w = 700u;
+        out->physical_h = 378u;
+        strncpy(out->source, "k1004-default-v35-72-450-before-hmi",
+                sizeof(out->source) - 1u);
+    } else {
+        out->w = display_w;
+        out->h = display_h;
+        out->physical_x = 0;
+        out->physical_y = 0;
+        out->physical_w = display_w;
+        out->physical_h = display_h;
+        strncpy(out->source, "fullscreen-fallback", sizeof(out->source) - 1u);
+    }
+    out->source[sizeof(out->source) - 1u] = 0;
+
+    have_hmi = alt_load_hmi_layout(
+        view, sizeof(view), layout, sizeof(layout), &small_dx, &small_dy);
+
+    if (have_hmi && alt_load_measured_k1004_safe_area(
+            display_w, display_h, view, layout,
+            small_dx, small_dy, &r)) {
+        *out = r;
+        return;
+    }
+}
+
+static cf_obj make_view_areas_with_safe(uint32_t w, uint32_t h,
+                                        const struct alt_safe_rect *safe_rect) {
     cf_obj view = NULL, safe = NULL, areas = NULL;
+    uint32_t sx = 0u, sy = 0u, sw = w, sh = h;
     if (!cf_array_create_mutable || !cf_array_append || !cf_dict_set) return NULL;
+    if (safe_rect && alt_safe_rect_valid(safe_rect, w, h)) {
+        sx = safe_rect->x;
+        sy = safe_rect->y;
+        sw = safe_rect->w;
+        sh = safe_rect->h;
+    }
     view = rect_dict(w, h, 0, 0);
-    safe = rect_dict(w, h, 0, 0);
+    safe = rect_dict(sw, sh, sx, sy);
     if (!view || !safe) goto fail;
     if (!cf_dict_set_cstr_obj(view, "safeArea", safe)) goto fail;
     cf_release_safe(safe); safe = NULL;
@@ -391,31 +719,140 @@ fail:
     return NULL;
 }
 
+static cf_obj make_view_areas(uint32_t w, uint32_t h) {
+    return make_view_areas_with_safe(w, h, NULL);
+}
+
+
+/*
+ * Type111 may declare multiple candidate viewAreas.  Apple cluster templates
+ * do this as well; unlike type110, ALT entries do not carry
+ * viewAreaTransitionControl/viewAreaStatusBarEdge flags. The outer viewArea
+ * keeps the runtime coded canvas (observed 1440x542 on the private111 path);
+ * only the nested safeArea changes. The displayable3 sink remains 1440x455.
+ *
+ * index 0 = FULL  (370,72,700x378)
+ * index 1 = SMALL (490,72,460x378)
+ *
+ * V3.5 preserves the V3.1/V3.2 horizontal OEM constraints while using the
+ * vehicle-tuned vertical safe region top=72, bottom=450.
+ */
+static cf_obj make_cluster_layout_view_areas(uint32_t w, uint32_t h,
+                                             int enable_two_areas) {
+    struct alt_safe_rect full, small;
+    cf_obj areas = NULL, v = NULL, safe = NULL;
+
+    if (!cf_array_create_mutable || !cf_array_append || !cf_dict_set)
+        return NULL;
+
+    areas = cf_array_create_mutable(NULL, 0, NULL, NULL);
+    if (!areas) return NULL;
+
+    memset(&full, 0, sizeof(full));
+    full.x = 370u;
+    full.y = 72u;
+    full.w = 700u;
+    full.h = 378u;
+    if (!full.h || !alt_safe_rect_valid(&full, w, h)) goto fail;
+
+    v = rect_dict(w, h, 0u, 0u);
+    safe = rect_dict(full.w, full.h, full.x, full.y);
+    if (!v || !safe || !cf_dict_set_cstr_obj(v, "safeArea", safe)) goto fail;
+    cf_release_safe(safe); safe = NULL;
+    cf_array_append(areas, v);
+    cf_release_safe(v); v = NULL;
+
+    if (!enable_two_areas) return areas;
+
+    memset(&small, 0, sizeof(small));
+    small.x = 490u;
+    small.y = 72u;
+    small.w = 460u;
+    small.h = 378u;
+    if (!small.h || !alt_safe_rect_valid(&small, w, h)) goto fail;
+
+    v = rect_dict(w, h, 0u, 0u);
+    safe = rect_dict(small.w, small.h, small.x, small.y);
+    if (!v || !safe || !cf_dict_set_cstr_obj(v, "safeArea", safe)) goto fail;
+    cf_release_safe(safe); safe = NULL;
+    cf_array_append(areas, v);
+    cf_release_safe(v); v = NULL;
+    return areas;
+
+fail:
+    cf_release_safe(safe);
+    cf_release_safe(v);
+    cf_release_safe(areas);
+    return NULL;
+}
+
+static cf_obj make_i64_array_one(int64_t value) {
+    cf_obj a = NULL, n = NULL;
+    if (!cf_array_create_mutable || !cf_array_append || !cf_num_new)
+        return NULL;
+    a = cf_array_create_mutable(NULL, 0, NULL, NULL);
+    n = cf_num_new(NULL, value);
+    if (!a || !n) {
+        cf_release_safe(n);
+        cf_release_safe(a);
+        return NULL;
+    }
+    cf_array_append(a, n);
+    cf_release_safe(n);
+    return a;
+}
+
 void *alt_build_cluster_display(void) {
     const struct altscreen_display *d;
     uint32_t width = 0, height = 0;
     uint32_t physical_width, physical_height;
-    cf_obj dict = NULL, areas = NULL, vs = NULL;
-    /* Refresh on every display-info build so the request follows the current
-     * target mode. If Screen temporarily refuses a second context, retain only
-     * the display-1 geometry already proved by the worker's mandatory READY
-     * gate; this is measured runtime state, never a fixed-size fallback. */
+    struct alt_safe_rect cluster_safe;
+    cf_obj dict = NULL, areas = NULL, adjacent = NULL, vs = NULL;
+    int layout_known = 0;
+    int two_area_capable = 0;
+    int initial_view_area = 0;
+    int geometry_provisional = 0;
+    /*
+     * V3.5 cold-start policy: /info must not permanently miss AltScreen just
+     * because Screen display-1 appears a few hundred milliseconds later than
+     * the first CarPlay capability transaction. Prefer live measured geometry;
+     * if it is not queryable yet, advertise the already vehicle-proven
+     * 1440x542 B9 Type111 canvas as a negotiation-only bootstrap contract.
+     * The private renderer later re-queries Screen and refuses activation on
+     * any mismatch, so this is not a silent renderer-size fallback.
+     */
     if (!p1404_cockpit_native_refresh_geometry()) {
         if (!p1404_cockpit_native_get_geometry(&width, &height)) {
-            altscreen_log("ERROR ALTINFO target display geometry unavailable fixed_fallback=0 type111_not_advertised=1");
-            return NULL;
+            width = ALT111_BOOTSTRAP_WIDTH;
+            height = ALT111_BOOTSTRAP_HEIGHT;
+            geometry_provisional = 1;
+            (void)altscreen_set_cluster_geometry(width, height);
+            altscreen_log("PHASE=ALT111_NEGOTIATION_GEOMETRY source=BOOTSTRAP size=%ux%u provisional=1 renderer_verified=0",
+                          width, height);
+        } else {
+            altscreen_log("PHASE=ALT111_NEGOTIATION_GEOMETRY source=CACHED_SCREEN size=%ux%u provisional=0",
+                          width, height);
         }
-        altscreen_log("WARN ALTINFO live geometry refresh failed; using READY-preflight display1=%ux%u fixed_fallback=0",
-                      width, height);
     } else if (!p1404_cockpit_native_get_geometry(&width, &height)) {
-        altscreen_log("ERROR ALTINFO refreshed display geometry was not published fixed_fallback=0 type111_not_advertised=1");
+        altscreen_log("ERROR ALTINFO refreshed display geometry was not published type111_not_advertised=1");
         return NULL;
+    } else {
+        altscreen_log("PHASE=ALT111_NEGOTIATION_GEOMETRY source=LIVE_SCREEN size=%ux%u provisional=0",
+                      width, height);
     }
     d = altscreen_cluster_display();
     if (!d || !d->width_pixels || !d->height_pixels) {
         altscreen_log("ERROR ALTINFO target display geometry unpublished type111_not_advertised=1");
         return NULL;
     }
+    __sync_lock_test_and_set(&g_alt_advertised_width, d->width_pixels);
+    __sync_lock_test_and_set(&g_alt_advertised_height, d->height_pixels);
+    __sync_lock_test_and_set(&g_alt_advertised_geometry_provisional,
+                             geometry_provisional ? 1 : 0);
+    __sync_synchronize();
+    altscreen_log("PHASE=ALT111_INFO_GEOMETRY_CONTRACT advertised=%ux%u provisional=%d live_geometry=%d renderer_must_match=1",
+                  d->width_pixels, d->height_pixels, geometry_provisional,
+                  geometry_provisional ? 0 : 1);
     /* Match LIVI getInfo.displayEntry when physical panel size is unavailable. */
     physical_width = d->width_mm ? d->width_mm : 200u;
     physical_height = d->height_mm;
@@ -446,17 +883,70 @@ void *alt_build_cluster_display(void) {
     if (!vs || !cf_dict_set_cstr_obj(dict, "uuid", vs)) goto fail;
     cf_release_safe(vs); vs = NULL;
 
-    areas = make_view_areas(d->width_pixels, d->height_pixels);
-    if (areas) {
-        if (!cf_dict_set_cstr_obj(dict, "viewAreas", areas) ||
-            !set_i64(dict, "initialViewArea", 0)) goto fail;
-        cf_release_safe(areas); areas = NULL;
-        altscreen_log("ALTAREA schema=viewAreas[array] initialViewArea=0 safeArea=nested full=%ux%u",
-                      d->width_pixels, d->height_pixels);
-    } else {
-        altscreen_log("ERROR ALTAREA failed to build reference-compatible viewAreas");
+    alt_resolve_cluster_safe_area(
+        d->width_pixels, d->height_pixels, &cluster_safe);
+
+    two_area_capable =
+        alt_is_measured_b9_canvas(d->width_pixels, d->height_pixels);
+    layout_known =
+        two_area_capable &&
+        strstr(cluster_safe.layout, "LayoutMIB2HighB9") != NULL;
+    initial_view_area =
+        layout_known && !strcmp(cluster_safe.view, "SMALL") ? 1 : 0;
+
+    /*
+     * Declare BOTH Audi FULL/SMALL candidates up front on the measured B9
+     * target canvas even if Java's first HMI-state file is a few hundred ms
+     * late. updateViewArea can only select an index that /info already
+     * declared; waiting for the HMI file here would re-introduce a reconnect
+     * requirement on cold start.
+     */
+    areas = make_cluster_layout_view_areas(
+        d->width_pixels, d->height_pixels, two_area_capable);
+    if (!areas) {
+        altscreen_log("ERROR ALTAREA failed to build cluster viewAreas");
         goto fail;
     }
+    if (two_area_capable) {
+        adjacent = make_i64_array_one(initial_view_area ? 0 : 1);
+        if (!adjacent) goto fail;
+    } else {
+        adjacent = cf_array_create_mutable ?
+            cf_array_create_mutable(NULL, 0, NULL, NULL) : NULL;
+        if (!adjacent) goto fail;
+    }
+
+    if (!cf_dict_set_cstr_obj(dict, "viewAreas", areas) ||
+        !set_i64(dict, "initialViewArea", initial_view_area) ||
+        !cf_dict_set_cstr_obj(dict, "adjacentViewAreas", adjacent)) {
+        goto fail;
+    }
+    cf_release_safe(adjacent); adjacent = NULL;
+    cf_release_safe(areas); areas = NULL;
+
+    altscreen_log(
+        "ALTAREA_LAYOUT_SAFE_V3 schema=viewAreas[array] viewAreaCount=%d "
+        "initialViewArea=%d adjacent=%d predeclared_even_if_hmi_late=%d "
+        "view=full:%ux%u safe_source=%u,%u,%ux%u "
+        "safe_physical=%d,%d,%ux%u renderer_offset=%d,%d "
+        "safe_yh_mapping=vertical_inset_top72_bottom450 "
+        "safearea_revision=V35_OEM_X_VERTICAL_72_450 "
+        "renderer_geometry_revision=V31_ONE_TO_ONE_CLIP "
+        "map_plane_terminal_y=26 map_plane_terminal_y_policy=metadata_only_not_renderer_offset "
+        "mode=%s layout=%s source=%s renderer_scale=0 "
+        "runtime_switch=updateViewArea type111_transition_flags=omitted",
+        two_area_capable ? 2 : 1,
+        initial_view_area,
+        two_area_capable ? (initial_view_area ? 0 : 1) : -1,
+        two_area_capable ? 1 : 0,
+        d->width_pixels, d->height_pixels,
+        cluster_safe.x, cluster_safe.y,
+        cluster_safe.w, cluster_safe.h,
+        cluster_safe.physical_x, cluster_safe.physical_y,
+        cluster_safe.physical_w, cluster_safe.physical_h,
+        cluster_safe.renderer_dx, cluster_safe.renderer_dy,
+        cluster_safe.view, cluster_safe.layout,
+        cluster_safe.source);
     altscreen_log("ALTINFO built type=%u %ux%u@%u uuid=%s features=0x%x input=%d fields=%u",
                   d->stream_type, d->width_pixels, d->height_pixels, d->max_fps,
                   d->uuid, DISPLAY_FEATURE_KNOBS | DISPLAY_FEATURE_HIGH_FIDELITY_TOUCH,
@@ -464,6 +954,7 @@ void *alt_build_cluster_display(void) {
     return dict;
 fail:
     cf_release_safe(vs);
+    cf_release_safe(adjacent);
     cf_release_safe(areas);
     cf_release_safe(dict);
     return NULL;
@@ -476,6 +967,8 @@ struct alt111_event_context {
     void *stream;
     uint32_t generation;
     int event_kind;
+    int event_value;
+    uint32_t event_seq;
     volatile int refs;
     volatile int callback_called;
 };
@@ -492,13 +985,26 @@ static void alt111_event_response(int status, void *response, void *opaque) {
      * the submit path must not release both references while callback code is
      * already using this context. */
     __sync_lock_test_and_set(&ctx->callback_called, 1);
-    altscreen_log("PHASE=ALT111_EVENT_RESPONSE receiver=%p stream=%p generation=%u event=%d status=%d response=%p",
+    altscreen_log("PHASE=ALT111_EVENT_RESPONSE receiver=%p stream=%p generation=%u event=%d value=%d seq=%u status=%d response=%p",
                   ctx->receiver, ctx->stream, ctx->generation,
-                  ctx->event_kind, status, response);
-    if (ctx->stream && ctx->generation)
-        p1404_cockpit_native_event_result(ctx->receiver, ctx->stream,
-                                      ctx->generation, ctx->event_kind,
-                                      status, response != NULL);
+                  ctx->event_kind, ctx->event_value, ctx->event_seq,
+                  status, response);
+    if (ctx->stream && ctx->generation) {
+        if (ctx->event_kind == ALT111_EVENT_UPDATE_VIEW_AREA)
+            p1404_cockpit_native_view_area_result(
+                ctx->receiver, ctx->stream, ctx->generation,
+                ctx->event_seq, ctx->event_value,
+                status, response != NULL);
+        else if (ctx->event_kind == ALT111_EVENT_ZOOM)
+            p1404_cockpit_native_zoom_result(
+                ctx->receiver, ctx->stream, ctx->generation,
+                ctx->event_seq, ctx->event_value,
+                status, response != NULL);
+        else
+            p1404_cockpit_native_event_result(ctx->receiver, ctx->stream,
+                                          ctx->generation, ctx->event_kind,
+                                          status, response != NULL);
+    }
     alt111_event_context_release(ctx);
 }
 
@@ -544,6 +1050,7 @@ static int alt_send_cluster_event_impl(void *receiver, void *stream,
     ctx->stream = stream;
     ctx->generation = generation;
     ctx->event_kind = event_kind;
+    ctx->event_value = -1;
     ctx->refs = 2; /* submit path plus callback path */
     rc = send_command(receiver, command, alt111_event_response, ctx);
     altscreen_log("PHASE=ALT111_EVENT_SUBMIT receiver=%p stream=%p generation=%u event=%s uuid=%s url=%s rc=%d response_callback=1",
@@ -574,6 +1081,158 @@ int alt_send_cluster_event(void *receiver, void *stream, uint32_t generation,
                            int event_kind) {
     return alt_send_cluster_event_impl(receiver, stream, generation, event_kind, 0);
 }
+
+
+int alt_send_cluster_view_area(void *receiver, void *stream,
+                               uint32_t generation, uint32_t event_seq,
+                               int view_area_index) {
+    airplay_send_command_fn send_command;
+    struct alt111_event_context *ctx = NULL;
+    const struct altscreen_display *display = altscreen_cluster_display();
+    cf_obj command = NULL, params = NULL, type = NULL, uuid = NULL;
+    cf_obj adjacent = NULL, adjacent_num = NULL;
+    int rc = -1;
+    const int adjacent_index = view_area_index == 0 ? 1 : 0;
+
+    if (!receiver || !stream || !generation || !event_seq ||
+        !display || !display->uuid ||
+        (view_area_index != 0 && view_area_index != 1))
+        return -1;
+
+    send_command = (airplay_send_command_fn)
+        p1404_stock_symbol_named("AirPlayReceiverSessionSendCommand");
+    if (!send_command || !cf_dict_create_mutable || !cf_array_create_mutable ||
+        !cf_array_append || !cf_str_new || !cf_num_new ||
+        !cf_dict_set || !cf_release)
+        goto done;
+
+    command = cf_dict_create_mutable(NULL, 0, NULL, NULL, NULL);
+    params = cf_dict_create_mutable(NULL, 0, NULL, NULL, NULL);
+    type = cf_str_new("updateViewArea", -1);
+    uuid = cf_str_new(display->uuid, -1);
+    adjacent = cf_array_create_mutable(NULL, 0, NULL, NULL);
+    adjacent_num = cf_num_new(NULL, (int64_t)adjacent_index);
+    if (!command || !params || !type || !uuid || !adjacent || !adjacent_num)
+        goto done;
+
+    cf_array_append(adjacent, adjacent_num);
+    if (!cf_dict_set_cstr_obj(command, "type", type) ||
+        !cf_dict_set_cstr_obj(params, "uuid", uuid) ||
+        !set_i64(params, "viewAreaIndex", (int64_t)view_area_index) ||
+        !set_i64(params, "animationDurationMillis", 0) ||
+        !cf_dict_set_cstr_obj(params, "adjacentViewAreas", adjacent) ||
+        !cf_dict_set_cstr_obj(command, "params", params))
+        goto done;
+
+    ctx = (struct alt111_event_context *)calloc(1u, sizeof(*ctx));
+    if (!ctx) goto done;
+    ctx->receiver = receiver;
+    ctx->stream = stream;
+    ctx->generation = generation;
+    ctx->event_kind = ALT111_EVENT_UPDATE_VIEW_AREA;
+    ctx->event_value = view_area_index;
+    ctx->event_seq = event_seq;
+    ctx->refs = 2;
+
+    rc = send_command(receiver, command, alt111_event_response, ctx);
+    altscreen_log(
+        "PHASE=ALT111_VIEWAREA_SUBMIT receiver=%p stream=%p generation=%u "
+        "request_seq=%u uuid=%s viewAreaIndex=%d animationDurationMillis=0 "
+        "adjacentViewAreas=[%d] rc=%d same_session=1",
+        receiver, stream, generation, event_seq, display->uuid,
+        view_area_index, adjacent_index, rc);
+
+    if (rc == 0) {
+        alt111_event_context_release(ctx);
+        ctx = NULL;
+    } else if (__sync_fetch_and_add(&ctx->callback_called, 0)) {
+        alt111_event_context_release(ctx);
+        ctx = NULL;
+    }
+
+done:
+    cf_release_safe(adjacent_num);
+    cf_release_safe(adjacent);
+    cf_release_safe(uuid);
+    cf_release_safe(type);
+    cf_release_safe(params);
+    cf_release_safe(command);
+    if (ctx) {
+        alt111_event_context_release(ctx);
+        alt111_event_context_release(ctx);
+    }
+    return rc;
+}
+
+int alt_send_cluster_zoom(void *receiver, void *stream,
+                          uint32_t generation, uint32_t event_seq,
+                          int direction) {
+    airplay_send_command_fn send_command;
+    struct alt111_event_context *ctx = NULL;
+    const struct altscreen_display *display = altscreen_cluster_display();
+    cf_obj command = NULL, params = NULL, type = NULL, uuid = NULL;
+    int rc = -1;
+
+    if (!receiver || !stream || !generation || !event_seq ||
+        !display || !display->uuid || (direction != 0 && direction != 1))
+        return -1;
+
+    send_command = (airplay_send_command_fn)
+        p1404_stock_symbol_named("AirPlayReceiverSessionSendCommand");
+    if (!send_command || !cf_dict_create_mutable || !cf_str_new ||
+        !cf_num_new || !cf_dict_set || !cf_release)
+        goto done;
+
+    command = cf_dict_create_mutable(NULL, 0, NULL, NULL, NULL);
+    params = cf_dict_create_mutable(NULL, 0, NULL, NULL, NULL);
+    type = cf_str_new("changeMapZoomLevel", -1);
+    uuid = cf_str_new(display->uuid, -1);
+    if (!command || !params || !type || !uuid) goto done;
+
+    if (!cf_dict_set_cstr_obj(command, "type", type) ||
+        !cf_dict_set_cstr_obj(params, "uuid", uuid) ||
+        !set_i64(params, "zoomDirection", (int64_t)direction) ||
+        !cf_dict_set_cstr_obj(command, "params", params))
+        goto done;
+
+    ctx = (struct alt111_event_context *)calloc(1u, sizeof(*ctx));
+    if (!ctx) goto done;
+    ctx->receiver = receiver;
+    ctx->stream = stream;
+    ctx->generation = generation;
+    ctx->event_kind = ALT111_EVENT_ZOOM;
+    ctx->event_value = direction;
+    ctx->event_seq = event_seq;
+    ctx->refs = 2;
+
+    rc = send_command(receiver, command, alt111_event_response, ctx);
+    altscreen_log(
+        "PHASE=CLUSTER_ZOOM_SUBMIT receiver=%p stream=%p generation=%u "
+        "seq=%u type=changeMapZoomLevel uuid=%s direction=%d action=%s rc=%d "
+        "response_callback=1",
+        receiver, stream, generation, event_seq, display->uuid, direction,
+        direction == 0 ? "ZOOM_IN" : "ZOOM_OUT", rc);
+
+    if (rc == 0) {
+        alt111_event_context_release(ctx);
+        ctx = NULL;
+    } else if (__sync_fetch_and_add(&ctx->callback_called, 0)) {
+        alt111_event_context_release(ctx);
+        ctx = NULL;
+    }
+
+done:
+    cf_release_safe(uuid);
+    cf_release_safe(type);
+    cf_release_safe(params);
+    cf_release_safe(command);
+    if (ctx) {
+        alt111_event_context_release(ctx);
+        alt111_event_context_release(ctx);
+    }
+    return rc;
+}
+
 
 /* LIVI requests the Alt UUID when Main110 becomes ready, before the phone has
  * necessarily requested type111. This request has no private stream yet and
@@ -1129,7 +1788,7 @@ void *AirPlayReceiverServerPlatformCopyProperty(void *a0, unsigned a1, void *a2,
                           (unsigned long long)stock, a0);
         else
             altscreen_log("INFO_STOCK features not an int64 object=%p", r);
-        if ((altscreen_runtime_is_ready && !altscreen_runtime_is_ready()) ||
+        if (!alt_runtime_negotiation_ready("server-features") ||
             !p1404_armed || !p1404_mutate_armed || !alt_flag_feature) return r;
         {
             void *patched = alt_advertise_features(r);
@@ -1160,7 +1819,7 @@ void *AirPlayReceiverSessionPlatformCopyProperty(void *a0, unsigned a1, void *a2
     obs_call("SessionPlatformCopyProperty", a0, lr, (long)r);
     if (name_is((cf_obj)a2, "displays", scratch, sizeof(scratch)) && r) {
         alt_note_displays_container("info-stock", r);
-        if ((!altscreen_runtime_is_ready || altscreen_runtime_is_ready()) &&
+        if (alt_runtime_negotiation_ready("session-displays") &&
             p1404_armed && p1404_mutate_armed && alt_flag_info) {
             r = alt_info_add_cluster_display(r);
             alt_note_displays_container("info-final", r);
@@ -1179,7 +1838,7 @@ void *AirPlayReceiverSessionScreen_CopyDisplaysInfo(void *a0, int *a1) {
     if (!p1404_identity_ok) return r;
     obs_call("Screen_CopyDisplaysInfo", a0, lr, (long)r);
     alt_note_displays_container("stock", r);
-    if ((!altscreen_runtime_is_ready || altscreen_runtime_is_ready()) &&
+    if (alt_runtime_negotiation_ready("screen-displays") &&
         p1404_armed && p1404_mutate_armed && alt_flag_info && r) {
         r = alt_info_add_cluster_display(r);
         alt_note_displays_container("final", r);
@@ -1229,7 +1888,7 @@ int AirPlayReceiverSessionPlatformControl(void *a0, unsigned a1, void *a2,
                       r, (a5 ? *a5 : NULL), wants_alt, alt_desc);
         if (a5 && *a5) probe_container("setup-response-stock", (cf_obj)*a5, 0);
         if (r == 0 && wants_alt && a5 && *a5 &&
-            (!altscreen_runtime_is_ready || altscreen_runtime_is_ready()) &&
+            alt_runtime_negotiation_ready("legacy-setup-response") &&
             p1404_armed && p1404_mutate_armed &&
             alt_flag_feature) {
             if (!accept_alt_in_setup_response((cf_obj)*a5))

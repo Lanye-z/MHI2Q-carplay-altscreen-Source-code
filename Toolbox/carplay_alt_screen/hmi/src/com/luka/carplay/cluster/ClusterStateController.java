@@ -35,6 +35,10 @@ public final class ClusterStateController {
     public static final int VIEWAREA_SMALLSCREEN = 1;
 
     private static final long POLL_MS = 100L;
+    private static final long OEM_PROBE_MS = 500L;
+    private static final long OWNERSHIP_PROBE_MS = 500L;
+    private static final long OWNERSHIP_HEARTBEAT_MS = 10000L;
+    private static final long DISPLAYABLE_STATE_STALE_MS = 3000L;
     private static final long RECONCILE_MS = 250L;
     private static final long BOUNCE_MS = 180L;
     private static final long VERIFY_STEP_MS = 50L;
@@ -44,8 +48,31 @@ public final class ClusterStateController {
     private static final long DIAG_MAX_BYTES = 131072L;
 
     private static final String HMI_STATE_FILE = "/tmp/mmi-mirror-hmi.state";
+    private static final String CLUSTER_OWNERSHIP_STATE_FILE =
+        "/tmp/mmi-mirror-cluster-ownership.state";
+    /*
+     * OEM_LAYOUT_OBSERVER_V1
+     *
+     * This snapshot is observation-only.  It deliberately does not drive
+     * CarPlay viewAreas/safeArea or the displayable3 renderer until the
+     * vehicle-specific ListModel176 values and plane geometry have been
+     * correlated on-car.
+     */
+    private static final String OEM_GEOMETRY_STATE_FILE =
+        "/tmp/carplay-oem-geometry.state";
+    private static final String OEM_GEOMETRY_HISTORY_FILE =
+        "/tmp/carplay-oem-geometry.log";
+    private static final String OEM_DISPLAYMANAGER_API_FILE =
+        "/tmp/carplay-oem-displaymanager-read-api.log";
+    private static final long OEM_HISTORY_MAX_BYTES = 262144L;
+    private static final int OEM_SCREEN_LAYOUT_MODEL_ID = 176;
+    private static final int OEM_SCREEN_LAYOUT_ROW = 1;
+    private static final int OEM_REQUIRED_COLUMN_COUNT = 28;
+    private static final int OEM_MISSING = Integer.MIN_VALUE;
     private static final String BASEVIDEO_ACTIVE_FILE = "/tmp/mmi-mirror-active";
     private static final String BASEVIDEO_READY_FILE = "/tmp/mmi-mirror-basevideo.ready";
+    private static final String DISPLAYABLE3_STATE_FILE =
+        "/tmp/mmi-mirror-displayable3.state";
     private static final String CONTEXT_MODE_FILE = "/tmp/mmi-mirror-context.mode";
     private static final String STARTED_FILE = "/tmp/mmi-mirror-controller.started";
     private static final String DIAG_FILE = "/tmp/mmi-mirror-controller.log";
@@ -66,7 +93,17 @@ public final class ClusterStateController {
     private static String lastStateSignature = "";
     private static String lastContextMode = "";
     private static String lastObserverStatus = "";
+    private static String lastOemGeometrySignature = "";
+    private static String lastOemProbeStatus = "";
+    private static String lastOemModelAccess = "UNRESOLVED";
+    private static String lastOwnershipSignature = "";
+    private static String lastClusterOwnershipSignature = "";
+    private static long oemGeometryRevision;
+    private static long lastOemProbeMs;
+    private static long lastOwnershipProbeMs;
+    private static long lastOwnershipHeartbeatMs;
     private static long lastReconcileMs;
+    private static boolean displayManagerApiProbed;
     private static int contextWriteFailures;
     private static long circuitOpenUntilMs;
     private static int navViewSizeChoiceId = Integer.MIN_VALUE;
@@ -103,7 +140,10 @@ public final class ClusterStateController {
         if (carPlaySessionActive == active) return;
         carPlaySessionActive = active;
         lastStateSignature = "";
+        lastClusterOwnershipSignature = "";
         diag("carplay_session=" + (active ? "1" : "0"));
+        WheelZoomBridge.logCarPlayLifecycle(active);
+        if (!active) WheelZoomBridge.reset();
     }
 
     public static void setRgiPresentationActive(boolean active) {
@@ -118,7 +158,7 @@ public final class ClusterStateController {
     }
 
     public static boolean isClusterOwned() {
-        return ownershipIntent;
+        return carPlaySessionActive && ownershipIntent && compositeApplied;
     }
 
     public static boolean isContextWriterThread() {
@@ -146,12 +186,143 @@ public final class ClusterStateController {
         diag("worker running; writerThread=" + contextWriterThread.getName());
         while (true) {
             try {
-                pollHmiState();
+                /*
+                 * Keep the proven V2 display/control path higher priority than
+                 * the diagnostic OEM observer.  If a proprietary HMI model
+                 * lookup is slow or unavailable, it must never delay the first
+                 * ctx80 acquisition/reconcile.
+                 */
                 pollContextPolicy();
+                publishClusterOwnershipState();
+                pollOwnershipDiagnostics();
+                pollHmiState();
             } catch (Throwable t) {
                 diag("ERROR poll failed: " + describe(t));
             }
             sleep(POLL_MS);
+        }
+    }
+
+    /*
+     * COLD_START_OWNERSHIP_DIAG_V1
+     *
+     * Observation only. Correlates terminal1 Context80 with the sidecar's
+     * /tmp-only displayable3 snapshot. It does not gate Private111, switch an
+     * additional context, enumerate Screen windows, or rebind displayable3.
+     */
+    private static void pollOwnershipDiagnostics() {
+        long now = nowMs();
+        if (lastOwnershipProbeMs != 0L
+            && now - lastOwnershipProbeMs < OWNERSHIP_PROBE_MS)
+            return;
+        lastOwnershipProbeMs = now;
+
+        boolean baseActive = new File(BASEVIDEO_ACTIVE_FILE).exists();
+        boolean baseReady = new File(BASEVIDEO_READY_FILE).exists();
+        boolean displayStatePresent = new File(DISPLAYABLE3_STATE_FILE).exists();
+        if (!carPlaySessionActive && !rgiPresentationActive
+            && !baseReady && !displayStatePresent
+            && !ownershipIntent && !compositeApplied)
+            return;
+
+        Object dm = displayManager();
+        int actual = currentContext(dm);
+        String state = readSmallState(DISPLAYABLE3_STATE_FILE, 4096);
+        boolean displayStateReadable = state.length() != 0;
+        long stateTs = stateLong(state, "timestamp_ms", -1L);
+        long stateAge = stateTs >= 0L && now >= stateTs ? now - stateTs : -1L;
+        int backendReady = (int)stateLong(state, "backend_ready", -1L);
+        int nativePresent = (int)stateLong(state, "native_window_present", -1L);
+        int visibleValid = (int)stateLong(state, "visible_valid", -1L);
+        int visible = (int)stateLong(state, "visible", -1L);
+        int firstPresent = (int)stateLong(state, "first_present", -1L);
+        long presented = stateLong(state, "presented_frames", -1L);
+        long generation = stateLong(state, "generation", -1L);
+        long sequence = stateLong(state, "sequence", -1L);
+        long h264Packets = stateLong(state, "h264_packets", -1L);
+        long decodedFrames = stateLong(state, "decoded_frames", -1L);
+        String nativeWindow = stateValue(state, "native_window", "?");
+        String kdWindow = stateValue(state, "kd_window", "?");
+        String manager = stateValue(state, "manager", "?");
+        boolean stale = state.length() == 0
+            || stateAge < 0L || stateAge > DISPLAYABLE_STATE_STALE_MS;
+
+        String signature =
+            actual + "/" + (ownershipIntent ? "1" : "0")
+            + "/" + (compositeApplied ? "1" : "0")
+            + "/" + (carPlaySessionActive ? "1" : "0")
+            + "/" + (rgiPresentationActive ? "1" : "0")
+            + "/" + (baseActive ? "1" : "0")
+            + "/" + (baseReady ? "1" : "0")
+            + "/" + (displayStatePresent ? "1" : "0")
+            + "/" + (displayStateReadable ? "1" : "0")
+            + "/" + backendReady + "/" + nativePresent
+            + "/" + visibleValid + "/" + visible
+            + "/" + firstPresent + "/" + nativeWindow
+            + "/" + kdWindow + "/" + manager
+            + "/" + generation
+            + "/" + oemGeometryRevision
+            + "/" + lastOemProbeStatus;
+
+        boolean changed = !signature.equals(lastOwnershipSignature);
+        boolean heartbeat = lastOwnershipHeartbeatMs == 0L
+            || now - lastOwnershipHeartbeatMs >= OWNERSHIP_HEARTBEAT_MS;
+        if (!changed && !heartbeat) return;
+
+        if (changed) lastOwnershipSignature = signature;
+        if (heartbeat) lastOwnershipHeartbeatMs = now;
+
+        diag("OWNERSHIP_SNAPSHOT reason=" + (changed ? "change" : "heartbeat")
+            + " ctx=" + actual + " desired=80"
+            + " ownership=" + (ownershipIntent ? "1" : "0")
+            + " composite=" + (compositeApplied ? "1" : "0")
+            + " cp=" + (carPlaySessionActive ? "1" : "0")
+            + " rgi=" + (rgiPresentationActive ? "1" : "0")
+            + " base=" + (baseActive ? "1" : "0")
+            + "/" + (baseReady ? "1" : "0")
+            + " display_state_present=" + (displayStatePresent ? "1" : "0")
+            + " display_state_readable=" + (displayStateReadable ? "1" : "0")
+            + " display_state_age_ms=" + stateAge
+            + " display_state_stale=" + (stale ? "1" : "0")
+            + " backend_ready=" + backendReady
+            + " native_present=" + nativePresent
+            + " native=" + nativeWindow
+            + " kd=" + kdWindow
+            + " visible_valid=" + visibleValid
+            + " visible=" + visible
+            + " first_present=" + firstPresent
+            + " presented=" + presented
+            + " gen=" + generation
+            + " seq=" + sequence
+            + " h264_packets=" + h264Packets
+            + " decoded_frames=" + decodedFrames
+            + " manager=" + sanitizeStateValue(manager)
+            + " oem_rev=" + oemGeometryRevision
+            + " oem_status=" + sanitizeStateValue(lastOemProbeStatus)
+            + " observe_only=1");
+
+        if (changed && compositeApplied && actual >= 0
+            && actual != CTX_COMPOSITE) {
+            diag("OWNERSHIP_SUSPECT kind=CONTEXT_DRIFT"
+                + " actual=" + actual + " desired=80"
+                + " display_visible=" + visible
+                + " gen=" + generation + " seq=" + sequence);
+        }
+        if (changed && compositeApplied && actual == CTX_COMPOSITE
+            && visibleValid == 1 && visible == 0) {
+            diag("OWNERSHIP_SUSPECT kind=CTX80_WITH_DISPLAYABLE_HIDDEN"
+                + " actual=80 display_visible=0"
+                + " native=" + nativeWindow + " kd=" + kdWindow
+                + " gen=" + generation + " seq=" + sequence);
+        }
+        if (changed && compositeApplied && stale) {
+            diag("OWNERSHIP_SUSPECT kind=DISPLAYABLE_STATE_STALE"
+                + " actual=" + actual
+                + " state_age_ms=" + stateAge
+                + " present=" + (displayStatePresent ? "1" : "0")
+                + " readable=" + (displayStateReadable ? "1" : "0")
+                + " base=" + (baseActive ? "1" : "0")
+                + "/" + (baseReady ? "1" : "0"));
         }
     }
 
@@ -204,6 +375,7 @@ public final class ClusterStateController {
         }
 
         String layoutName = "unknown";
+        Object layoutObject = null;
         int smallDx = 0;
         int smallDy = 0;
         try {
@@ -213,19 +385,15 @@ public final class ClusterStateController {
                     + " class=" + choiceClass);
                 return;
             }
-            Object layout = invokeNoArg(terminal, "getLayout");
-            if (layout == null) {
+            layoutObject = invokeNoArg(terminal, "getLayout");
+            if (layoutObject == null) {
                 observerStatus("terminal1 layout=null; choice=" + choiceValue
                     + " class=" + choiceClass);
                 return;
             }
-            layoutName = layout.getClass().getName();
-            Method getInt = layout.getClass().getMethod(
-                "getIntegerConstant", new Class[]{Integer.TYPE});
-            smallDx = ((Integer)getInt.invoke(
-                layout, new Object[]{new Integer(80)})).intValue();
-            smallDy = ((Integer)getInt.invoke(
-                layout, new Object[]{new Integer(81)})).intValue();
+            layoutName = layoutObject.getClass().getName();
+            smallDx = readLayoutConstant(layoutObject, 80);
+            smallDy = readLayoutConstant(layoutObject, 81);
         } catch (Throwable t) {
             observerStatus("terminal/layout read failed: " + describe(t)
                 + " choice=" + choiceValue + " class=" + choiceClass);
@@ -236,6 +404,22 @@ public final class ClusterStateController {
         boolean sport = lower.indexOf("sport") >= 0 || smallDx != 0 || smallDy != 0;
         String layout = sport ? "SPORT" : "CLASSIC";
         String view = small ? "SMALL" : "FULL";
+
+        /*
+         * The legacy CLASSIC/SPORT hint above is retained only for the old
+         * mmi-mirror-hmi.state compatibility file.  K1004 reverse engineering
+         * proved that the actual OEM geometry comes from ListModel 176 row 1;
+         * do not use the class-name hint as a geometry source.
+         */
+        /*
+         * Observation starts only after the proven Java80 composite has been
+         * physically verified.  This keeps all unproven ListModel176/reflection
+         * work out of the startup-critical path.
+         */
+        if (compositeApplied) {
+            pollOemGeometry(hmi, layoutObject, choiceValue, layoutName, view);
+        }
+
         observerStatus("ok choice=" + choiceValue + " choiceClass=" + choiceClass
             + " layoutClass=" + layoutName + " c80=" + smallDx + " c81=" + smallDy
             + " -> " + layout + "_" + view);
@@ -243,6 +427,7 @@ public final class ClusterStateController {
         String signature = layout + "/" + view + "/" + layoutName + "/"
             + smallDx + "/" + smallDy
             + "/cp=" + (carPlaySessionActive ? "1" : "0")
+            + "/owned=" + (isClusterOwned() ? "1" : "0")
             + "/rgi=" + (rgiPresentationActive ? "1" : "0");
         if (!signature.equals(lastStateSignature)) {
             lastStateSignature = signature;
@@ -251,6 +436,47 @@ public final class ClusterStateController {
                     + " layoutClass=" + layoutName
                     + " c80=" + smallDx + " c81=" + smallDy);
             }
+        }
+    }
+
+    /*
+     * Publish the V3 wheel-control ownership gate independently of the OEM
+     * layout observer.  This path depends only on the proven Java80 context
+     * lifecycle and an explicit getCurrentContextID(1) readback, so a missing
+     * NAV_VIEW_SIZE_CHOICE/ListModel176 can never disable wheel control.
+     */
+    private static void publishClusterOwnershipState() {
+        boolean cp = carPlaySessionActive;
+        boolean intent = ownershipIntent;
+        boolean applied = compositeApplied;
+        int actual = -1;
+        if (cp && intent && applied) {
+            Object dm = displayManager();
+            actual = currentContext(dm);
+        }
+        boolean owned = cp && intent && applied && actual == CTX_COMPOSITE;
+        String signature = (cp ? "1" : "0")
+            + "/" + (intent ? "1" : "0")
+            + "/" + (applied ? "1" : "0")
+            + "/" + actual
+            + "/" + (owned ? "1" : "0");
+        if (signature.equals(lastClusterOwnershipSignature)
+            && new File(CLUSTER_OWNERSHIP_STATE_FILE).exists()) return;
+
+        String text = "version=1\n"
+            + "carplay_session=" + (cp ? "1" : "0") + "\n"
+            + "cluster_owned=" + (owned ? "1" : "0") + "\n"
+            + "ownership_intent=" + (intent ? "1" : "0") + "\n"
+            + "composite_applied=" + (applied ? "1" : "0") + "\n"
+            + "context=" + actual + "\n"
+            + "timestamp_ms=" + nowMs() + "\n";
+        if (writeAtomicState(CLUSTER_OWNERSHIP_STATE_FILE, text)) {
+            lastClusterOwnershipSignature = signature;
+            diag("cluster ownership published cp=" + (cp ? "1" : "0")
+                + " intent=" + (intent ? "1" : "0")
+                + " composite=" + (applied ? "1" : "0")
+                + " actual=" + actual
+                + " owned=" + (owned ? "1" : "0"));
         }
     }
 
@@ -453,6 +679,510 @@ public final class ClusterStateController {
             + " ms; ownership released");
     }
 
+
+    /*
+     * Read-only K1004 OEM geometry probe.
+     *
+     * Reverse-engineering evidence:
+     *   ListModel 176 row 1:
+     *     0 screenWidth, 1 screenHeight,
+     *     8 infolineBottom, 9 reiterlineTop,
+     *     11/12 full tube L/R, 13/14 small(KB) tube L/R,
+     *     24/25 map offsets, 26/27 map H/W.
+     *
+     * getVisibleArea:
+     *   x = tubeLeft - mapOffsetLeft
+     *   y = reiterlineTop - mapOffsetTop
+     *   w = screenWidth - tubeLeft - tubeRight
+     *   h = screenHeight - reiterlineTop - infolineBottom
+     *
+     * Nothing in this method changes a HMI model, context, displayable,
+     * CarPlay dictionary, decoder or renderer.
+     */
+    private static void pollOemGeometry(Object hmi, Object layoutObject,
+                                        int choiceValue, String layoutName,
+                                        String view) {
+        long now = nowMs();
+        if (now - lastOemProbeMs < OEM_PROBE_MS) return;
+        lastOemProbeMs = now;
+
+        probeDisplayManagerReadApi();
+
+        try {
+            Object list = resolveListModel176(hmi);
+            if (list == null) {
+                oemProbeUnavailable("ListModel176 unavailable access="
+                + lastOemModelAccess);
+                return;
+            }
+
+            Object lengthValue = invokeNoArg(list, "getLength");
+            int rowCount = numberValue(lengthValue, -1);
+            if (rowCount <= OEM_SCREEN_LAYOUT_ROW) {
+                oemProbeUnavailable("ListModel176 length=" + rowCount);
+                return;
+            }
+
+            Object row = invokeInt(list, "getRow", OEM_SCREEN_LAYOUT_ROW);
+            if (row == null) {
+                oemProbeUnavailable("ListModel176 row1=null");
+                return;
+            }
+
+            int colCount = numberValue(invokeNoArg(row, "getColumnCount"), -1);
+            if (colCount < OEM_REQUIRED_COLUMN_COUNT) {
+                oemProbeUnavailable("ListModel176 row1 columns=" + colCount
+                    + " required>=" + OEM_REQUIRED_COLUMN_COUNT);
+                return;
+            }
+
+            int[] values = readIntegerRow(row, colCount);
+            if (!oemColumnsValid(values)) {
+                oemProbeUnavailable("ListModel176 required integer columns missing");
+                return;
+            }
+
+            int screenWidth = values[0];
+            int screenHeight = values[1];
+            int infolineBottom = values[8];
+            int reiterlineTop = values[9];
+            int tubeLeft = values[11];
+            int tubeRight = values[12];
+            int tubeLeftKb = values[13];
+            int tubeRightKb = values[14];
+            int mapOffsetLeft = values[24];
+            int mapOffsetTop = values[25];
+            int mapHeightRaw = values[26];
+            int mapWidthRaw = values[27];
+
+            int mapWidth = mapWidthRaw > 0 ? mapWidthRaw : screenWidth;
+            int mapHeight = mapHeightRaw > 0 ? mapHeightRaw : screenHeight;
+
+            int fullX = tubeLeft - mapOffsetLeft;
+            int fullY = reiterlineTop - mapOffsetTop;
+            int fullW = screenWidth - tubeLeft - tubeRight;
+            int fullH = screenHeight - reiterlineTop - infolineBottom;
+
+            int smallX = tubeLeftKb - mapOffsetLeft;
+            int smallY = fullY;
+            int smallW = screenWidth - tubeLeftKb - tubeRightKb;
+            int smallH = fullH;
+
+            if (!oemGeometrySane(screenWidth, screenHeight,
+                                 mapWidth, mapHeight,
+                                 fullW, fullH, smallW, smallH)) {
+                oemProbeUnavailable("ListModel176 geometry failed sanity check"
+                    + " screen=" + screenWidth + "x" + screenHeight
+                    + " map=" + mapWidth + "x" + mapHeight
+                    + " full=" + fullW + "x" + fullH
+                    + " small=" + smallW + "x" + smallH
+                    + " access=" + lastOemModelAccess);
+                return;
+            }
+
+            boolean small = choiceValue == 1;
+            int activeX = small ? smallX : fullX;
+            int activeY = small ? smallY : fullY;
+            int activeW = small ? smallW : fullW;
+            int activeH = small ? smallH : fullH;
+
+            int c80 = readLayoutConstantSafe(layoutObject, 80);
+            int c81 = readLayoutConstantSafe(layoutObject, 81);
+            int c108 = readLayoutConstantSafe(layoutObject, 108);
+            int c109 = readLayoutConstantSafe(layoutObject, 109);
+            int c114 = readLayoutConstantSafe(layoutObject, 114);
+            int c115 = readLayoutConstantSafe(layoutObject, 115);
+
+            String rowValues = serializeIntegerRow(values);
+            String signature = choiceValue + "/" + layoutName + "/"
+                + rowValues + "/" + c80 + "/" + c81 + "/" + c108 + "/"
+                + c109 + "/" + c114 + "/" + c115
+                + "/access=" + lastOemModelAccess
+                + "/cp=" + (carPlaySessionActive ? "1" : "0")
+                + "/rgi=" + (rgiPresentationActive ? "1" : "0");
+
+            if (!signature.equals(lastOemGeometrySignature)) {
+                long nextRevision = oemGeometryRevision + 1L;
+                String layoutHint = layoutName.toLowerCase().indexOf("sport") >= 0
+                    ? "SPORT_HINT" : "UNKNOWN";
+                String text = "schema=1\n"
+                    + "observer=OEM_LAYOUT_OBSERVER_V1\n"
+                    + "mode=OBSERVE_ONLY\n"
+                    + "valid=1\n"
+                    + "revision=" + nextRevision + "\n"
+                    + "timestamp_ms=" + now + "\n"
+                    + "apply_to_carplay=0\n"
+                    + "apply_to_renderer=0\n"
+                    + "nav_view_size_choice=" + choiceValue + "\n"
+                    + "view=" + view + "\n"
+                    + "layout_class=" + layoutName + "\n"
+                    + "layout_hint=" + layoutHint + "\n"
+                    + "list_model_id=176\n"
+                    + "list_model_access=" + lastOemModelAccess + "\n"
+                    + "list_model_class=" + list.getClass().getName() + "\n"
+                    + "list_row=1\n"
+                    + "list_length=" + rowCount + "\n"
+                    + "row_class=" + row.getClass().getName() + "\n"
+                    + "row1_column_count=" + colCount + "\n"
+                    + "row1_values=" + rowValues + "\n"
+                    + "screen_width=" + screenWidth + "\n"
+                    + "screen_height=" + screenHeight + "\n"
+                    + "infoline_bottom=" + infolineBottom + "\n"
+                    + "reiterline_top=" + reiterlineTop + "\n"
+                    + "tube_left_full=" + tubeLeft + "\n"
+                    + "tube_right_full=" + tubeRight + "\n"
+                    + "tube_left_small=" + tubeLeftKb + "\n"
+                    + "tube_right_small=" + tubeRightKb + "\n"
+                    + "map_offset_left=" + mapOffsetLeft + "\n"
+                    + "map_offset_top=" + mapOffsetTop + "\n"
+                    + "map_width_raw=" + mapWidthRaw + "\n"
+                    + "map_height_raw=" + mapHeightRaw + "\n"
+                    + "map_width_effective=" + mapWidth + "\n"
+                    + "map_height_effective=" + mapHeight + "\n"
+                    + "visible_full_x=" + fullX + "\n"
+                    + "visible_full_y=" + fullY + "\n"
+                    + "visible_full_w=" + fullW + "\n"
+                    + "visible_full_h=" + fullH + "\n"
+                    + "visible_small_x=" + smallX + "\n"
+                    + "visible_small_y=" + smallY + "\n"
+                    + "visible_small_w=" + smallW + "\n"
+                    + "visible_small_h=" + smallH + "\n"
+                    + "visible_active_x=" + activeX + "\n"
+                    + "visible_active_y=" + activeY + "\n"
+                    + "visible_active_w=" + activeW + "\n"
+                    + "visible_active_h=" + activeH + "\n"
+                    + "layout_const_80=" + c80 + "\n"
+                    + "layout_const_81=" + c81 + "\n"
+                    + "layout_const_108=" + c108 + "\n"
+                    + "layout_const_109=" + c109 + "\n"
+                    + "layout_const_114=" + c114 + "\n"
+                    + "layout_const_115=" + c115 + "\n"
+                    + "carplay_session=" + (carPlaySessionActive ? "1" : "0") + "\n"
+                    + "rgi_active=" + (rgiPresentationActive ? "1" : "0") + "\n";
+
+                if (writeAtomicState(OEM_GEOMETRY_STATE_FILE, text)) {
+                    /*
+                     * Commit the signature/revision only after the state file
+                     * was successfully published.  A transient /tmp write
+                     * failure must be retried on the next poll rather than
+                     * suppressing this geometry forever.
+                     */
+                    oemGeometryRevision = nextRevision;
+                    lastOemGeometrySignature = signature;
+                    appendOemGeometryHistory(text);
+                    lastOemProbeStatus = "valid";
+                    diag("OEM_GEOMETRY_OBSERVER publish revision="
+                        + oemGeometryRevision + " view=" + view
+                        + " active=" + activeX + "," + activeY + ","
+                        + activeW + "x" + activeH
+                        + " screen=" + screenWidth + "x" + screenHeight
+                        + " map=" + mapWidth + "x" + mapHeight
+                        + " apply=NONE");
+                }
+            }
+        } catch (Throwable t) {
+            oemProbeUnavailable(describe(t));
+        }
+    }
+
+
+    /*
+     * Record every geometry signature change so one vehicle session can
+     * capture FULL/SMALL and any skin/layout transitions without manually
+     * copying the state file after each switch.
+     */
+    private static void appendOemGeometryHistory(String snapshot) {
+        FileOutputStream out = null;
+        try {
+            File f = new File(OEM_GEOMETRY_HISTORY_FILE);
+            boolean reset = f.exists() && f.length() > OEM_HISTORY_MAX_BYTES;
+            out = new FileOutputStream(f, !reset);
+            if (reset) {
+                out.write(("--- history reset at " + nowMs() + " ---\n")
+                    .getBytes("UTF-8"));
+            }
+            String header = "--- OEM_GEOMETRY_SNAPSHOT revision="
+                + oemGeometryRevision + " time_ms=" + nowMs() + " ---\n";
+            out.write(header.getBytes("UTF-8"));
+            out.write(snapshot.getBytes("UTF-8"));
+            out.write("--- END_OEM_GEOMETRY_SNAPSHOT ---\n".getBytes("UTF-8"));
+            out.flush();
+            out.close();
+            out = null;
+        } catch (Throwable t) {
+            diag("WARN OEM geometry history write failed: " + describe(t));
+            try { if (out != null) out.close(); } catch (Throwable ignored) {}
+        }
+    }
+
+    /*
+     * The reverse report could not prove a Java getter for displayable33/58
+     * extents.  Do not guess or invoke unknown methods.  Instead, capture the
+     * runtime DisplayManager class and the signatures of read-looking APIs
+     * once.  This is reflection metadata only; no method below is invoked.
+     */
+    private static void probeDisplayManagerReadApi() {
+        if (displayManagerApiProbed) return;
+        try {
+            Object dm = displayManager();
+            if (dm == null) return;
+
+            Method[] methods = dm.getClass().getMethods();
+            StringBuffer text = new StringBuffer();
+            text.append("observer=OEM_LAYOUT_OBSERVER_V1\n");
+            text.append("mode=REFLECTION_METADATA_ONLY\n");
+            text.append("display_manager_class=")
+                .append(dm.getClass().getName()).append('\n');
+
+            int hits = 0;
+            int i;
+            for (i = 0; i < methods.length; ++i) {
+                Method m = methods[i];
+                String name = m.getName();
+                String lower = name.toLowerCase();
+                if (lower.indexOf("displayable") < 0
+                    && lower.indexOf("extent") < 0
+                    && lower.indexOf("position") < 0
+                    && lower.indexOf("size") < 0
+                    && lower.indexOf("source") < 0) {
+                    continue;
+                }
+                text.append("method_").append(hits).append('=')
+                    .append(sanitizeStateValue(m.toString())).append('\n');
+                ++hits;
+            }
+            text.append("method_count=").append(hits).append('\n');
+            text.append("invoked_getter_count=0\n");
+            if (writeAtomicState(OEM_DISPLAYMANAGER_API_FILE, text.toString())) {
+                displayManagerApiProbed = true;
+                diag("OEM_DISPLAYMANAGER_API metadata captured methods=" + hits
+                    + " invoked=0");
+            }
+        } catch (Throwable t) {
+            diag("WARN OEM DisplayManager metadata probe failed: " + describe(t));
+        }
+    }
+
+    private static Object resolveListModel176(Object hmi) throws Exception {
+        /*
+         * Stock K1004 evidence is NavigationEnv.getListModel(176).  The hook
+         * is entered with IFrameworkAccess rather than a typed NavigationEnv,
+         * so first test the read-only model seams already exposed by the HMI
+         * runtime.  Never accept an object until it proves ListModel shape.
+         */
+        Object candidate = tryListModelOn(hmi, "HMIService");
+        if (candidate != null) return candidate;
+
+        candidate = tryListModelOn(frameworkAccess, "FrameworkAccess");
+        if (candidate != null) return candidate;
+
+        lastOemModelAccess = "UNRESOLVED_NAVIGATIONENV_SEAM";
+        return null;
+    }
+
+    private static Object tryListModelOn(Object owner, String ownerName)
+        throws Exception {
+        if (owner == null) return null;
+        Object candidate = null;
+
+        /*
+         * Treat each runtime seam independently.  A method can exist yet throw
+         * from inside the proprietary HMI implementation; that must not prevent
+         * the remaining read-only fallbacks from being attempted.
+         */
+        try {
+            candidate = invokeInt(owner, "getListModel",
+                                  OEM_SCREEN_LAYOUT_MODEL_ID);
+        } catch (Throwable ignored) {
+            candidate = null;
+        }
+        if (isListModelShape(candidate)) {
+            lastOemModelAccess = ownerName + ".getListModel(176)";
+            return candidate;
+        }
+
+        /*
+         * A generic getModel(int) is also accepted, but only if its returned
+         * object implements the expected getLength/getRow read interface.
+         */
+        try {
+            candidate = invokeInt(owner, "getModel",
+                                  OEM_SCREEN_LAYOUT_MODEL_ID);
+        } catch (Throwable ignored) {
+            candidate = null;
+        }
+        if (isListModelShape(candidate)) {
+            lastOemModelAccess = ownerName + ".getModel(176)";
+            return candidate;
+        }
+        return null;
+    }
+
+    private static boolean isListModelShape(Object candidate) {
+        if (candidate == null) return false;
+        try {
+            Object length = invokeNoArg(candidate, "getLength");
+            if (!(length instanceof Number)) return false;
+            candidate.getClass().getMethod(
+                "getRow", new Class[]{Integer.TYPE});
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private static int[] readIntegerRow(Object row, int colCount)
+        throws Exception {
+        int limit = colCount;
+        if (limit > 64) limit = 64;
+        int[] values = new int[limit];
+        int i;
+        for (i = 0; i < limit; ++i) {
+            values[i] = OEM_MISSING;
+            try {
+                Object cell = invokeInt(row, "getCell", i);
+                if (cell == null) continue;
+                Object value = invokeNoArg(cell, "getValue");
+                if (value instanceof Number) {
+                    values[i] = ((Number)value).intValue();
+                }
+            } catch (Throwable ignored) {
+                values[i] = OEM_MISSING;
+            }
+        }
+        return values;
+    }
+
+    private static boolean oemColumnsValid(int[] values) {
+        int[] required = new int[]{
+            0, 1, 8, 9, 11, 12, 13, 14, 24, 25, 26, 27
+        };
+        int i;
+        for (i = 0; i < required.length; ++i) {
+            int c = required[i];
+            if (c >= values.length || values[c] == OEM_MISSING) return false;
+        }
+        return true;
+    }
+
+    private static boolean oemGeometrySane(int screenWidth,
+                                                  int screenHeight,
+                                                  int mapWidth,
+                                                  int mapHeight,
+                                                  int fullW,
+                                                  int fullH,
+                                                  int smallW,
+                                                  int smallH) {
+        /*
+         * Fail closed on a false model seam or corrupt row.  Negative X/Y are
+         * legitimate for some layouts, so only dimensions are constrained.
+         */
+        if (screenWidth <= 0 || screenHeight <= 0
+            || screenWidth > 8192 || screenHeight > 8192)
+            return false;
+        if (mapWidth <= 0 || mapHeight <= 0
+            || mapWidth > 8192 || mapHeight > 8192)
+            return false;
+        if (fullW <= 0 || fullH <= 0 || smallW <= 0 || smallH <= 0)
+            return false;
+        if (fullW > 16384 || fullH > 16384
+            || smallW > 16384 || smallH > 16384)
+            return false;
+        return true;
+    }
+
+    private static String serializeIntegerRow(int[] values) {
+        StringBuffer b = new StringBuffer();
+        int i;
+        for (i = 0; i < values.length; ++i) {
+            if (i > 0) b.append(',');
+            b.append(i).append(':');
+            if (values[i] == OEM_MISSING) b.append('?');
+            else b.append(values[i]);
+        }
+        return b.toString();
+    }
+
+    private static int readLayoutConstant(Object layout, int id)
+        throws Exception {
+        if (layout == null) throw new Exception("layout=null");
+        Method getInt = layout.getClass().getMethod(
+            "getIntegerConstant", new Class[]{Integer.TYPE});
+        Object value = getInt.invoke(layout, new Object[]{new Integer(id)});
+        if (!(value instanceof Number)) {
+            throw new Exception("layout constant " + id + " non-number");
+        }
+        return ((Number)value).intValue();
+    }
+
+    private static int readLayoutConstantSafe(Object layout, int id) {
+        try {
+            return readLayoutConstant(layout, id);
+        } catch (Throwable t) {
+            return OEM_MISSING;
+        }
+    }
+
+    private static int numberValue(Object value, int fallback) {
+        return value instanceof Number ? ((Number)value).intValue() : fallback;
+    }
+
+    private static void oemProbeUnavailable(String reason) {
+        String status = reason == null ? "unknown" : reason;
+        if (!status.equals(lastOemProbeStatus)) {
+            lastOemProbeStatus = status;
+            diag("OEM_GEOMETRY_OBSERVER unavailable: " + status);
+        }
+
+        /*
+         * Preserve a previously valid snapshot.  If no valid snapshot has
+         * ever been published, expose an explicit invalid state so log
+         * collection can distinguish 'not yet sampled' from a missing probe.
+         */
+        File dst = new File(OEM_GEOMETRY_STATE_FILE);
+        if (!dst.exists()) {
+            String text = "schema=1\n"
+                + "observer=OEM_LAYOUT_OBSERVER_V1\n"
+                + "mode=OBSERVE_ONLY\n"
+                + "valid=0\n"
+                + "timestamp_ms=" + nowMs() + "\n"
+                + "reason=" + sanitizeStateValue(status) + "\n"
+                + "apply_to_carplay=0\n"
+                + "apply_to_renderer=0\n";
+            writeAtomicState(OEM_GEOMETRY_STATE_FILE, text);
+        }
+    }
+
+    private static String sanitizeStateValue(String value) {
+        if (value == null) return "unknown";
+        return value.replace('\n', ' ').replace('\r', ' ');
+    }
+
+    private static boolean writeAtomicState(String path, String text) {
+        File tmp = new File(path + ".tmp");
+        File dst = new File(path);
+        FileOutputStream out = null;
+        try {
+            out = new FileOutputStream(tmp);
+            out.write(text.getBytes("UTF-8"));
+            out.flush();
+            out.close();
+            out = null;
+            if (dst.exists() && !dst.delete()) {
+                diag("WARN could not delete old state before replace path=" + path);
+            }
+            if (!tmp.renameTo(dst)) {
+                copyFile(tmp, dst);
+                tmp.delete();
+            }
+            return true;
+        } catch (Throwable t) {
+            diag("ERROR state write failed path=" + path + ": " + describe(t));
+            try { if (out != null) out.close(); } catch (Throwable ignored) {}
+            return false;
+        }
+    }
+
     private static int resolveNavViewSizeChoiceId() {
         if (navViewSizeChoiceResolved) return navViewSizeChoiceId;
         navViewSizeChoiceResolved = true;
@@ -509,6 +1239,7 @@ public final class ClusterStateController {
                 + "small_stage_dx=" + smallDx + "\n"
                 + "small_stage_dy=" + smallDy + "\n"
                 + "carplay_session=" + (carPlaySessionActive ? "1" : "0") + "\n"
+                + "cluster_owned=" + (isClusterOwned() ? "1" : "0") + "\n"
                 + "rgi_active=" + (rgiPresentationActive ? "1" : "0") + "\n";
             out.write(text.getBytes("UTF-8"));
             out.flush();
@@ -533,6 +1264,50 @@ public final class ClusterStateController {
         if (status.equals(lastObserverStatus)) return;
         lastObserverStatus = status;
         diag("observer: " + status);
+    }
+
+    private static String readSmallState(String path, int maxBytes) {
+        FileInputStream in = null;
+        try {
+            File f = new File(path);
+            if (!f.exists() || maxBytes <= 0) return "";
+            in = new FileInputStream(f);
+            byte[] buf = new byte[maxBytes];
+            int n = in.read(buf);
+            in.close();
+            in = null;
+            if (n <= 0) return "";
+            return new String(buf, 0, n, "UTF-8");
+        } catch (Throwable t) {
+            try { if (in != null) in.close(); } catch (Throwable ignored) {}
+            return "";
+        }
+    }
+
+    private static String stateValue(String text, String key,
+                                     String fallback) {
+        if (text == null || key == null) return fallback;
+        String prefix = key + "=";
+        int from = 0;
+        while (from < text.length()) {
+            int end = text.indexOf('\n', from);
+            if (end < 0) end = text.length();
+            if (text.startsWith(prefix, from)) {
+                String value = text.substring(from + prefix.length(), end);
+                return sanitizeStateValue(value);
+            }
+            from = end + 1;
+        }
+        return fallback;
+    }
+
+    private static long stateLong(String text, String key, long fallback) {
+        try {
+            return Long.parseLong(stateValue(text, key,
+                                            Long.toString(fallback)));
+        } catch (Throwable ignored) {
+            return fallback;
+        }
     }
 
     private static String readContextMode() {

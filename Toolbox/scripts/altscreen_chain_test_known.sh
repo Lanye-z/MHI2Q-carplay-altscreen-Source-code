@@ -36,15 +36,8 @@ if [ "${ALTS_DIAG_CAPTURED:-0}" != 1 ]; then
         journal_root=${ALTSCREEN_CHAIN_ROOT:-}
         case "$journal_root" in /tmp/*|/var/tmp/*) ;; *) exit 2 ;; esac
     fi
-    journal_dir="$journal_root/tmp/MMI-Cockpit-Carplay/diagnostics/operations"
     journal_id="operation_$(date +%Y%m%d_%H%M%S)_$$.log"
-    if ensure_dirs "$journal_dir" 2>/dev/null; then
-        journal="$journal_dir/$journal_id"
-    else
-        # Some QNX /tmp providers support flat files but not mkdir (ENOSYS).
-        journal="$journal_root/tmp/altscreen_$journal_id"
-        echo "DIAGNOSTICS_TMP_DIRECTORY_UNAVAILABLE fallback=flat_file"
-    fi
+    journal="$journal_root/tmp/altscreen_$journal_id"
     if ! (printf 'OP_BEGIN action=%s script=%s\n' "${1:-}" "$0" > "$journal") 2>/dev/null; then
         echo "WARN: diagnostic journal unavailable; continuing requested operation"
         ALTS_DIAG_CAPTURED=1; export ALTS_DIAG_CAPTURED
@@ -132,21 +125,11 @@ fi
 # Shared by fixtures and production. Test actual file creation first: a legacy
 # launcher may already have mounted the SD writable. A mount return code alone
 # is not evidence that writing worked (or that an already-writable SD failed).
+SD_RW_HELPER="$VOLUME/Toolbox/scripts/altscreen_sd_writable.sh"
+[ -f "$SD_RW_HELPER" ] || fail "SD writable helper missing: $SD_RW_HELPER"
+. "$SD_RW_HELPER"
 sd_writable() {
-    sd_probe="$VOLUME/.altscreen_write_probe.$$"
-    if ( : > "$sd_probe" ) 2>/dev/null; then
-        rm -f "$sd_probe" || return 1
-        say "SD_WRITE=PASS already_writable=1"
-        return 0
-    fi
-    mount_rw "$VOLUME" || say "WARN: SD remount failed; checking actual write access"
-    if ( : > "$sd_probe" ) 2>/dev/null; then
-        rm -f "$sd_probe" || return 1
-        say "SD_WRITE=PASS after_remount=1"
-        return 0
-    fi
-    say "SD_WRITE=FAILED volume=$VOLUME"
-    return 1
+    altscreen_sd_ensure_writable "$VOLUME" "KNOWN_CONTROLLER_${CMD:-UNKNOWN}"
 }
 ARTIFACT_DIR="$VOLUME/Toolbox/carplay_alt_screen"
 # Profile artifacts are ordinary files under profiles/<K1004|P1404>.
@@ -166,7 +149,7 @@ STAGE_DIR="$STAGING_ROOT/original"
 LOCK_FILE="$STATE_DIR/.chain_test.lock"
 LEGACY_STATE_DIR="$VOLUME/Log/MMI-Cockpit-Carplay/current"
 LEGACY_BACKUP_ROOT="$VOLUME/Backup/AltScreenChain"
-LOCK_BOOT_TOKEN_FILE="$(p /tmp/MMI-Cockpit-Carplay/lock/boot_token)"
+LOCK_BOOT_TOKEN_FILE="$(p /tmp/altscreen_boot_token)"
 LOCK_OWNER_TAG="MMI-Cockpit-Carplay-Known"
 BACKUP_MANIFEST="$BACKUP_DIR/manifest.txt"
 COMPLETE_MARKER="$BACKUP_DIR/COMPLETE"
@@ -723,13 +706,8 @@ install_boot_diagnostics() (
     PATH=${PATH:-/bin:/usr/bin}:/proc/boot:/armle/bin:/armle/scripts:/bin:/usr/bin:/usr/sbin:/sbin:/mnt/app/armle/bin:/mnt/app/armle/sbin:/mnt/app/armle/usr/bin:/mnt/app/armle/usr/sbin:/eso/bin:/eso/bin/apps
     LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}:/proc/boot:/usr/lib:/armle/lib:/armle/lib/dll:/lib:/mnt/app/root/carplay-altscreen/lib:/eso/lib:/mnt/app/usr/lib:/mnt/app/armle/lib:/mnt/app/armle/lib/dll:/mnt/app/armle/usr/lib:/lib/dll
     export PATH LD_LIBRARY_PATH
-    # An unavailable namespaced directory must not hide the first boot breadcrumb.
-    ALTS_VOLATILE=/tmp/MMI-Cockpit-Carplay
-    ALTS_BOOT_ENTRY="$ALTS_VOLATILE/boot_entry.log"
-    if [ ! -d "$ALTS_VOLATILE" ]; then
-        mkdir -p "$ALTS_VOLATILE" 2>/dev/null || true
-    fi
-    [ -d "$ALTS_VOLATILE" ] || ALTS_BOOT_ENTRY=/tmp/MMI-Cockpit-Carplay.boot_entry.log
+    # Flat /tmp contract: boot diagnostics must not depend on mkdir support.
+    ALTS_BOOT_ENTRY=/tmp/altscreen_boot_entry.log
     if ( : >> "$ALTS_BOOT_ENTRY" ) 2>/dev/null; then
         exec >> "$ALTS_BOOT_ENTRY" 2>&1
     fi
@@ -1019,12 +997,13 @@ collect_details() {
         say "MISSING $1"
         return 1
     }
-    print_log "$(p /tmp/MMI-Cockpit-Carplay/altscreen_hook.log)" \
-              "$(p /tmp/MMI-Cockpit-Carplay.altscreen_hook.log)" \
-              "$(p /tmp/altscreen_hook.log)" || true
+    print_log "$(p /tmp/altscreen_hook.log)" \
+              "$(p /tmp/MMI-Cockpit-Carplay/altscreen_hook.log)" \
+              "$(p /tmp/MMI-Cockpit-Carplay.altscreen_hook.log)" || true
     print_log "$(p /tmp/CinemoDioManager.log)" "" "" || true
-    print_log "$(p /tmp/MMI-Cockpit-Carplay/boot_entry.log)" \
-              "$(p /tmp/MMI-Cockpit-Carplay.boot_entry.log)" "" || true
+    print_log "$(p /tmp/altscreen_boot_entry.log)" \
+              "$(p /tmp/MMI-Cockpit-Carplay/boot_entry.log)" \
+              "$(p /tmp/MMI-Cockpit-Carplay.boot_entry.log)" || true
     for operation in "$(p /tmp)"/altscreen_operation_*.log; do
         [ -f "$operation" ] || continue
         print_log "$operation" "" "" || true

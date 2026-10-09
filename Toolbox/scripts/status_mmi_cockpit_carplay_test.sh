@@ -28,16 +28,28 @@ ACTIVE="$DEVICE_ROOT/tmp/mmi-mirror-active"
 DEST_READY="$DEVICE_ROOT/tmp/mmi-mirror-basevideo.ready"
 STARTED="$DEVICE_ROOT/tmp/mmi-mirror-controller.started"
 JAVA_LOG="$DEVICE_ROOT/tmp/mmi-mirror-controller.log"
+CLUSTER_OWNERSHIP_STATE="$DEVICE_ROOT/tmp/mmi-mirror-cluster-ownership.state"
+OEM_GEOMETRY_STATE="$DEVICE_ROOT/tmp/carplay-oem-geometry.state"
+OEM_GEOMETRY_HISTORY="$DEVICE_ROOT/tmp/carplay-oem-geometry.log"
+OEM_DISPLAYMANAGER_API="$DEVICE_ROOT/tmp/carplay-oem-displaymanager-read-api.log"
+WHEEL_ZOOM_EVENTS="$DEVICE_ROOT/tmp/mmi-mirror-wheel-zoom.events"
+WHEEL_ZOOM_LOG="$DEVICE_ROOT/tmp/mmi-mirror-wheel-zoom.log"
 MIRROR="$RUNTIME/bin/mirror"
-MIRROR_PID="$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/mirror/pid"
-MIRROR_LOG="$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/mirror/mirror.log"
-EXPECTED_SIZE=143072
-EXPECTED_CKSUM=1515795662
+MIRROR_PID="$DEVICE_ROOT/tmp/altscreen_mirror.pid"
+MIRROR_LOG="$DEVICE_ROOT/tmp/altscreen_mirror.log"
+STREAM_READY="$DEVICE_ROOT/tmp/altscreen-private111.stream-ready"
+SUPERVISOR_PID="$DEVICE_ROOT/tmp/altscreen_stream_supervisor.pid"
+SUPERVISOR_LOG="$DEVICE_ROOT/tmp/altscreen_stream_supervisor.log"
+EXPECTED_SIZE=119017
+EXPECTED_CKSUM=1560286344
 
 file_size(){ n=$(wc -c < "$1" 2>/dev/null) || { echo 0; return; }; set -- $n; echo "${1:-0}"; }
 file_cksum(){ if command -v cksum >/dev/null 2>&1; then cksum < "$1" 2>/dev/null | awk '{print $1}'; else echo unavailable; fi; }
 
-echo "=== CarPlay private111 Direct Display V2 ==="
+echo "=== CarPlay private111 Direct Display V3.5 ==="
+echo "PRIVATE111_NEGOTIATION_POLICY=V35_EARLY_PROTOCOL_READY sd_runtime_gate=DISABLED geometry_gate=ASYNC"
+echo "DISPLAY_START_POLICY=STREAM_DRIVEN stable_decoded_frames=2 fixed_delay=NONE"
+echo "V3_CONTROL_PLANE=changeMapZoomLevel wheel_zoom=enabled display_baseline=V2_UNCHANGED"
 echo "SOURCE_PATH=private111_ScreenStreamProcessData"
 echo "H264_TAP=/carplay111_h264"
 echo "DECODER_BACKEND=stock_omx_screen_linearized_shm decoded_shm=/carplay111_decoded"
@@ -70,8 +82,22 @@ fi
 [ "$MIRROR_RUNNING" = 1 ] && echo "DIRECT_DISPLAY_SIDECAR=RUNNING pid=$PID" || echo "DIRECT_DISPLAY_SIDECAR=NOT_RUNNING"
 [ -x "$MIRROR/carplay-alt111-mirror-display" ] && echo "DIRECT_DISPLAY_BINARY=INSTALLED" || echo "DIRECT_DISPLAY_BINARY=MISSING"
 
+SUPERVISOR_RUNNING=0
+SUPID=""
+if [ -f "$SUPERVISOR_PID" ]; then
+    SUPID=$(cat "$SUPERVISOR_PID" 2>/dev/null || true)
+    if [ -n "$SUPID" ] && kill -0 "$SUPID" 2>/dev/null; then SUPERVISOR_RUNNING=1; fi
+fi
+[ "$SUPERVISOR_RUNNING" = 1 ] && echo "STREAM_SUPERVISOR=RUNNING pid=$SUPID" || echo "STREAM_SUPERVISOR=NOT_RUNNING"
+if [ -s "$STREAM_READY" ]; then
+    echo "PRIVATE111_STREAM_READY=YES"
+    cat "$STREAM_READY" 2>/dev/null || true
+else
+    echo "PRIVATE111_STREAM_READY=NO"
+fi
+
 HOOK_LOG=""
-for candidate in "$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/altscreen_hook.log" "$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay.altscreen_hook.log" "$DEVICE_ROOT/tmp/altscreen_hook.log"; do
+for candidate in "$DEVICE_ROOT/tmp/altscreen_hook.log" "$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay/altscreen_hook.log" "$DEVICE_ROOT/tmp/MMI-Cockpit-Carplay.altscreen_hook.log"; do
     [ -f "$candidate" ] && { HOOK_LOG=$candidate; break; }
 done
 
@@ -113,7 +139,7 @@ if [ -n "$HOOK_LOG" ]; then
     case "$SLOW_READBACKS" in ''|*[!0-9]*) SLOW_READBACKS=0 ;; esac
     echo "FRAME_LINEARIZER_SLOW_EVENTS=$SLOW_READBACKS threshold_us=20000"
     echo "HOOK_DIRECT111_LOG_TAIL_BEGIN"
-    grep -E 'PHASE=(STREAM_111_|VIDEO_111_|H264_TAP_|H264_AVCC_|DIRECT111_TAP_|FRAME_TAP_|FRAME_LINEARIZER_|DECODER_)|ERROR PHASE=(H264_TAP_SHM_|FRAME_TAP_SHM_|FRAME_TAP_UNSUPPORTED_LAYOUT|FRAME_LINEARIZER_)' "$HOOK_LOG" 2>/dev/null | tail -n 120 || true
+    grep -E 'PHASE=(STREAM_111_|VIDEO_111_|H264_TAP_|H264_AVCC_|DIRECT111_TAP_|FRAME_TAP_|FRAME_LINEARIZER_|DECODER_|WHEEL_ZOOM_|CLUSTER_ZOOM_)|WARN PHASE=WHEEL_ZOOM_|ERROR PHASE=(H264_TAP_SHM_|FRAME_TAP_SHM_|FRAME_TAP_UNSUPPORTED_LAYOUT|FRAME_LINEARIZER_)' "$HOOK_LOG" 2>/dev/null | tail -n 160 || true
     echo "HOOK_DIRECT111_LOG_TAIL_END"
 else
     echo "H264_TAP_DATA=UNKNOWN hook_log_missing=1"
@@ -176,6 +202,53 @@ if [ -f "$JAVA_LOG" ]; then
 else
     echo "JAVA_CTX80_REQUEST=UNKNOWN log_missing=1"
     echo "JAVA_CTX80_ACTUAL=UNKNOWN log_missing=1"
+fi
+
+echo "CARPLAY_WHEEL_ZOOM_PROTOCOL=changeMapZoomLevel direction_0_in_1_out"
+if [ -f "$CLUSTER_OWNERSHIP_STATE" ]; then
+    echo "CLUSTER_OWNERSHIP_STATE_BEGIN"
+    cat "$CLUSTER_OWNERSHIP_STATE" 2>/dev/null || true
+    echo "CLUSTER_OWNERSHIP_STATE_END"
+else
+    echo "CLUSTER_OWNERSHIP_STATE=MISSING"
+fi
+if [ -f "$WHEEL_ZOOM_LOG" ]; then
+    echo "WHEEL_ZOOM_JAVA_LOG_TAIL_BEGIN"
+    tail -n 80 "$WHEEL_ZOOM_LOG" 2>/dev/null || true
+    echo "WHEEL_ZOOM_JAVA_LOG_TAIL_END"
+else
+    echo "WHEEL_ZOOM_JAVA_LOG=MISSING"
+fi
+if [ -f "$WHEEL_ZOOM_EVENTS" ]; then
+    echo "WHEEL_ZOOM_EVENT_QUEUE_TAIL_BEGIN"
+    tail -n 40 "$WHEEL_ZOOM_EVENTS" 2>/dev/null || true
+    echo "WHEEL_ZOOM_EVENT_QUEUE_TAIL_END"
+else
+    echo "WHEEL_ZOOM_EVENT_QUEUE=MISSING"
+fi
+
+# OEM layout observer is intentionally diagnostic-only in this branch.
+echo "OEM_LAYOUT_OBSERVER_MODE=OBSERVE_ONLY apply_to_carplay=0 apply_to_renderer=0"
+if [ -f "$OEM_GEOMETRY_STATE" ]; then
+    echo "OEM_GEOMETRY_STATE_BEGIN"
+    cat "$OEM_GEOMETRY_STATE" 2>/dev/null || true
+    echo "OEM_GEOMETRY_STATE_END"
+else
+    echo "OEM_GEOMETRY_STATE=MISSING"
+fi
+if [ -f "$OEM_GEOMETRY_HISTORY" ]; then
+    OEM_SNAPSHOTS=$(grep -c '^--- OEM_GEOMETRY_SNAPSHOT ' "$OEM_GEOMETRY_HISTORY" 2>/dev/null || true)
+    case "$OEM_SNAPSHOTS" in ''|*[!0-9]*) OEM_SNAPSHOTS=0 ;; esac
+    echo "OEM_GEOMETRY_HISTORY=YES snapshots=$OEM_SNAPSHOTS"
+else
+    echo "OEM_GEOMETRY_HISTORY=NO"
+fi
+if [ -f "$OEM_DISPLAYMANAGER_API" ]; then
+    echo "OEM_DISPLAYMANAGER_READ_API_BEGIN"
+    cat "$OEM_DISPLAYMANAGER_API" 2>/dev/null || true
+    echo "OEM_DISPLAYMANAGER_READ_API_END"
+else
+    echo "OEM_DISPLAYMANAGER_READ_API=MISSING"
 fi
 
 # V2 vehicle display readiness is driven by the Screen-linearized decoded path.

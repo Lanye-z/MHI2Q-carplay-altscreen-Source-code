@@ -228,13 +228,33 @@ int  alt_state_streams_live(void);
 int  alt_state_live_count(void);
 void alt_state_reset(void);
 
-#define ALT111_EVENT_SHOW_UI        1
-#define ALT111_EVENT_FORCE_KEYFRAME 2
-#define ALT111_EVENT_STOP_UI        3
+#define ALT111_EVENT_SHOW_UI          1
+#define ALT111_EVENT_FORCE_KEYFRAME   2
+#define ALT111_EVENT_STOP_UI          3
+#define ALT111_EVENT_UPDATE_VIEW_AREA 4
+#define ALT111_EVENT_ZOOM             5
 int alt_send_cluster_event(void *receiver, void *stream, uint32_t generation,
                            int event_kind);
+int alt_send_cluster_view_area(void *receiver, void *stream,
+                               uint32_t generation, uint32_t event_seq,
+                               int view_area_index);
+int alt_send_cluster_zoom(void *receiver, void *stream,
+                          uint32_t generation, uint32_t event_seq,
+                          int direction);
 void p1404_cockpit_native_event_result(void *receiver, void *stream,
                                         uint32_t generation, int event_kind,
                                         int status, int response_received);
+void p1404_cockpit_native_view_area_result(void *receiver, void *stream,
+                                            uint32_t generation,
+                                            uint32_t event_seq,
+                                            int view_area_index,
+                                            int status,
+                                            int response_received);
+void p1404_cockpit_native_zoom_result(void *receiver, void *stream,
+                                      uint32_t generation,
+                                      uint32_t event_seq,
+                                      int direction,
+                                      int status,
+                                      int response_received);
 
 #endif /* P1404_ABI_H */

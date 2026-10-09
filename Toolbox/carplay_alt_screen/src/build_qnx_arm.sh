@@ -184,6 +184,44 @@ write'
 }
 echo "QNX_ELF_INVARIANTS=PASS"
 
+for marker in \
+  'rate_policy=uncapped_source_callbacks' \
+  'ALTAREA_LAYOUT_SAFE_V3' \
+  '/tmp/mmi-mirror-hmi.state' \
+  'safe_source=' \
+  'safe_physical=' \
+  'safe_yh_mapping=vertical_inset_top72_bottom450' \
+  'safearea_revision=V35_OEM_X_VERTICAL_72_450' \
+  'renderer_geometry_revision=V31_ONE_TO_ONE_CLIP' \
+  'map_plane_terminal_y_policy=metadata_only_not_renderer_offset' \
+  'renderer_offset=' \
+  'runtime_switch=updateViewArea' \
+  'gate=LayoutMIB2HighB9' \
+  'canvas_gate=%d' \
+  'predeclared_even_if_hmi_late=' \
+  'PHASE=ALT111_VIEWAREA_SUBMIT' \
+  'PHASE=ALT111_VIEWAREA_TARGET' \
+  'PHASE=ALT111_VIEWAREA_RESULT' \
+  'same_session=1' \
+  'renderer_scale=0' \
+  'maps:/car/instrumentcluster/map?showSpeedLimit=user&showCompass=user&showETA=yes&maneuverLayout=' \
+  'OEM_STEPS_V1' \
+  'OEM_TARGET_FOLLOW_V1' \
+  'PHASE=WHEEL_ZOOM_TARGET' \
+  'PHASE=WHEEL_ZOOM_TARGET_REBASE' \
+  'PHASE=WHEEL_ZOOM_FRAME_STALL' \
+  'PHASE=WHEEL_ZOOM_FRAME_RECOVERED' \
+  'PHASE=WHEEL_ZOOM_STALL_ABORT' \
+  'PHASE=WHEEL_ZOOM_PACED_SEND' \
+  'response_gates_next=0'
+do
+  grep -a -Fq "$marker" "$SO" || {
+    echo "QNX_BUILD_FAIL missing runtime marker: $marker" >&2
+    exit 1
+  }
+done
+echo "QNX_LAYOUT_SAFEAREA_MARKERS=PASS"
+
 # Build metadata is release evidence and must be byte-stable across arbitrary
 # candidate directories. Normalize the private build root and avoid wall-clock,
 # host-kernel and absolute linker-path fields.
@@ -198,7 +236,7 @@ echo "===== BUILD_INFO (03.A) ====="
   echo "host_processes   dio_manager,smartphone_integrator"
   echo "process_name     procfs_then_qnx_cmdname_argv_progname"
   echo "target_stack     stock exports by dlsym; internal GOT by ELF relocation name; fail-open on ambiguity"
-  echo "runtime_logging  resolver verdict to /tmp/MMI-Cockpit-Carplay/altscreen_hook.log (flat /tmp/altscreen_hook.log fallback); boot recorder appends to SD automatically"
+  echo "runtime_logging  resolver verdict to flat /tmp/altscreen_hook.log; boot recorder appends to SD automatically; no nested /tmp dependency"
   echo "compiler         $(clang --version | head -1)"
   echo "linker           $LLD_VERSION"
   echo "linker_program   $(basename "$LLD_PROG")"

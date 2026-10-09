@@ -22,14 +22,17 @@
 #include "altscreen_core.h"
 #include "altscreen_paths.h"
 #include "p1404_observe.h"
+#include "p1404_control_fence.h"
 #include "private111_direct_tap.h"
 
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <dlfcn.h>
 #include <unistd.h>
+#include <sys/time.h>
 
 /* Host fixtures and the legacy preload build may omit the K1004 direct
  * resolver. Keep it optional there; the exact direct overlay provides it. */
@@ -118,8 +121,19 @@ struct native_slot {
     uint32_t config_usage;
     uint64_t ui_event_at;
     uint64_t keyframe_event_at;
+    uint64_t view_area_event_at;
+    uint64_t view_area_ack_at;
+    uint32_t view_area_inflight_seq;
+    uint32_t view_area_acked_seq;
+    uint32_t view_area_frame_generation;
+    uint32_t view_area_frame_count;
     int ui_event_state;       /* 0=needed, 1=inflight, 2=accepted, 3=timed-out */
     int keyframe_event_state; /* 0=needed, 1=inflight, 2=accepted, 3=timed-out */
+    int view_area_event_state;/* 0=needed, 1=inflight, 2=acknowledged */
+    int view_area_target;     /* 0=FULL, 1=SMALL, -1=unknown */
+    int view_area_applied;    /* last acknowledged index, -1=unknown */
+    int view_area_frame_baseline_valid;
+    int view_area_frame_pending;
 };
 
 struct native_thread_job {
@@ -584,6 +598,467 @@ static int request_route_action(struct native_slot *slot, int action) {
     return 1;
 }
 
+static int native_measured_view_area_canvas(uint32_t width,
+                                             uint32_t height) {
+    return width == 1440u &&
+           (height == 542u || height == 540u || height == 455u);
+}
+
+static int native_read_view_area_target(void) {
+    FILE *f;
+    char line[192];
+    char layout[128];
+    int target = -1;
+    int have_layout = 0;
+
+    layout[0] = 0;
+    f = fopen("/tmp/mmi-mirror-hmi.state", "r");
+    if (!f) return -1;
+
+    while (fgets(line, sizeof(line), f)) {
+        if (!strncmp(line, "view=FULL", 9u)) {
+            target = 0;
+        } else if (!strncmp(line, "view=SMALL", 10u)) {
+            target = 1;
+        } else if (!strncmp(line, "layout_name=", 12u)) {
+            size_t n;
+            strncpy(layout, line + 12u, sizeof(layout) - 1u);
+            layout[sizeof(layout) - 1u] = 0;
+            n = strlen(layout);
+            while (n && (layout[n - 1u] == '\n' ||
+                         layout[n - 1u] == '\r' ||
+                         layout[n - 1u] == ' ' ||
+                         layout[n - 1u] == '\t'))
+                layout[--n] = 0;
+            have_layout = 1;
+        }
+    }
+    fclose(f);
+
+    /*
+     * /info predeclares two viewAreas only for the measured B9 target family.
+     * Never send index 1 merely because a stale/foreign HMI state says SMALL:
+     * on an unknown layout the display may have advertised only one viewArea.
+     */
+    if (!have_layout || !strstr(layout, "LayoutMIB2HighB9"))
+        return -1;
+    return target;
+}
+
+/*
+ * V3 wheel control follows the proven Java-owned Context80 route, not the
+ * retired native Context76/displayable58 route.  Java publishes this small
+ * state atomically and only sets cluster_owned=1 after Context80 readback has
+ * succeeded for an active CarPlay session.  Missing/partial/old state fails
+ * closed so a wheel event can never escape to a stale or non-CarPlay session.
+ */
+#define CLUSTER_OWNERSHIP_STATE_FILE "/tmp/mmi-mirror-cluster-ownership.state"
+
+static int native_read_cluster_owned_for_zoom(void) {
+    FILE *f;
+    char line[192];
+    int version = 0;
+    int carplay_session = 0;
+    int cluster_owned = 0;
+    int composite_applied = 0;
+    int context = -1;
+
+    f = fopen(CLUSTER_OWNERSHIP_STATE_FILE, "r");
+    if (!f) return 0;
+
+    while (fgets(line, sizeof(line), f)) {
+        if (!strncmp(line, "version=1", 9u) &&
+            (line[9] == '\n' || line[9] == '\r' || line[9] == 0))
+            version = 1;
+        else if (!strncmp(line, "carplay_session=1", 17u) &&
+                 (line[17] == '\n' || line[17] == '\r' || line[17] == 0))
+            carplay_session = 1;
+        else if (!strncmp(line, "cluster_owned=1", 15u) &&
+                 (line[15] == '\n' || line[15] == '\r' || line[15] == 0))
+            cluster_owned = 1;
+        else if (!strncmp(line, "composite_applied=1", 19u) &&
+                 (line[19] == '\n' || line[19] == '\r' || line[19] == 0))
+            composite_applied = 1;
+        else if (!strncmp(line, "context=", 8u))
+            (void)sscanf(line, "context=%d", &context);
+    }
+    fclose(f);
+    return version == 1 && carplay_session && cluster_owned &&
+           composite_applied && context == 80;
+}
+
+#define WHEEL_ZOOM_EVENT_FILE "/tmp/mmi-mirror-wheel-zoom.events"
+#define WHEEL_ZOOM_BATCH_MAX 32u
+
+/*
+ * OEM target-follow wheel scheduling.
+ *
+ * Java still publishes one signed OEM_STEPS_V1 intent per magnification
+ * callback. Native does not preserve those intents as a historical replay
+ * queue. Instead it tracks the driver's latest desired relative zoom target
+ * and the relative target already submitted to CarPlay. Direction reversals
+ * therefore retarget immediately.
+ *
+ * Wheel timing intentionally uses its own modular 32-bit microsecond clock.
+ * obs_now_us() is legacy seconds despite its name and remains untouched because
+ * route/lifecycle timeouts depend on those second-based semantics.
+ */
+#define WHEEL_ZOOM_EVENT_MODEL "OEM_STEPS_V1"
+#define WHEEL_ZOOM_SCHEDULER_MODEL "OEM_TARGET_FOLLOW_V1"
+#define WHEEL_ZOOM_PACING_MODEL "BURST_ADAPTIVE_100_150_200_V2"
+#define WHEEL_ZOOM_TARGET_LIMIT 12
+#define WHEEL_ZOOM_MAX_EVENT_STEPS 16
+#define WHEEL_ZOOM_MONITOR_TICK_US 50000u
+#define ALT111_VIEW_AREA_POLL_US 100000u
+#define WHEEL_ZOOM_ACTIVE_SHORT_PACE_US 100000u
+#define WHEEL_ZOOM_ACTIVE_NORMAL_PACE_US 150000u
+#define WHEEL_ZOOM_ACTIVE_LONG_PACE_US 200000u
+#define WHEEL_ZOOM_QUIET_SMALL_BACKLOG_PACE_US 100000u
+#define WHEEL_ZOOM_QUIET_BACKLOG_PACE_US 150000u
+#define WHEEL_ZOOM_SEND_RETRY_US 150000u
+#define WHEEL_ZOOM_FALLBACK_PACE_US 250000u
+#define WHEEL_ZOOM_FRESH_FRAME_AGE_US 100000u
+#define WHEEL_ZOOM_STALL_AGE_US 150000u
+#define WHEEL_ZOOM_RECOVERY_FRAMES 3u
+#define WHEEL_ZOOM_BURST_GAP_US 300000u
+#define WHEEL_ZOOM_INPUT_ACTIVE_US 300000u
+#define WHEEL_ZOOM_SHORT_BURST_MAX_STEPS 2u
+#define WHEEL_ZOOM_NORMAL_BURST_MAX_STEPS 6u
+#define WHEEL_ZOOM_SMALL_BACKLOG_MAX_STEPS 2u
+#define WHEEL_ZOOM_STALL_ABORT_QUIET_US 350000u
+#define WHEEL_ZOOM_STALL_ABORT_US 1200000u
+
+static uint32_t wheel_now_us32(void) {
+    struct timeval tv;
+    if (gettimeofday(&tv, NULL) != 0) return 0u;
+    /* All wheel thresholds are <=1.2 s, so modular subtraction remains safe
+     * across the 32-bit wrap while matching the decoded tap time base exactly. */
+    return (uint32_t)tv.tv_sec * 1000000u + (uint32_t)tv.tv_usec;
+}
+
+/*
+ * A decoded frame can be published after the monitor sampled wheel_now but
+ * before p111_frame_tap_get_progress() returns its snapshot. In that narrow
+ * race the publication timestamp is only slightly "in the future" relative to
+ * the scheduler sample. Clamp only a future skew within the existing 150 ms
+ * stall horizon to zero.
+ *
+ * A modular age above INT32_MAX is otherwise treated as definitely stale
+ * instead of fresh. This matters after very long static-map intervals: an old
+ * frame must still let the existing stall/abort path rebase pending zoom work.
+ * Genuine short uint32 wrap intervals remain normal small positive ages.
+ *
+ * This helper deliberately does not change wheel pacing, target-follow,
+ * rebase, retry, or any timing threshold.
+ */
+static uint32_t wheel_short_age_us32(uint32_t now, uint32_t before) {
+    uint32_t age = (uint32_t)(now - before);
+    uint32_t future_skew;
+    if (age <= 0x7fffffffu) return age;
+    future_skew = (uint32_t)(before - now);
+    if (future_skew <= WHEEL_ZOOM_STALL_AGE_US) return 0u;
+    return 0x7fffffffu;
+}
+
+static uint32_t native_wheel_zoom_dynamic_pace_us(
+        unsigned burst_input_steps, int error_steps,
+        uint32_t input_quiet_us, int reverse_response_pending,
+        int next_direction, int last_input_direction,
+        const char **mode) {
+    unsigned backlog = (unsigned)(error_steps < 0 ? -error_steps : error_steps);
+
+    if (reverse_response_pending &&
+        (next_direction == 0 || next_direction == 1) &&
+        next_direction == last_input_direction) {
+        if (mode) *mode = "REVERSE_RESPONSE";
+        return WHEEL_ZOOM_ACTIVE_SHORT_PACE_US;
+    }
+
+    if (input_quiet_us >= WHEEL_ZOOM_INPUT_ACTIVE_US) {
+        if (backlog <= WHEEL_ZOOM_SMALL_BACKLOG_MAX_STEPS) {
+            if (mode) *mode = "QUIET_SMALL_BACKLOG";
+            return WHEEL_ZOOM_QUIET_SMALL_BACKLOG_PACE_US;
+        }
+        if (mode) *mode = "QUIET_BACKLOG";
+        return WHEEL_ZOOM_QUIET_BACKLOG_PACE_US;
+    }
+
+    if (burst_input_steps <= WHEEL_ZOOM_SHORT_BURST_MAX_STEPS) {
+        if (mode) *mode = "ACTIVE_SHORT";
+        return WHEEL_ZOOM_ACTIVE_SHORT_PACE_US;
+    }
+    if (burst_input_steps <= WHEEL_ZOOM_NORMAL_BURST_MAX_STEPS) {
+        if (mode) *mode = "ACTIVE_NORMAL";
+        return WHEEL_ZOOM_ACTIVE_NORMAL_PACE_US;
+    }
+    if (mode) *mode = "ACTIVE_LONG";
+    return WHEEL_ZOOM_ACTIVE_LONG_PACE_US;
+}
+
+static int native_wheel_zoom_target_accumulate(int target, int sent,
+                                                int delta, int *saturated) {
+    long error = (long)target - (long)sent;
+    long next_error = error + (long)delta;
+    if (saturated) *saturated = 0;
+    if (next_error > WHEEL_ZOOM_TARGET_LIMIT) {
+        next_error = WHEEL_ZOOM_TARGET_LIMIT;
+        if (saturated) *saturated = 1;
+    } else if (next_error < -WHEEL_ZOOM_TARGET_LIMIT) {
+        next_error = -WHEEL_ZOOM_TARGET_LIMIT;
+        if (saturated) *saturated = 1;
+    }
+    return sent + (int)next_error;
+}
+
+struct wheel_zoom_event {
+    uint32_t epoch;
+    uint32_t seq;
+    int direction;
+    int magnification;
+    int delta;
+    int step;
+    int steps;
+};
+
+static unsigned native_read_wheel_zoom_events(
+        uint32_t after_epoch, uint32_t after_seq,
+        struct wheel_zoom_event *events, unsigned cap) {
+    FILE *f;
+    char line[256];
+    unsigned count = 0;
+
+    if (!events || !cap) return 0;
+    f = fopen(WHEEL_ZOOM_EVENT_FILE, "r");
+    if (!f) return 0;
+
+    while (fgets(line, sizeof(line), f)) {
+        struct wheel_zoom_event e;
+        unsigned epoch = 0, commit = 0;
+        char model[32];
+        size_t n = strlen(line);
+        int fields;
+
+        if (!n || line[n - 1] != '\n') continue;
+        memset(&e, 0, sizeof(e));
+        memset(model, 0, sizeof(model));
+        fields = sscanf(
+            line,
+            "epoch=%u seq=%u direction=%d magnification=%d delta=%d step=%d steps=%d model=%31s commit=%u",
+            &epoch, &e.seq, &e.direction, &e.magnification, &e.delta,
+            &e.step, &e.steps, model, &commit);
+        e.epoch = (uint32_t)epoch;
+        if (fields != 9 || !e.epoch || !e.seq || commit != e.seq ||
+            strcmp(model, WHEEL_ZOOM_EVENT_MODEL) != 0 ||
+            (e.direction != 0 && e.direction != 1) ||
+            e.delta == 0 || e.step != 0 || e.steps < 1 ||
+            e.steps > WHEEL_ZOOM_MAX_EVENT_STEPS ||
+            e.delta < -WHEEL_ZOOM_MAX_EVENT_STEPS ||
+            e.delta > WHEEL_ZOOM_MAX_EVENT_STEPS ||
+            e.steps != (e.delta < 0 ? -e.delta : e.delta) ||
+            (e.delta < 0 ? e.direction != 0 : e.direction != 1))
+            continue;
+        if (e.epoch == after_epoch && e.seq <= after_seq) continue;
+        events[count++] = e;
+        if (count == cap) break;
+    }
+    fclose(f);
+    return count;
+}
+
+static void native_wheel_zoom_tail(uint32_t *out_epoch, uint32_t *out_seq) {
+    FILE *f;
+    char line[256];
+    uint32_t tail_epoch = 0;
+    uint32_t tail_seq = 0;
+
+    if (out_epoch) *out_epoch = 0;
+    if (out_seq) *out_seq = 0;
+    f = fopen(WHEEL_ZOOM_EVENT_FILE, "r");
+    if (!f) return;
+    while (fgets(line, sizeof(line), f)) {
+        unsigned epoch = 0, seq = 0, commit = 0;
+        int direction = -1, magnification = 0, delta = 0, step = 0, steps = 0;
+        char model[32];
+        size_t n = strlen(line);
+        if (!n || line[n - 1] != '\n') continue;
+        memset(model, 0, sizeof(model));
+        if (sscanf(
+                line,
+                "epoch=%u seq=%u direction=%d magnification=%d delta=%d step=%d steps=%d model=%31s commit=%u",
+                &epoch, &seq, &direction, &magnification, &delta,
+                &step, &steps, model, &commit) == 9 &&
+            epoch && seq && seq == commit &&
+            strcmp(model, WHEEL_ZOOM_EVENT_MODEL) == 0 &&
+            (direction == 0 || direction == 1) &&
+            delta != 0 && step == 0 && steps >= 1 &&
+            steps <= WHEEL_ZOOM_MAX_EVENT_STEPS &&
+            delta >= -WHEEL_ZOOM_MAX_EVENT_STEPS &&
+            delta <= WHEEL_ZOOM_MAX_EVENT_STEPS &&
+            steps == (delta < 0 ? -delta : delta) &&
+            (delta < 0 ? direction == 0 : direction == 1)) {
+            tail_epoch = (uint32_t)epoch;
+            tail_seq = (uint32_t)seq;
+        }
+    }
+    fclose(f);
+    if (out_epoch) *out_epoch = tail_epoch;
+    if (out_seq) *out_seq = tail_seq;
+}
+
+static void native_view_area_capture_frame_baseline(
+        void *receiver, void *stream, uint32_t generation,
+        uint32_t request_seq) {
+    struct p111_frame_progress_snapshot progress;
+    struct native_slot *slot;
+    int progress_ok;
+
+    memset(&progress, 0, sizeof(progress));
+    progress_ok = p111_frame_tap_get_progress(stream, &progress) &&
+                  progress.active;
+
+    native_lock();
+    slot = find_stream_locked(receiver, stream);
+    if (slot && slot->generation == generation &&
+        slot->view_area_event_state == 1 &&
+        slot->view_area_inflight_seq == request_seq) {
+        slot->view_area_frame_baseline_valid = progress_ok;
+        slot->view_area_frame_generation =
+            progress_ok ? progress.generation : 0u;
+        slot->view_area_frame_count =
+            progress_ok ? progress.frame_count : 0u;
+    }
+    native_unlock();
+
+    altscreen_log(
+        "PHASE=ALT111_VIEWAREA_FRAME_BASELINE receiver=%p stream=%p "
+        "generation=%u request_seq=%u telemetry=%s frame_generation=%u "
+        "frame_count=%u",
+        receiver, stream, generation, request_seq,
+        progress_ok ? "decoded_progress" : "unavailable",
+        progress_ok ? progress.generation : 0u,
+        progress_ok ? progress.frame_count : 0u);
+}
+
+static void native_check_view_area_fresh_frame(
+        void *receiver, void *stream, uint32_t generation) {
+    struct p111_frame_progress_snapshot progress;
+    struct native_slot *slot;
+    uint32_t request_seq = 0;
+    uint32_t baseline_generation = 0;
+    uint32_t baseline_count = 0;
+    uint64_t ack_at = 0;
+    uint64_t now = obs_now_us();
+    int view_area_index = -1;
+    int baseline_valid = 0;
+    int pending = 0;
+    int progress_ok = 0;
+    int completed = 0;
+    int timed_out = 0;
+
+    native_lock();
+    slot = find_stream_locked(receiver, stream);
+    if (slot && slot->generation == generation &&
+        slot->view_area_event_state == 2 &&
+        slot->view_area_frame_pending &&
+        slot->view_area_acked_seq != 0) {
+        pending = 1;
+        request_seq = slot->view_area_acked_seq;
+        view_area_index = slot->view_area_applied;
+        ack_at = slot->view_area_ack_at;
+        baseline_valid = slot->view_area_frame_baseline_valid;
+        baseline_generation = slot->view_area_frame_generation;
+        baseline_count = slot->view_area_frame_count;
+    }
+    native_unlock();
+    if (!pending) return;
+
+    memset(&progress, 0, sizeof(progress));
+    progress_ok = p111_frame_tap_get_progress(stream, &progress) &&
+                  progress.active;
+
+    if (!baseline_valid && progress_ok) {
+        native_lock();
+        slot = find_stream_locked(receiver, stream);
+        if (slot && slot->generation == generation &&
+            slot->view_area_event_state == 2 &&
+            slot->view_area_frame_pending &&
+            slot->view_area_acked_seq == request_seq &&
+            !slot->view_area_frame_baseline_valid) {
+            slot->view_area_frame_baseline_valid = 1;
+            slot->view_area_frame_generation = progress.generation;
+            slot->view_area_frame_count = progress.frame_count;
+            baseline_generation = progress.generation;
+            baseline_count = progress.frame_count;
+            baseline_valid = 1;
+        }
+        native_unlock();
+        if (baseline_valid) {
+            altscreen_log(
+                "PHASE=ALT111_VIEWAREA_FRAME_BASELINE_LATE receiver=%p "
+                "stream=%p generation=%u request_seq=%u viewAreaIndex=%d "
+                "frame_generation=%u frame_count=%u",
+                receiver, stream, generation, request_seq, view_area_index,
+                baseline_generation, baseline_count);
+        }
+        return;
+    }
+
+    if (progress_ok && baseline_valid &&
+        (progress.generation != baseline_generation ||
+         progress.frame_count != baseline_count)) {
+        native_lock();
+        slot = find_stream_locked(receiver, stream);
+        if (slot && slot->generation == generation &&
+            slot->view_area_event_state == 2 &&
+            slot->view_area_frame_pending &&
+            slot->view_area_acked_seq == request_seq) {
+            slot->view_area_frame_pending = 0;
+            completed = 1;
+        }
+        native_unlock();
+        if (completed) {
+            altscreen_log(
+                "PHASE=ALT111_VIEWAREA_FRESH_FRAME receiver=%p stream=%p "
+                "generation=%u request_seq=%u viewAreaIndex=%d "
+                "baseline_generation=%u baseline_count=%u "
+                "frame_generation=%u frame_count=%u "
+                "meaning=fresh_type111_after_ack_not_semantic_relayout_proof",
+                receiver, stream, generation, request_seq, view_area_index,
+                baseline_generation, baseline_count,
+                progress.generation, progress.frame_count);
+        }
+        return;
+    }
+
+    if (ack_at && now > ack_at + NATIVE_EVENT_TIMEOUT_SECONDS) {
+        native_lock();
+        slot = find_stream_locked(receiver, stream);
+        if (slot && slot->generation == generation &&
+            slot->view_area_event_state == 2 &&
+            slot->view_area_frame_pending &&
+            slot->view_area_acked_seq == request_seq) {
+            slot->view_area_frame_pending = 0;
+            timed_out = 1;
+        }
+        native_unlock();
+        if (timed_out) {
+            altscreen_log(
+                "WARN PHASE=ALT111_VIEWAREA_NO_FRESH_FRAME receiver=%p "
+                "stream=%p generation=%u request_seq=%u viewAreaIndex=%d "
+                "ack_age_s=%llu telemetry=%s "
+                "meaning=ack_without_observed_new_type111_frame",
+                receiver, stream, generation, request_seq, view_area_index,
+                (unsigned long long)(now - ack_at),
+                progress_ok ? "decoded_progress" : "unavailable");
+        }
+    }
+}
+
+/*
+ * This monitor is the same-session bridge between Audi NAV_VIEW_SIZE_CHOICE
+ * and CarPlay's standard updateViewArea command.  Java publishes the OEM state;
+ * no reconnect and no second /info transaction is required.
+ */
 static void *native_monitor_worker(void *arg) {
     struct native_thread_job *job = (struct native_thread_job *)arg;
     struct native_slot *slot = job ? job->slot : NULL;
@@ -593,10 +1068,103 @@ static void *native_monitor_worker(void *arg) {
     uint32_t state_generation = job ? job->state_generation : 0;
     uint64_t now;
     int visible, pending, live, route_ready, event_kind, send_rc;
+    int desired_view_area = -1, view_area_send_index, zoom_gate, cluster_owned;
+    int wheel_generation_current;
+    uint32_t view_area_command_seq = 0;
+    uint32_t view_area_send_seq = 0;
+    int zoom_target_steps = 0;
+    int zoom_sent_steps = 0;
+    int zoom_stall_latched = 0;
+    int zoom_first_step_pending = 0;
+    int zoom_send_frame_baseline_valid = 0;
+    int zoom_have_send_time = 0;
+    int zoom_have_input_time = 0;
+    int zoom_have_failed_send_time = 0;
+    int zoom_have_input_direction = 0;
+    int zoom_last_input_direction = -1;
+    int zoom_reverse_response_pending = 0;
+    unsigned zoom_burst_input_steps = 0;
+    struct wheel_zoom_event zoom_events[WHEEL_ZOOM_BATCH_MAX];
+    struct p111_frame_progress_snapshot zoom_progress;
+    unsigned zoom_count, zoom_i;
+    uint32_t zoom_last_epoch = 0;
+    uint32_t zoom_last_seq = 0;
+    uint32_t zoom_command_seq = 0;
+    uint32_t zoom_last_send_at = 0;
+    uint32_t zoom_last_input_at = 0;
+    uint32_t zoom_last_failed_send_at = 0;
+    uint32_t zoom_stall_started_at = 0;
+    uint32_t zoom_recovery_generation = 0;
+    uint32_t zoom_recovery_frame_count = 0;
+    uint32_t zoom_send_frame_generation = 0;
+    uint32_t zoom_send_frame_count = 0;
+    uint32_t wheel_now = 0;
+    uint32_t view_area_last_poll_at = 0;
+
+    native_wheel_zoom_tail(&zoom_last_epoch, &zoom_last_seq);
+    altscreen_log(
+        "PHASE=WHEEL_ZOOM_QUEUE_RESET receiver=%p stream=%p generation=%u "
+        "baseline_epoch=%u baseline_seq=%u stale_events_before_attach=discarded "
+        "event_model=%s scheduler=%s pacing=%s tick_ms=%u "
+        "active_short_ms=%u active_normal_ms=%u active_long_ms=%u "
+        "quiet_small_backlog_ms=%u quiet_backlog_ms=%u fallback_pace_ms=%u "
+        "input_active_ms=%u short_burst_max=%u normal_burst_max=%u "
+        "small_backlog_max=%u recovery_frames=%u fresh_age_ms=%u "
+        "stall_age_ms=%u burst_gap_ms=%u stall_abort_quiet_ms=%u "
+        "stall_abort_ms=%u target_limit=%d timebase=wheel_us32",
+        receiver, stream, generation, zoom_last_epoch, zoom_last_seq,
+        WHEEL_ZOOM_EVENT_MODEL, WHEEL_ZOOM_SCHEDULER_MODEL,
+        WHEEL_ZOOM_PACING_MODEL,
+        WHEEL_ZOOM_MONITOR_TICK_US / 1000u,
+        WHEEL_ZOOM_ACTIVE_SHORT_PACE_US / 1000u,
+        WHEEL_ZOOM_ACTIVE_NORMAL_PACE_US / 1000u,
+        WHEEL_ZOOM_ACTIVE_LONG_PACE_US / 1000u,
+        WHEEL_ZOOM_QUIET_SMALL_BACKLOG_PACE_US / 1000u,
+        WHEEL_ZOOM_QUIET_BACKLOG_PACE_US / 1000u,
+        WHEEL_ZOOM_FALLBACK_PACE_US / 1000u,
+        WHEEL_ZOOM_INPUT_ACTIVE_US / 1000u,
+        WHEEL_ZOOM_SHORT_BURST_MAX_STEPS,
+        WHEEL_ZOOM_NORMAL_BURST_MAX_STEPS,
+        WHEEL_ZOOM_SMALL_BACKLOG_MAX_STEPS,
+        WHEEL_ZOOM_RECOVERY_FRAMES,
+        WHEEL_ZOOM_FRESH_FRAME_AGE_US / 1000u,
+        WHEEL_ZOOM_STALL_AGE_US / 1000u,
+        WHEEL_ZOOM_BURST_GAP_US / 1000u,
+        WHEEL_ZOOM_STALL_ABORT_QUIET_US / 1000u,
+        WHEEL_ZOOM_STALL_ABORT_US / 1000u,
+        WHEEL_ZOOM_TARGET_LIMIT);
+
     for (;;) {
-        sleep(1u);
+        /*
+         * Wheel target-follow uses a 50 ms scheduler quantum so the adaptive
+         * 100/150/200 ms pacing states remain exactly representable. The existing lifecycle
+         * clock remains obs_now_us() seconds; only wheel timing uses us32.
+         */
+        usleep(WHEEL_ZOOM_MONITOR_TICK_US);
         now = obs_now_us();
+        wheel_now = wheel_now_us32();
+
+        /*
+         * Keep the proven live ViewArea/HMI-state polling cadence at 100 ms.
+         * The 50 ms master tick exists only so wheel input and target-follow
+         * scheduling are not quantized to the old 100/200 ms cadence.
+         */
+        if (!view_area_last_poll_at ||
+            (uint32_t)(wheel_now - view_area_last_poll_at) >=
+                ALT111_VIEW_AREA_POLL_US) {
+            desired_view_area = native_read_view_area_target();
+            view_area_last_poll_at = wheel_now;
+        }
+
+        cluster_owned = native_read_cluster_owned_for_zoom();
+        zoom_count = native_read_wheel_zoom_events(
+            zoom_last_epoch, zoom_last_seq,
+            zoom_events, WHEEL_ZOOM_BATCH_MAX);
         event_kind = 0;
+        view_area_send_index = -1;
+        view_area_send_seq = 0;
+        zoom_gate = 0;
+
         native_lock();
         live = slot && slot->stream == stream && slot->receiver == receiver &&
                slot->generation == generation &&
@@ -606,6 +1174,7 @@ static void *native_monitor_worker(void *arg) {
         route_ready = live && slot->ui_event_state == 2 &&
                       slot->preconfig_rewritten && slot->config_ok &&
                       slot->first_real_frame_posted;
+
         if (live) {
             if (slot->ui_event_state == 1 &&
                 now > slot->ui_event_at + NATIVE_EVENT_TIMEOUT_SECONDS) {
@@ -619,6 +1188,47 @@ static void *native_monitor_worker(void *arg) {
                 altscreen_log("ERROR PHASE=ALT111_EVENT_TIMEOUT receiver=%p stream=%p generation=%u event=forceKeyFrame retry=0 fail_closed=1",
                               receiver, stream, generation);
             }
+
+            /*
+             * updateViewArea is idempotent by target index, but a timed-out
+             * request may still complete late. Fence every attempt with its own
+             * sequence so an old ACK can never satisfy a retry to the same
+             * FULL/SMALL target.
+             */
+            if (slot->view_area_event_state == 1 &&
+                now > slot->view_area_event_at + NATIVE_EVENT_TIMEOUT_SECONDS) {
+                altscreen_log(
+                    "WARN PHASE=ALT111_VIEWAREA_TIMEOUT receiver=%p stream=%p "
+                    "generation=%u request_seq=%u target=%d retry=1 "
+                    "stale_callback_fenced=1",
+                    receiver, stream, generation,
+                    slot->view_area_inflight_seq,
+                    slot->view_area_target);
+                slot->view_area_event_state = 0;
+                slot->view_area_inflight_seq = 0;
+                slot->view_area_frame_pending = 0;
+                slot->view_area_frame_baseline_valid = 0;
+            }
+
+            if (desired_view_area == 0 || desired_view_area == 1) {
+                if (slot->view_area_target != desired_view_area) {
+                    altscreen_log("PHASE=ALT111_VIEWAREA_TARGET receiver=%p stream=%p generation=%u old=%d new=%d source=/tmp/mmi-mirror-hmi.state gate=LayoutMIB2HighB9 config=%ux%u canvas_gate=%d",
+                                  receiver, stream, generation,
+                                  slot->view_area_target, desired_view_area,
+                                  slot->config_width, slot->config_height,
+                                  native_measured_view_area_canvas(
+                                      slot->config_width,
+                                      slot->config_height));
+                    slot->view_area_target = desired_view_area;
+                    slot->view_area_applied = -1;
+                    slot->view_area_event_state = 0;
+                    slot->view_area_inflight_seq = 0;
+                    slot->view_area_acked_seq = 0;
+                    slot->view_area_frame_pending = 0;
+                    slot->view_area_frame_baseline_valid = 0;
+                }
+            }
+
             if (slot->ui_event_state == 0 &&
                 (!slot->ui_event_at || now > slot->ui_event_at + NATIVE_EVENT_RETRY_SECONDS)) {
                 slot->ui_event_state = 1;
@@ -631,16 +1241,461 @@ static void *native_monitor_worker(void *arg) {
                 slot->keyframe_event_state = 1;
                 slot->keyframe_event_at = now;
                 event_kind = ALT111_EVENT_FORCE_KEYFRAME;
+            } else if (slot->ui_event_state == 2 &&
+                       route_ready &&
+                       native_measured_view_area_canvas(
+                           slot->config_width, slot->config_height) &&
+                       (slot->view_area_target == 0 ||
+                        slot->view_area_target == 1) &&
+                       slot->view_area_applied != slot->view_area_target &&
+                       slot->view_area_event_state != 1) {
+                ++view_area_command_seq;
+                if (!view_area_command_seq) ++view_area_command_seq;
+                slot->view_area_event_state = 1;
+                slot->view_area_event_at = now;
+                slot->view_area_inflight_seq = view_area_command_seq;
+                slot->view_area_frame_pending = 0;
+                slot->view_area_frame_baseline_valid = 0;
+                view_area_send_index = slot->view_area_target;
+                view_area_send_seq = view_area_command_seq;
+                event_kind = ALT111_EVENT_UPDATE_VIEW_AREA;
             }
         }
         native_unlock();
+
         if (!live) break;
-        if (event_kind) {
+
+        wheel_generation_current =
+            alt_control_fence_is_current(state_generation);
+        zoom_gate = route_ready && cluster_owned && wheel_generation_current;
+
+        if (event_kind == ALT111_EVENT_UPDATE_VIEW_AREA) {
+            native_view_area_capture_frame_baseline(
+                receiver, stream, generation, view_area_send_seq);
+            send_rc = alt_send_cluster_view_area(
+                receiver, stream, generation,
+                view_area_send_seq, view_area_send_index);
+            if (send_rc != 0)
+                p1404_cockpit_native_view_area_result(
+                    receiver, stream, generation,
+                    view_area_send_seq, view_area_send_index,
+                    send_rc, 0);
+        } else if (event_kind) {
             send_rc = alt_send_cluster_event(receiver, stream, generation, event_kind);
             if (send_rc != 0)
                 p1404_cockpit_native_event_result(receiver, stream, generation,
                                                    event_kind, send_rc, 0);
         }
+
+        native_check_view_area_fresh_frame(receiver, stream, generation);
+
+        if (!zoom_gate &&
+            (zoom_target_steps != 0 || zoom_sent_steps != 0 ||
+             zoom_have_send_time || zoom_have_input_time ||
+             zoom_have_failed_send_time || zoom_stall_latched)) {
+            if (zoom_target_steps != zoom_sent_steps) {
+                altscreen_log(
+                    "PHASE=WHEEL_ZOOM_TARGET_RESET receiver=%p stream=%p "
+                    "generation=%u target=%d sent=%d error=%d "
+                    "reason=gate_closed action=DROP_STALE_TARGET",
+                    receiver, stream, generation, zoom_target_steps,
+                    zoom_sent_steps, zoom_target_steps - zoom_sent_steps);
+            }
+            zoom_target_steps = 0;
+            zoom_sent_steps = 0;
+            zoom_last_input_at = 0;
+            zoom_last_send_at = 0;
+            zoom_have_input_time = 0;
+            zoom_have_send_time = 0;
+            zoom_have_failed_send_time = 0;
+            zoom_last_failed_send_at = 0;
+            zoom_have_input_direction = 0;
+            zoom_last_input_direction = -1;
+            zoom_reverse_response_pending = 0;
+            zoom_burst_input_steps = 0;
+            zoom_stall_started_at = 0;
+            zoom_stall_latched = 0;
+            zoom_first_step_pending = 0;
+            zoom_send_frame_baseline_valid = 0;
+            zoom_recovery_generation = 0;
+            zoom_recovery_frame_count = 0;
+            zoom_send_frame_generation = 0;
+            zoom_send_frame_count = 0;
+        }
+
+        for (zoom_i = 0; zoom_i < zoom_count; ++zoom_i) {
+            struct wheel_zoom_event *ze = &zoom_events[zoom_i];
+            int target_before, error_before, error_after;
+            int saturated, retarget, new_burst, input_direction_changed;
+
+            if (ze->epoch != zoom_last_epoch) {
+                altscreen_log(
+                    "PHASE=WHEEL_ZOOM_EPOCH receiver=%p stream=%p generation=%u "
+                    "old_epoch=%u new_epoch=%u sequence_reset=1 "
+                    "target_reset=%d sent_reset=%d scheduler_reset=1",
+                    receiver, stream, generation, zoom_last_epoch, ze->epoch,
+                    zoom_target_steps, zoom_sent_steps);
+                zoom_last_epoch = ze->epoch;
+                zoom_last_seq = 0;
+                zoom_target_steps = 0;
+                zoom_sent_steps = 0;
+                zoom_last_send_at = 0;
+                zoom_last_input_at = 0;
+                zoom_have_send_time = 0;
+                zoom_have_input_time = 0;
+                zoom_have_failed_send_time = 0;
+                zoom_last_failed_send_at = 0;
+                zoom_have_input_direction = 0;
+                zoom_last_input_direction = -1;
+                zoom_reverse_response_pending = 0;
+                zoom_burst_input_steps = 0;
+                zoom_stall_started_at = 0;
+                zoom_stall_latched = 0;
+                zoom_first_step_pending = 0;
+                zoom_send_frame_baseline_valid = 0;
+                zoom_recovery_generation = 0;
+                zoom_recovery_frame_count = 0;
+                zoom_send_frame_generation = 0;
+                zoom_send_frame_count = 0;
+                zoom_command_seq = 0;
+            }
+            if (ze->seq <= zoom_last_seq) continue;
+            if (zoom_last_seq && ze->seq != zoom_last_seq + 1u)
+                altscreen_log(
+                    "WARN PHASE=WHEEL_ZOOM_QUEUE_GAP receiver=%p stream=%p "
+                    "generation=%u epoch=%u expected_seq=%u actual_seq=%u",
+                    receiver, stream, generation, ze->epoch,
+                    zoom_last_seq + 1u, ze->seq);
+            zoom_last_seq = ze->seq;
+
+            altscreen_log(
+                "PHASE=WHEEL_ZOOM_QUEUE receiver=%p stream=%p generation=%u "
+                "epoch=%u seq=%u action=%s direction=%d magnification=%d "
+                "delta=%d steps=%d event_model=%s result=%s reason=%s",
+                receiver, stream, generation, ze->epoch, ze->seq,
+                ze->direction == 0 ? "ZOOM_IN" : "ZOOM_OUT",
+                ze->direction, ze->magnification, ze->delta, ze->steps,
+                WHEEL_ZOOM_EVENT_MODEL,
+                zoom_gate ? "queued" : "dropped",
+                zoom_gate ? "java80_cluster_owned_route_ready_generation_current" :
+                            "route_not_ready_or_java80_cluster_not_owned_or_generation_stale");
+            if (!zoom_gate) continue;
+
+            new_burst = !zoom_have_input_time ||
+                (uint32_t)(wheel_now - zoom_last_input_at) >=
+                    WHEEL_ZOOM_BURST_GAP_US;
+            input_direction_changed = zoom_have_input_direction &&
+                ze->direction != zoom_last_input_direction;
+            if (new_burst || input_direction_changed) {
+                zoom_burst_input_steps = 0;
+                if (new_burst) zoom_reverse_response_pending = 0;
+            }
+            if (zoom_burst_input_steps <= 1000000u - (unsigned)ze->steps)
+                zoom_burst_input_steps += (unsigned)ze->steps;
+            else
+                zoom_burst_input_steps = 1000000u;
+            if (input_direction_changed)
+                zoom_reverse_response_pending = 1;
+            zoom_last_input_direction = ze->direction;
+            zoom_have_input_direction = 1;
+
+            target_before = zoom_target_steps;
+            error_before = target_before - zoom_sent_steps;
+            retarget =
+                (error_before > 0 && ze->delta < 0) ||
+                (error_before < 0 && ze->delta > 0);
+            saturated = 0;
+            zoom_target_steps = native_wheel_zoom_target_accumulate(
+                zoom_target_steps, zoom_sent_steps,
+                ze->delta, &saturated);
+            error_after = zoom_target_steps - zoom_sent_steps;
+            zoom_last_input_at = wheel_now;
+            zoom_have_input_time = 1;
+            if (new_burst) zoom_first_step_pending = 1;
+
+            altscreen_log(
+                "PHASE=WHEEL_ZOOM_TARGET receiver=%p stream=%p generation=%u "
+                "source_seq=%u signed_steps=%d target_before=%d "
+                "target_after=%d sent=%d error_before=%d error_after=%d "
+                "retarget=%d new_burst=%d input_direction_changed=%d "
+                "burst_input_steps=%u reverse_response_pending=%d "
+                "saturated=%d target_limit=%d scheduler=%s",
+                receiver, stream, generation, ze->seq, ze->delta,
+                target_before, zoom_target_steps, zoom_sent_steps,
+                error_before, error_after, retarget, new_burst,
+                input_direction_changed, zoom_burst_input_steps,
+                zoom_reverse_response_pending, saturated,
+                WHEEL_ZOOM_TARGET_LIMIT, WHEEL_ZOOM_SCHEDULER_MODEL);
+        }
+
+        if (zoom_target_steps == zoom_sent_steps) {
+            zoom_first_step_pending = 0;
+            zoom_have_failed_send_time = 0;
+            if (zoom_stall_latched) {
+                altscreen_log(
+                    "PHASE=WHEEL_ZOOM_STALL_CANCELLED receiver=%p stream=%p "
+                    "generation=%u target=%d sent=%d reason=target_satisfied",
+                    receiver, stream, generation,
+                    zoom_target_steps, zoom_sent_steps);
+                zoom_stall_latched = 0;
+                zoom_stall_started_at = 0;
+                zoom_recovery_generation = 0;
+                zoom_recovery_frame_count = 0;
+            }
+            if (zoom_target_steps != 0) {
+                altscreen_log(
+                    "PHASE=WHEEL_ZOOM_TARGET_REBASE receiver=%p stream=%p "
+                    "generation=%u settled_relative_level=%d "
+                    "action=REBASE_TARGET_AND_SENT_TO_ZERO "
+                    "outstanding_limit=%d",
+                    receiver, stream, generation, zoom_target_steps,
+                    WHEEL_ZOOM_TARGET_LIMIT);
+                zoom_target_steps = 0;
+                zoom_sent_steps = 0;
+            }
+        }
+
+        /*
+         * OEM_TARGET_FOLLOW_V1 + BURST_ADAPTIVE_100_150_200_V2:
+         *   - first detent of a new burst may submit immediately;
+         *   - while input is active: first 2 detents use 100 ms, detents 3..6
+         *     use 150 ms, and detent 7+ uses 200 ms;
+         *   - after 300 ms input quiet: backlog <=2 drains at 100 ms, larger
+         *     backlog drains at 150 ms so the map does not trail the driver;
+         *   - a real direction reversal gets a 100 ms response once the
+         *     desired target has crossed into the new physical direction;
+         *   - decoded-frame progress is liveness evidence only. It does not
+         *     prove that the map camera animation completed;
+         *   - no post-send progress for >=150 ms latches STALL;
+         *   - only STALL recovery requires three fresh frames;
+         *   - telemetry loss uses a conservative 250 ms timer;
+         *   - a stall lasting >=1.2 s after >=350 ms input quiet rebases target
+         *     to the submitted level, preventing a late replay after recovery.
+         */
+        if (zoom_gate && zoom_target_steps != zoom_sent_steps) {
+            int send_ready = 0;
+            int progress_ok = 0;
+            int fallback_timer = 0;
+            int first_send = !zoom_have_send_time;
+            int error_steps = zoom_target_steps - zoom_sent_steps;
+            int next_direction = error_steps < 0 ? 0 : 1;
+            const char *pace_mode = "FIRST_SEND";
+            uint32_t elapsed_us = first_send ? 0u :
+                (uint32_t)(wheel_now - zoom_last_send_at);
+            uint32_t input_quiet_us = zoom_have_input_time ?
+                (uint32_t)(wheel_now - zoom_last_input_at) : 0u;
+            uint32_t selected_pace_us = first_send ? 0u :
+                native_wheel_zoom_dynamic_pace_us(
+                    zoom_burst_input_steps, error_steps, input_quiet_us,
+                    zoom_reverse_response_pending, next_direction,
+                    zoom_last_input_direction, &pace_mode);
+            uint32_t frame_age_us = 0;
+            uint32_t fresh_since_send = 0;
+            uint32_t recovery_fresh = 0;
+            int baseline_current = 0;
+
+            memset(&zoom_progress, 0, sizeof(zoom_progress));
+            progress_ok = p111_frame_tap_get_progress(
+                stream, &zoom_progress);
+            if (progress_ok) {
+                frame_age_us = wheel_short_age_us32(
+                    wheel_now, zoom_progress.last_publish_us32);
+                baseline_current =
+                    zoom_send_frame_baseline_valid &&
+                    zoom_send_frame_generation == zoom_progress.generation;
+                if (baseline_current)
+                    fresh_since_send =
+                        zoom_progress.frame_count - zoom_send_frame_count;
+            }
+
+            if (!zoom_stall_latched && !first_send &&
+                !zoom_first_step_pending &&
+                elapsed_us >= WHEEL_ZOOM_STALL_AGE_US &&
+                progress_ok && baseline_current &&
+                fresh_since_send == 0u &&
+                frame_age_us >= WHEEL_ZOOM_STALL_AGE_US) {
+                zoom_stall_latched = 1;
+                zoom_stall_started_at = wheel_now;
+                zoom_recovery_generation = zoom_progress.generation;
+                zoom_recovery_frame_count = zoom_progress.frame_count;
+                altscreen_log(
+                    "PHASE=WHEEL_ZOOM_FRAME_STALL receiver=%p stream=%p "
+                    "generation=%u command_seq=%u target=%d sent=%d error=%d "
+                    "elapsed_ms=%u frame_age_ms=%u fresh_since_send=%u "
+                    "action=BLOCK_UNTIL_3_FRESH_FRAMES",
+                    receiver, stream, generation, zoom_command_seq,
+                    zoom_target_steps, zoom_sent_steps, error_steps,
+                    elapsed_us / 1000u, frame_age_us / 1000u,
+                    fresh_since_send);
+            }
+
+            if (zoom_stall_latched) {
+                if (progress_ok) {
+                    if (zoom_recovery_generation != zoom_progress.generation) {
+                        zoom_recovery_generation = zoom_progress.generation;
+                        zoom_recovery_frame_count = zoom_progress.frame_count;
+                    }
+                    recovery_fresh =
+                        zoom_progress.frame_count - zoom_recovery_frame_count;
+                    if (frame_age_us <= WHEEL_ZOOM_FRESH_FRAME_AGE_US &&
+                        recovery_fresh >= WHEEL_ZOOM_RECOVERY_FRAMES) {
+                        zoom_stall_latched = 0;
+                        zoom_stall_started_at = 0;
+                        altscreen_log(
+                            "PHASE=WHEEL_ZOOM_FRAME_RECOVERED receiver=%p "
+                            "stream=%p generation=%u command_seq=%u "
+                            "target=%d sent=%d error=%d fresh_frames=%u "
+                            "frame_age_ms=%u action=RESUME_TARGET_FOLLOW",
+                            receiver, stream, generation, zoom_command_seq,
+                            zoom_target_steps, zoom_sent_steps,
+                            zoom_target_steps - zoom_sent_steps,
+                            recovery_fresh, frame_age_us / 1000u);
+                    }
+                }
+
+                if (zoom_stall_latched &&
+                    (uint32_t)(wheel_now - zoom_stall_started_at) >=
+                        WHEEL_ZOOM_STALL_ABORT_US &&
+                    input_quiet_us >= WHEEL_ZOOM_STALL_ABORT_QUIET_US) {
+                    altscreen_log(
+                        "PHASE=WHEEL_ZOOM_STALL_ABORT receiver=%p stream=%p "
+                        "generation=%u target_before=%d sent=%d error_before=%d "
+                        "stall_ms=%u input_quiet_ms=%u "
+                        "action=REBASE_TARGET_TO_SENT_NO_LATE_REPLAY",
+                        receiver, stream, generation, zoom_target_steps,
+                        zoom_sent_steps,
+                        zoom_target_steps - zoom_sent_steps,
+                        (uint32_t)(wheel_now - zoom_stall_started_at) / 1000u,
+                        input_quiet_us / 1000u);
+                    zoom_target_steps = zoom_sent_steps;
+                    zoom_stall_latched = 0;
+                    zoom_stall_started_at = 0;
+                    zoom_first_step_pending = 0;
+                    zoom_reverse_response_pending = 0;
+                    zoom_recovery_generation = 0;
+                    zoom_recovery_frame_count = 0;
+                }
+            }
+
+            if (!zoom_stall_latched &&
+                zoom_target_steps != zoom_sent_steps) {
+                if (first_send) {
+                    send_ready = 1;
+                } else if (zoom_first_step_pending) {
+                    send_ready = elapsed_us >= selected_pace_us;
+                } else if (progress_ok && baseline_current) {
+                    send_ready = elapsed_us >= selected_pace_us &&
+                        fresh_since_send > 0u;
+                } else if (elapsed_us >= WHEEL_ZOOM_FALLBACK_PACE_US) {
+                    fallback_timer = 1;
+                    pace_mode = "NO_TELEMETRY_FALLBACK";
+                    selected_pace_us = WHEEL_ZOOM_FALLBACK_PACE_US;
+                    send_ready = 1;
+                }
+            }
+
+            if (send_ready && zoom_have_failed_send_time &&
+                (uint32_t)(wheel_now - zoom_last_failed_send_at) <
+                    WHEEL_ZOOM_SEND_RETRY_US)
+                send_ready = 0;
+
+            if (send_ready) {
+                int sent_before = zoom_sent_steps;
+                int attempted_sent;
+                int direction =
+                    zoom_target_steps < zoom_sent_steps ? 0 : 1;
+                struct p111_frame_progress_snapshot after_send_progress;
+                int after_send_progress_ok;
+
+                attempted_sent = zoom_sent_steps +
+                    (direction == 0 ? -1 : 1);
+
+                ++zoom_command_seq;
+                if (!zoom_command_seq) ++zoom_command_seq;
+
+                send_rc = alt_send_cluster_zoom(
+                    receiver, stream, generation,
+                    zoom_command_seq, direction);
+
+                memset(&after_send_progress, 0,
+                       sizeof(after_send_progress));
+                after_send_progress_ok = 0;
+                if (send_rc == 0) {
+                    zoom_last_send_at = wheel_now;
+                    zoom_have_send_time = 1;
+                    zoom_have_failed_send_time = 0;
+                    zoom_sent_steps = attempted_sent;
+                    zoom_first_step_pending = 0;
+                    if (zoom_reverse_response_pending &&
+                        zoom_have_input_direction &&
+                        direction == zoom_last_input_direction)
+                        zoom_reverse_response_pending = 0;
+
+                    after_send_progress_ok = p111_frame_tap_get_progress(
+                        stream, &after_send_progress);
+                    if (after_send_progress_ok) {
+                        zoom_send_frame_baseline_valid = 1;
+                        zoom_send_frame_generation =
+                            after_send_progress.generation;
+                        zoom_send_frame_count =
+                            after_send_progress.frame_count;
+                    } else {
+                        zoom_send_frame_baseline_valid = 0;
+                        zoom_send_frame_generation = 0;
+                        zoom_send_frame_count = 0;
+                    }
+                } else {
+                    zoom_last_failed_send_at = wheel_now;
+                    zoom_have_failed_send_time = 1;
+                }
+
+                altscreen_log(
+                    "PHASE=WHEEL_ZOOM_PACED_SEND receiver=%p stream=%p "
+                    "generation=%u command_seq=%u source_tail_seq=%u "
+                    "action=%s direction=%d target=%d sent_before=%d "
+                    "sent_after=%d error_after=%d scheduler=%s pacing=%s "
+                    "first_send=%d first_step_pending=%d telemetry=%s "
+                    "fallback_timer=%d elapsed_us=%u fresh_since_send=%u "
+                    "frame_age_ms=%u pace_mode=%s selected_pace_ms=%u "
+                    "input_quiet_ms=%u burst_input_steps=%u backlog_abs=%d "
+                    "reverse_response_pending=%d response_gates_next=0 rc=%d",
+                    receiver, stream, generation, zoom_command_seq,
+                    zoom_last_seq,
+                    direction == 0 ? "ZOOM_IN" : "ZOOM_OUT",
+                    direction, zoom_target_steps, sent_before,
+                    zoom_sent_steps,
+                    zoom_target_steps - zoom_sent_steps,
+                    WHEEL_ZOOM_SCHEDULER_MODEL,
+                    WHEEL_ZOOM_PACING_MODEL,
+                    first_send, zoom_first_step_pending,
+                    progress_ok ? "decoded_progress" : "unavailable",
+                    fallback_timer, elapsed_us, fresh_since_send,
+                    frame_age_us / 1000u, pace_mode,
+                    selected_pace_us / 1000u, input_quiet_us / 1000u,
+                    zoom_burst_input_steps,
+                    error_steps < 0 ? -error_steps : error_steps,
+                    zoom_reverse_response_pending, send_rc);
+
+                if (send_rc != 0) {
+                    p1404_cockpit_native_zoom_result(
+                        receiver, stream, generation,
+                        zoom_command_seq, direction,
+                        send_rc, 0);
+                } else if (zoom_target_steps == zoom_sent_steps &&
+                           zoom_target_steps != 0) {
+                    altscreen_log(
+                        "PHASE=WHEEL_ZOOM_TARGET_REBASE receiver=%p stream=%p "
+                        "generation=%u settled_relative_level=%d "
+                        "action=REBASE_TARGET_AND_SENT_TO_ZERO "
+                        "reason=successful_catchup outstanding_limit=%d",
+                        receiver, stream, generation, zoom_target_steps,
+                        WHEEL_ZOOM_TARGET_LIMIT);
+                    zoom_target_steps = 0;
+                    zoom_sent_steps = 0;
+                }
+            }
+        }
+
         if (route_ready && !visible && !pending && native_route_requested()) {
             altscreen_log("PHASE=NATIVE_111_ROUTE_READY receiver=%p stream=%p generation=%u basis=dynamic_config_plus_accepted_showui_plus_first_real_type111_post video_availability_gate=real_frame",
                           receiver, stream, generation);
@@ -653,6 +1708,30 @@ static void *native_monitor_worker(void *arg) {
     free(job);
     return NULL;
 }
+
+void p1404_cockpit_native_zoom_result(void *receiver, void *stream,
+                                      uint32_t generation,
+                                      uint32_t event_seq,
+                                      int direction,
+                                      int status,
+                                      int response_received) {
+    struct native_slot *slot;
+    int generation_current = 0;
+
+    native_lock();
+    slot = find_stream_locked(receiver, stream);
+    generation_current = slot && slot->generation == generation;
+    native_unlock();
+
+    altscreen_log(
+        "PHASE=CLUSTER_ZOOM_RESPONSE receiver=%p stream=%p generation=%u "
+        "seq=%u direction=%d action=%s status=%d response_received=%d "
+        "generation_current=%d semantics=OBSERVE_ONLY_NO_SUCCESS_ASSUMPTION",
+        receiver, stream, generation, event_seq, direction,
+        direction == 0 ? "ZOOM_IN" : "ZOOM_OUT",
+        status, response_received, generation_current);
+}
+
 
 void p1404_cockpit_native_event_result(void *receiver, void *stream,
                                         uint32_t generation, int event_kind,
@@ -683,6 +1762,53 @@ void p1404_cockpit_native_event_result(void *receiver, void *stream,
                   receiver, stream, generation, event_kind, status,
                   response_received, accepted && applied, applied,
                   applied && !accepted);
+}
+
+
+void p1404_cockpit_native_view_area_result(void *receiver, void *stream,
+                                            uint32_t generation,
+                                            uint32_t event_seq,
+                                            int view_area_index,
+                                            int status,
+                                            int response_received) {
+    struct native_slot *slot;
+    uint64_t result_now = obs_now_us();
+    int accepted = status == 0 && response_received;
+    int applied = 0;
+    int stale = 0;
+
+    native_lock();
+    slot = find_stream_locked(receiver, stream);
+    if (slot && slot->generation == generation &&
+        slot->view_area_target == view_area_index &&
+        slot->view_area_event_state == 1 &&
+        slot->view_area_inflight_seq == event_seq) {
+        if (accepted) {
+            slot->view_area_applied = view_area_index;
+            slot->view_area_event_state = 2;
+            slot->view_area_acked_seq = event_seq;
+            slot->view_area_ack_at = result_now;
+            slot->view_area_frame_pending = 1;
+        } else {
+            slot->view_area_event_state = 0;
+            slot->view_area_inflight_seq = 0;
+            slot->view_area_frame_pending = 0;
+            slot->view_area_frame_baseline_valid = 0;
+        }
+        applied = 1;
+    } else {
+        stale = 1;
+    }
+    native_unlock();
+
+    altscreen_log(
+        "PHASE=ALT111_VIEWAREA_RESULT receiver=%p stream=%p generation=%u "
+        "request_seq=%u viewAreaIndex=%d status=%d response_received=%d "
+        "acknowledged=%d target_still_current=%d stale_callback=%d retry=%d "
+        "visual_proof=pending_fresh_type111_frame",
+        receiver, stream, generation, event_seq, view_area_index, status,
+        response_received, accepted && applied, applied, stale,
+        applied && !accepted);
 }
 
 int p1404_cockpit_native_prepare_start(void *receiver) {
@@ -935,8 +2061,18 @@ int p1404_cockpit_native_attach(void *receiver, void *stream) {
         return 0;
     }
     if (!p1404_cockpit_native_get_geometry(&width, &height) &&
-        !p1404_cockpit_native_refresh_geometry()) return 0;
-    (void)p1404_cockpit_native_get_geometry(&width, &height);
+        !p1404_cockpit_native_refresh_geometry()) {
+        altscreen_log("ERROR PHASE=NATIVE_111_ATTACH_GEOMETRY result=REFUSED reason=live_screen_geometry_unavailable bootstrap_not_used_for_renderer=1");
+        return 0;
+    }
+    if (!p1404_cockpit_native_get_geometry(&width, &height)) {
+        altscreen_log("ERROR PHASE=NATIVE_111_ATTACH_GEOMETRY result=REFUSED reason=geometry_not_published_after_refresh");
+        return 0;
+    }
+    if (!alt_airplay_validate_runtime_geometry(width, height)) {
+        altscreen_log("ERROR PHASE=NATIVE_111_ATTACH_GEOMETRY result=REFUSED reason=negotiated_runtime_geometry_mismatch source59_fallthrough_blocked=1");
+        return 0;
+    }
     video_impl = read_ptr_at(stream, SCREEN_STREAM_VIDEO_IMPL_OFF);
     renderer = read_ptr_at(video_impl, OMX_VIDEO_RENDERER_OFF);
     if (!video_impl) {
@@ -958,6 +2094,8 @@ int p1404_cockpit_native_attach(void *receiver, void *stream) {
         slot->generation = ++g_generation;
         if (!slot->generation) slot->generation = ++g_generation;
         slot->state_generation = state_snap.generation;
+        slot->view_area_target = -1;
+        slot->view_area_applied = -1;
         assigned_generation = slot->generation;
     }
     native_unlock();
@@ -1042,6 +2180,8 @@ int p1404_cockpit_native_test_route_seed(void *receiver, void *stream,
         slot->stream = stream;
         slot->generation = generation;
         slot->state_generation = state_generation;
+        slot->view_area_target = -1;
+        slot->view_area_applied = -1;
         ok = 1;
     }
     native_unlock();
@@ -1380,7 +2520,7 @@ int p1404_hook_cscreen_render(void *self, unsigned char *buffer) {
 
     memset(&snap, 0, sizeof(snap));
     if (!alt_state_snapshot(receiver, 1, &snap) ||
-        snap.generation != generation || snap.alt_screen_stream != stream)
+        snap.generation != state_generation || snap.alt_screen_stream != stream)
         return rc;
     if (posts >= NATIVE_MIN_POSTS && snap.video_config_seen &&
         now <= first_post_at + NATIVE_POST_WINDOW_SECONDS) {

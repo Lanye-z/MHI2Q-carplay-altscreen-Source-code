@@ -5,12 +5,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <unistd.h>
 
 static volatile sig_atomic_t g_stop = 0;
-static const unsigned kTargetFps = 30;
-static const char kBuildId[] = "carplay-private111-direct-display-v2";
+static const unsigned kNoFramePollUs = 5000u;
+/* Diagnostic thresholds only: presentation/polling behavior is unchanged. */
+static const unsigned kDecodedStallReportUs = 500000u;
+static const unsigned kDecodedStallHeartbeatPolls = 1000u;
+static const char kBuildId[] =
+    "carplay-private111-direct-display-v3.1-oem-map-1to1-clip";
 
 static const char *volatile_path(const char *key, const char *fallback) {
     const char *v = getenv(key);
@@ -37,11 +42,185 @@ static const char *hook_log_path() {
                          "/tmp/MMI-Cockpit-Carplay/altscreen_hook.log");
 }
 
+static const char *displayable_state_path() {
+    return volatile_path("ALT111_DISPLAYABLE_STATE_FILE",
+                         "/tmp/mmi-mirror-displayable3.state");
+}
+
 static unsigned long long now_us() {
     struct timeval tv;
     if (gettimeofday(&tv, 0) != 0) return 0;
     return (unsigned long long)(unsigned long)tv.tv_sec * 1000000ULL +
            (unsigned long long)(unsigned long)tv.tv_usec;
+}
+
+static void sanitize_state_value(char *value) {
+    if (!value) return;
+    for (; *value; ++value) {
+        if (*value == '\n' || *value == '\r' || *value == '=')
+            *value = ' ';
+    }
+}
+
+/*
+ * COLD_START_DISPLAYABLE3_OBSERVER_V1
+ *
+ * A tiny /tmp-only snapshot refreshed at 2 Hz.  This is intentionally
+ * independent from the removed SD ring/per-frame telemetry system.
+ * It reads only the already-created displayable3 native window and never
+ * creates a Screen context, enumerates windows, or writes Screen properties.
+ */
+static void publish_displayable_state(const ClusterVideoDisplay &display,
+                                      const Private111DirectSource *source,
+                                      const char *phase) {
+    Mhi2qWindowState state;
+    memset(&state, 0, sizeof(state));
+    (void)display.sample_window_state(&state);
+
+    char manager[sizeof(state.manager)];
+    strncpy(manager, state.manager, sizeof(manager) - 1u);
+    manager[sizeof(manager) - 1u] = 0;
+    sanitize_state_value(manager);
+
+    const unsigned long long ts_us = now_us();
+    const unsigned long long ts_ms = ts_us / 1000ULL;
+    const uint32_t generation = source ? source->generation() : 0u;
+    const uint32_t h264_packets = source ? source->h264_packets() : 0u;
+    const uint32_t decoded_frames = source ? source->decoded_frames() : 0u;
+    const uint32_t sequence = source ? source->sequence() : 0u;
+
+    const char *path = displayable_state_path();
+    char tmp[512];
+    const int tmp_n = snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    if (tmp_n > 0 && (size_t)tmp_n < sizeof(tmp)) {
+        FILE *out = fopen(tmp, "w");
+        if (out) {
+            fprintf(out,
+                    "schema=1\n"
+                    "observer=DISPLAYABLE3_OWNERSHIP_V1\n"
+                    "display_observer_revision=V32_READABLE_STATE_V1\n"
+                    "mode=OBSERVE_ONLY\n"
+                    "timestamp_ms=%llu\n"
+                    "phase=%s\n"
+                    "backend_ready=%d\n"
+                    "native_window_present=%d\n"
+                    "native_window=0x%lx\n"
+                    "kd_window=%d\n"
+                    "displayable=%d\n"
+                    "visible_valid=%d\n"
+                    "visible=%d\n"
+                    "manager_valid=%d\n"
+                    "manager=%s\n"
+                    "first_present=%d\n"
+                    "presented_frames=%lu\n"
+                    "generation=%u\n"
+                    "sequence=%u\n"
+                    "h264_packets=%u\n"
+                    "decoded_frames=%u\n",
+                    ts_ms,
+                    phase ? phase : "periodic",
+                    state.backend_ready ? 1 : 0,
+                    state.native_window_present ? 1 : 0,
+                    state.native_window_value,
+                    state.kd_window,
+                    state.displayable_id,
+                    state.visible_valid ? 1 : 0,
+                    state.visible,
+                    state.manager_valid ? 1 : 0,
+                    manager,
+                    display.first_frame_presented() ? 1 : 0,
+                    display.frame_count(),
+                    (unsigned)generation,
+                    (unsigned)sequence,
+                    (unsigned)h264_packets,
+                    (unsigned)decoded_frames);
+            if (fclose(out) == 0) {
+                /*
+                 * The HMI controller may run under a different uid.  This file
+                 * is observation-only and contains no secrets, so make the
+                 * atomic snapshot explicitly world-readable instead of
+                 * inheriting a potentially restrictive sidecar umask.
+                 */
+                (void)chmod(tmp, 0644);
+                if (rename(tmp, path) != 0) {
+                    unlink(path);
+                    if (rename(tmp, path) != 0) {
+                        unlink(tmp);
+                    } else {
+                        (void)chmod(path, 0644);
+                    }
+                } else {
+                    (void)chmod(path, 0644);
+                }
+            } else {
+                unlink(tmp);
+            }
+        }
+    }
+
+    static int have_previous = 0;
+    static int last_backend_ready = -1;
+    static int last_native_present = -1;
+    static int last_visible_valid = -1;
+    static int last_visible = -999;
+    static int last_manager_valid = -1;
+    static unsigned long last_native_window = 0;
+    static int last_kd_window = -999;
+    static char last_manager[96] = "";
+    static unsigned long long last_heartbeat_us = 0;
+
+    const int changed =
+        !have_previous ||
+        last_backend_ready != (state.backend_ready ? 1 : 0) ||
+        last_native_present != (state.native_window_present ? 1 : 0) ||
+        last_visible_valid != (state.visible_valid ? 1 : 0) ||
+        last_visible != state.visible ||
+        last_manager_valid != (state.manager_valid ? 1 : 0) ||
+        last_native_window != state.native_window_value ||
+        last_kd_window != state.kd_window ||
+        strcmp(last_manager, manager) != 0;
+    const int heartbeat =
+        !last_heartbeat_us ||
+        (ts_us >= last_heartbeat_us &&
+         ts_us - last_heartbeat_us >= 10000000ULL);
+
+    if (changed || heartbeat) {
+        fprintf(stderr,
+                "direct111: PHASE=DISPLAYABLE3_OWNERSHIP ts_ms=%llu "
+                "reason=%s backend_ready=%d native_present=%d "
+                "native=0x%lx kd=%d displayable=%d "
+                "visible_valid=%d visible=%d manager_valid=%d manager='%s' "
+                "first_present=%d presented=%lu gen=%u seq=%u "
+                "h264_packets=%u decoded_frames=%u observe_only=1\n",
+                ts_ms, changed ? "change" : "heartbeat",
+                state.backend_ready ? 1 : 0,
+                state.native_window_present ? 1 : 0,
+                state.native_window_value,
+                state.kd_window,
+                state.displayable_id,
+                state.visible_valid ? 1 : 0,
+                state.visible,
+                state.manager_valid ? 1 : 0,
+                manager,
+                display.first_frame_presented() ? 1 : 0,
+                display.frame_count(),
+                (unsigned)generation,
+                (unsigned)sequence,
+                (unsigned)h264_packets,
+                (unsigned)decoded_frames);
+        last_heartbeat_us = ts_us;
+    }
+
+    have_previous = 1;
+    last_backend_ready = state.backend_ready ? 1 : 0;
+    last_native_present = state.native_window_present ? 1 : 0;
+    last_visible_valid = state.visible_valid ? 1 : 0;
+    last_visible = state.visible;
+    last_manager_valid = state.manager_valid ? 1 : 0;
+    last_native_window = state.native_window_value;
+    last_kd_window = state.kd_window;
+    strncpy(last_manager, manager, sizeof(last_manager) - 1u);
+    last_manager[sizeof(last_manager) - 1u] = 0;
 }
 
 static bool env_truth(const char *name) {
@@ -76,6 +255,223 @@ static void copy_line(char *dst, size_t cap, const char *src) {
     strncpy(dst, src, cap - 1u);
     dst[cap - 1u] = 0;
     strip_eol(dst);
+}
+
+struct OemMapPlacement {
+    int dx;
+    int dy;
+    char view[16];
+    char layout[128];
+    bool state_complete;
+    bool recognized;
+};
+
+static bool state_kv_text(const char *line, const char *key,
+                          char *out, size_t cap) {
+    const size_t n = key ? strlen(key) : 0u;
+    if (!line || !key || !n || !out || !cap) return false;
+    if (strncmp(line, key, n) != 0 || line[n] != '=') return false;
+    copy_line(out, cap, line + n + 1u);
+    return true;
+}
+
+static bool state_kv_int(const char *line, const char *key, int *out) {
+    const size_t n = key ? strlen(key) : 0u;
+    char *end = 0;
+    long v;
+    if (!line || !key || !n || !out) return false;
+    if (strncmp(line, key, n) != 0 || line[n] != '=') return false;
+    v = strtol(line + n + 1u, &end, 10);
+    if (end == line + n + 1u || v < -8192L || v > 8192L) return false;
+    *out = (int)v;
+    return true;
+}
+
+/*
+ * Live OEM map-plane placement.
+ *
+ * The stock B9Sport SMALL stage translates map planes 33/58 by (-476,0).
+ * V3.1 keeps the decoded 1440x542 map canvas at 1:1 scale and projects it into
+ * the 1440x455 displayable3 viewport.  The extra 87 vertical pixels are clipped
+ * naturally by GLES instead of compressing 542 rows into 455 rows.
+ *
+ * CarPlay safeArea remains OEM map/source-local and moves with the full map
+ * plane. For Sport SMALL, source-safe x=490 plus renderer dx=-476 yields
+ * physical x=14; do not compensate the safeArea back toward the center.
+ *
+ * The OEM terminal-space Y=26 is map-plane placement metadata.  displayable3
+ * already represents that map plane, so Y=26 must not be applied again inside
+ * this renderer and is not interpreted as a source crop.
+ */
+static OemMapPlacement load_session_map_placement() {
+    OemMapPlacement p;
+    memset(&p, 0, sizeof(p));
+    copy_line(p.view, sizeof(p.view), "UNKNOWN");
+    copy_line(p.layout, sizeof(p.layout), "UNKNOWN");
+
+    FILE *f = fopen("/tmp/mmi-mirror-hmi.state", "r");
+    if (!f) return p;
+
+    char line[256];
+    int small_dx = 0, small_dy = 0;
+    bool have_view = false, have_layout = false;
+    bool have_dx = false, have_dy = false;
+
+    while (fgets(line, sizeof(line), f)) {
+        strip_eol(line);
+        if (state_kv_text(line, "view", p.view, sizeof(p.view)))
+            have_view = true;
+        else if (state_kv_text(line, "layout_name", p.layout, sizeof(p.layout)))
+            have_layout = true;
+        else if (state_kv_int(line, "small_stage_dx", &small_dx))
+            have_dx = true;
+        else if (state_kv_int(line, "small_stage_dy", &small_dy))
+            have_dy = true;
+    }
+    fclose(f);
+
+    p.state_complete = have_view && have_layout;
+    if (!p.state_complete)
+        return p;
+    if (!strstr(p.layout, "LayoutMIB2HighB9"))
+        return p;
+
+    if (strcmp(p.view, "FULL") == 0) {
+        p.dx = 0;
+        p.dy = 0;
+        p.recognized = true;
+        return p;
+    }
+
+    if (strcmp(p.view, "SMALL") != 0)
+        return p;
+
+    if (strstr(p.layout, "LayoutMIB2HighB9Sport")) {
+        if (!have_dx) small_dx = -476;
+        if (!have_dy) small_dy = 0;
+    }
+
+    /*
+     * Require at least partial overlap with the 1440x455 viewport.  This keeps
+     * a corrupt HMI state from moving the whole surface off-screen.
+     */
+    if (small_dx <= -1440 || small_dx >= 1440 ||
+        small_dy <= -455 || small_dy >= 455) {
+        fprintf(stderr,
+                "direct111: WARN PHASE=OEM_MAP_PLACEMENT_INVALID "
+                "view=%s layout=%s dx=%d dy=%d fallback=fullscreen\n",
+                p.view, p.layout, small_dx, small_dy);
+        return p;
+    }
+
+    p.dx = small_dx;
+    p.dy = small_dy;
+    p.recognized = true;
+    return p;
+}
+
+static bool same_map_placement(const OemMapPlacement &a,
+                               const OemMapPlacement &b) {
+    return a.dx == b.dx && a.dy == b.dy &&
+           a.recognized == b.recognized &&
+           strcmp(a.view, b.view) == 0 &&
+           strcmp(a.layout, b.layout) == 0;
+}
+
+static bool reconcile_oem_map_placement(ClusterVideoDisplay &display,
+                                        const char *reason,
+                                        bool redraw_last_frame) {
+    static bool have_previous = false;
+    static bool transient_gap_reported = false;
+    static OemMapPlacement previous;
+
+    const OemMapPlacement p = load_session_map_placement();
+
+    /*
+     * Java replaces /tmp/mmi-mirror-hmi.state through a temp file.  There is a
+     * very small delete/rename (or copy fallback) interval in which the reader
+     * can observe no file or an incomplete file.  Once a valid placement has
+     * been applied, keep it through that transient gap instead of flashing back
+     * to fullscreen for one 50 ms poll.
+     */
+    if (have_previous && !p.state_complete) {
+        if (!transient_gap_reported) {
+            fprintf(stderr,
+                    "direct111: PHASE=OEM_MAP_PLACEMENT_STATE_GAP "
+                    "reason=%s action=retain_previous "
+                    "previous_view=%s previous_layout=%s "
+                    "renderer_offset=%d,%d\n",
+                    reason ? reason : "poll",
+                    previous.view, previous.layout,
+                    previous.dx, previous.dy);
+            transient_gap_reported = true;
+        }
+        return false;
+    }
+    if (p.state_complete)
+        transient_gap_reported = false;
+
+    if (have_previous && same_map_placement(previous, p))
+        return false;
+
+    bool applied = false;
+    if (!p.recognized) {
+        (void)display.set_destination_rect(0, 0, 1440, 542);
+        fprintf(stderr,
+                "direct111: PHASE=OEM_MAP_PLACEMENT "
+                "reason=%s mode=fallback-map-plane renderer_offset=0,0 "
+                "source_canvas=1440x542 sink_viewport=1440x455 "
+                "destination_size=1440x542 geometry_policy=OEM_MAP_PLANE_1TO1_CLIP_V31 "
+                "renderer_scale=0 renderer_scale_y=1.000 natural_clip=1 "
+                "clip_bottom=87 live_switch=1\n",
+                reason ? reason : "poll");
+        applied = true;
+    } else if (display.set_destination_rect(p.dx, p.dy, 1440, 542)) {
+        fprintf(stderr,
+                "direct111: PHASE=OEM_MAP_PLACEMENT "
+                "reason=%s mode=%s layout=%s renderer_offset=%d,%d "
+                "source_canvas=1440x542 sink_viewport=1440x455 "
+                "destination_size=1440x542 geometry_policy=OEM_MAP_PLANE_1TO1_CLIP_V31 "
+                "renderer_scale=0 renderer_scale_y=1.000 natural_clip=1 "
+                "clip_bottom=87 live_switch=1\n",
+                reason ? reason : "poll", p.view, p.layout, p.dx, p.dy);
+        fprintf(stderr,
+                "direct111: PHASE=OEM_GEOMETRY_V31 "
+                "policy=ONE_TO_ONE_VIEWPORT_CLIP source_canvas=1440x542 "
+                "sink_plane=1440x455 map_plane_terminal_y=26 "
+                "map_plane_terminal_y_policy=metadata_only_not_renderer_offset "
+                "safearea_space=MAP_LOCAL_UNSCALED renderer_offset=%d,%d\n",
+                p.dx, p.dy);
+        applied = true;
+    } else {
+        display.set_fullscreen_destination();
+        fprintf(stderr,
+                "direct111: WARN PHASE=OEM_MAP_PLACEMENT "
+                "reason=%s mode=%s layout=%s requested_offset=%d,%d "
+                "apply_failed=1 fallback=fullscreen renderer_scale=0 "
+                "live_switch=1\n",
+                reason ? reason : "poll", p.view, p.layout, p.dx, p.dy);
+        applied = true;
+    }
+
+    previous = p;
+    have_previous = true;
+
+    /*
+     * A layout change must be visible even while the decoded producer is
+     * temporarily idle. Re-draw the already-uploaded texture at the new
+     * destination immediately; the next fresh frame continues normally.
+     */
+    if (applied && redraw_last_frame && display.first_frame_presented()) {
+        display.refresh();
+        fprintf(stderr,
+                "direct111: PHASE=OEM_MAP_RERENDER reason=%s "
+                "view=%s layout=%s renderer_offset=%d,%d "
+                "last_frame_redrawn=1\n",
+                reason ? reason : "poll",
+                p.view, p.layout, p.dx, p.dy);
+    }
+    return applied;
 }
 
 static void load_consumed_gate(char *out, size_t cap) {
@@ -228,6 +624,7 @@ static void marker(bool on, const char *source, const char *mode) {
     if (!on) {
         unlink(ready);
         unlink(base);
+        unlink(displayable_state_path());
         return;
     }
 
@@ -489,7 +886,7 @@ int main(int argc, char **argv) {
         source.shutdown();
         return 3;
     }
-    display.set_fullscreen_destination();
+    (void)reconcile_oem_map_placement(display, "startup", false);
 
     if (!display.present_frame(frame)) {
         fprintf(stderr,
@@ -509,18 +906,31 @@ int main(int argc, char **argv) {
 
     marker(true, "private111-decoded-shm", "direct-display");
     if (!activate_context80()) {
+        publish_displayable_state(display, &source,
+                                  "ctx80-activate-failed");
         marker(false, 0, 0);
         display.shutdown();
         source.shutdown();
         return 5;
     }
 
+    /*
+     * Keep observer I/O completely off the first-present -> Context80 critical
+     * path.  Normal startup acquires the proven Java context first, then takes
+     * the initial read-only displayable3 snapshot.
+     */
+    publish_displayable_state(display, &source, "ctx80-active");
+
     fprintf(stderr,
             "direct111: PHASE=DIRECT111_ACTIVE "
             "target_pipeline=private111->H264_TAP->decoder->displayable3->Context80 "
             "decoder_backend=stock-omx-tap h264_tap_independent=1 "
-            "same_session_recovery=%d window58_readback=0 target_fps=%u\n",
-            recovered_current_session ? 1 : 0, kTargetFps);
+            "same_session_recovery=%d window58_readback=0 "
+            "present_policy=source-driven no_success_sleep=1 "
+            "oem_map_placement=live-hmi-state "
+            "no_new_frame_poll_us=%u stall_report_after_ms=%u\n",
+            recovered_current_session ? 1 : 0,
+            kNoFramePollUs, kDecodedStallReportUs / 1000u);
 
     unsigned failures = 0;
     bool in_stall = false;
@@ -528,11 +938,23 @@ int main(int argc, char **argv) {
     unsigned long source_frames = 1;
     unsigned long stats_presented_base = display.frame_count();
     unsigned long long stats_start = now_us();
-    const unsigned long long frame_period_us =
-        1000000ULL / (unsigned long long)kTargetFps;
+    unsigned long long next_ownership_probe_us = now_us() + 500000ULL;
+    unsigned long long next_layout_probe_us = now_us() + 50000ULL;
 
     while (!g_stop) {
         const unsigned long long frame_start = now_us();
+
+        if (!next_layout_probe_us ||
+            (frame_start && frame_start >= next_layout_probe_us)) {
+            (void)reconcile_oem_map_placement(
+                display, "hmi-state-change", true);
+            next_layout_probe_us = frame_start + 50000ULL;
+        }
+        if (!next_ownership_probe_us ||
+            (frame_start && frame_start >= next_ownership_probe_us)) {
+            publish_displayable_state(display, &source, "periodic");
+            next_ownership_probe_us = frame_start + 500000ULL;
+        }
 
         if (source.read_frame(&frame)) {
             if (in_stall) {
@@ -560,34 +982,47 @@ int main(int argc, char **argv) {
             }
         } else {
             ++failures;
-            if (!in_stall) {
+            const unsigned long long idle_now = now_us();
+            if (!stall_start_us)
+                stall_start_us = idle_now;
+
+            const unsigned long long idle_us =
+                (idle_now && stall_start_us && idle_now >= stall_start_us)
+                    ? idle_now - stall_start_us : 0;
+
+            /*
+             * Source-driven polling normally sees several "no new sequence"
+             * iterations between ~30 fps producer frames.  Treat those as
+             * expected idle time, not decoder stalls.
+             */
+            if (!in_stall && idle_us >= kDecodedStallReportUs) {
                 in_stall = true;
-                stall_start_us = now_us();
                 fprintf(stderr,
                         "direct111: PHASE=DECODED_SOURCE_STALL "
-                        "freeze_last_frame=1 failures=%u h264_packets=%u "
-                        "decoded_frames=%u generation=%u\n",
-                        failures, (unsigned)source.h264_packets(),
+                        "freeze_last_frame=1 duration_ms=%llu failures=%u "
+                        "h264_packets=%u decoded_frames=%u generation=%u "
+                        "poll_us=%u report_after_ms=%u\n",
+                        idle_us / 1000ULL, failures,
+                        (unsigned)source.h264_packets(),
                         (unsigned)source.decoded_frames(),
-                        (unsigned)source.generation());
-            } else if ((failures % 250u) == 0u) {
-                const unsigned long long now = now_us();
-                const unsigned long long stall_ms =
-                    (now && stall_start_us && now >= stall_start_us)
-                        ? (now - stall_start_us) / 1000ULL : 0;
+                        (unsigned)source.generation(),
+                        kNoFramePollUs,
+                        kDecodedStallReportUs / 1000u);
+            } else if (in_stall &&
+                       (failures % kDecodedStallHeartbeatPolls) == 0u) {
                 fprintf(stderr,
                         "direct111: PHASE=DECODED_SOURCE_STALL "
                         "freeze_last_frame=1 duration_ms=%llu failures=%u "
                         "h264_packets=%u decoded_frames=%u generation=%u\n",
-                        stall_ms, failures,
+                        idle_us / 1000ULL, failures,
                         (unsigned)source.h264_packets(),
                         (unsigned)source.decoded_frames(),
                         (unsigned)source.generation());
             }
-            /* No fixed ~3s auto-exit: keep freezing the last frame and let the
-             * stop script / signal own teardown. Short decoded gaps are normal
-             * during nav-map / phone / OMX scheduling jitter. */
-            usleep(20000);
+
+            /* No fixed ~3s auto-exit: freeze the last frame and let the
+             * stop script / signal own teardown. */
+            usleep(kNoFramePollUs);
             continue;
         }
 
@@ -608,7 +1043,8 @@ int main(int argc, char **argv) {
                     "h264_ready=%d h264_packets=%u h264_bytes=%u "
                     "decoded_frames=%u source_frames=%lu "
                     "presented_frames=%lu present_fps=%lu.%02lu "
-                    "displayable=3 context=80 window58_readback=0\n",
+                    "displayable=3 context=80 window58_readback=0 "
+                    "present_policy=source-driven no_success_sleep=1\n",
                     (unsigned)source.generation(),
                     source.h264_ready() ? 1 : 0,
                     (unsigned)source.h264_packets(),
@@ -621,12 +1057,15 @@ int main(int argc, char **argv) {
             stats_start = now;
         }
 
-        const unsigned long long spent = now_us() - frame_start;
-        if (spent < frame_period_us)
-            usleep((unsigned int)(frame_period_us - spent));
+        /*
+         * Source-driven presentation: successful fresh frames are presented
+         * immediately.  The only software delay is the short no-new-frame poll
+         * above, so a second relative 33 ms limiter cannot halve the sink rate.
+         */
     }
 
     const unsigned long presented_frames = display.frame_count();
+    publish_displayable_state(display, &source, "pre-shutdown");
     marker(false, 0, 0);
     restore_context80();
     display.shutdown();

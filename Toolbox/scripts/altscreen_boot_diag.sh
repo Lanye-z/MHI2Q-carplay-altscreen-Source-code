@@ -25,7 +25,6 @@ if [ "${ALTSCREEN_CHAIN_TESTING:-0}" = 1 ]; then
     ITERATIONS=${ALTS_DIAG_ITERATIONS:-5}
     PROBE_SECONDS=${ALTS_DIAG_PROBE_SECONDS:-1}
 fi
-BASE="$ROOT/tmp/MMI-Cockpit-Carplay/diagnostics"
 ENABLED="$ROOT/mnt/app/root/carplay-altscreen/state/diagnostics.enabled"
 [ -f "$ENABLED" ] || exit 0
 # Probe execution, not just command presence: mounted commands can still lack
@@ -41,36 +40,39 @@ while ! (date +%Y >/dev/null && printf '%s' ready | wc -c >/dev/null &&
 done
 select_hook_source() {
     for candidate in \
+        "$ROOT/tmp/altscreen_hook.log" \
         "$ROOT/tmp/MMI-Cockpit-Carplay/altscreen_hook.log" \
-        "$ROOT/tmp/MMI-Cockpit-Carplay.altscreen_hook.log" \
-        "$ROOT/tmp/altscreen_hook.log"; do
+        "$ROOT/tmp/MMI-Cockpit-Carplay.altscreen_hook.log"; do
         [ -f "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
     done
-    printf '%s\n' "$ROOT/tmp/MMI-Cockpit-Carplay/altscreen_hook.log"
+    printf '%s\n' "$ROOT/tmp/altscreen_hook.log"
 }
 select_boot_entry_source() {
     for candidate in \
+        "$ROOT/tmp/altscreen_boot_entry.log" \
         "$ROOT/tmp/MMI-Cockpit-Carplay/boot_entry.log" \
         "$ROOT/tmp/MMI-Cockpit-Carplay.boot_entry.log"; do
         [ -f "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
     done
-    printf '%s\n' "$ROOT/tmp/MMI-Cockpit-Carplay/boot_entry.log"
+    printf '%s\n' "$ROOT/tmp/altscreen_boot_entry.log"
 }
 select_mirror_log_source() {
     for candidate in \
+        "$ROOT/tmp/altscreen_mirror.log" \
         "$ROOT/tmp/MMI-Cockpit-Carplay/mirror/mirror.log" \
         "$ROOT/tmp/MMI-Cockpit-Carplay.mirror.log"; do
         [ -f "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
     done
-    printf '%s\n' "$ROOT/tmp/MMI-Cockpit-Carplay/mirror/mirror.log"
+    printf '%s\n' "$ROOT/tmp/altscreen_mirror.log"
 }
 select_mirror_autostart_source() {
     for candidate in \
+        "$ROOT/tmp/altscreen_autostart.log" \
         "$ROOT/tmp/MMI-Cockpit-Carplay/mirror/autostart.log" \
         "$ROOT/tmp/MMI-Cockpit-Carplay.mirror.autostart.log"; do
         [ -f "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
     done
-    printf '%s\n' "$ROOT/tmp/MMI-Cockpit-Carplay/mirror/autostart.log"
+    printf '%s\n' "$ROOT/tmp/altscreen_autostart.log"
 }
 select_controller_log_source() {
     for candidate in \
@@ -81,11 +83,45 @@ select_controller_log_source() {
     # ClusterStateController writes this exact path on the vehicle.
     printf '%s\n' "$ROOT/tmp/mmi-mirror-controller.log"
 }
+select_wheel_log_source() {
+    printf '%s\n' "$ROOT/tmp/mmi-mirror-wheel-zoom.log"
+}
+select_wheel_events_source() {
+    printf '%s\n' "$ROOT/tmp/mmi-mirror-wheel-zoom.events"
+}
+select_carplay_hook_log_source() {
+    printf '%s\n' "$ROOT/tmp/carplay_hook.log"
+}
+select_oem_geometry_history_source() {
+    printf '%s\n' "$ROOT/tmp/carplay-oem-geometry.log"
+}
+select_oem_displaymanager_api_source() {
+    printf '%s\n' "$ROOT/tmp/carplay-oem-displaymanager-read-api.log"
+}
 flat_plain_append() {
     cat "$1" >> "$2"
 }
+flat_read_cursor() {
+    flat_cursor_path=$1
+    [ -f "$flat_cursor_path" ] || { echo 0; return 0; }
+    flat_cursor_value=$(cat "$flat_cursor_path" 2>/dev/null || true)
+    case "$flat_cursor_value" in
+        ''|*[!0-9]*) echo 0 ;;
+        *) echo "$flat_cursor_value" ;;
+    esac
+}
+flat_file_signature() {
+    flat_sig_path=$1
+    [ -f "$flat_sig_path" ] || { echo absent; return 0; }
+    flat_sig_line=$(cksum "$flat_sig_path" 2>/dev/null) || { echo unreadable; return 0; }
+    set -- $flat_sig_line
+    [ "$#" -ge 2 ] || { echo unreadable; return 0; }
+    printf '%s:%s\n' "$1" "$2"
+}
 flat_capture_delta() {
     flat_source=$1; flat_offset=$2; flat_target=$3; flat_temp=$4
+    flat_cursor_path=${5:-}
+    flat_initial_offset=$flat_offset
     [ -f "$flat_source" ] || { echo "$flat_offset"; return 0; }
     flat_size=$(wc -c < "$flat_source")
     [ "$flat_size" -ge "$flat_offset" ] || flat_offset=0
@@ -93,6 +129,12 @@ flat_capture_delta() {
         tail -c "+$((flat_offset + 1))" "$flat_source" > "$flat_temp" 2>/dev/null || { echo "$flat_offset"; return 0; }
         if flat_plain_append "$flat_temp" "$flat_target" 2>/dev/null; then flat_offset=$flat_size; fi
         rm -f "$flat_temp"
+    fi
+    if [ -n "$flat_cursor_path" ] && [ "$flat_offset" != "$flat_initial_offset" ]; then
+        flat_cursor_tmp="${flat_cursor_path}.new.$$"
+        if printf '%s\n' "$flat_offset" > "$flat_cursor_tmp" 2>/dev/null; then
+            mv "$flat_cursor_tmp" "$flat_cursor_path" 2>/dev/null || rm -f "$flat_cursor_tmp"
+        fi
     fi
     echo "$flat_offset"
 }
@@ -127,20 +169,82 @@ run_flat_plaintext() {
     FLAT_DEST="$VOLUME/MMI-Cockpit-Carplay/logs/boots/$BOOT_ID"
     FLAT_PREFIX="$ROOT/tmp/altscreen_diag_$$"
     ensure_dirs "$FLAT_DEST/streams" 2>/dev/null || return 0
-    flat_log_event "BOOT_BEGIN storage=FLAT_TMP_PLAINTEXT_SD volume=$VOLUME"
+
+    # Cursor state is deliberately flat and volatile. It survives only an
+    # observer-process restart in the current boot, so a real reboot starts at
+    # offset zero even when the vehicle clock is still 1970 and PIDs repeat.
+    # This also avoids periodic cursor metadata writes to the SD card.
+    CURSOR_PREFIX="$ROOT/tmp/altscreen_diag_cursor"
+
+    # START/controller wrappers may have emitted a flat /tmp journal before the
+    # SD card became writable. Promote those breadcrumbs now, without requiring
+    # any volatile directory tree.
+    operation_dest="$VOLUME/MMI-Cockpit-Carplay/logs/operations"
+    if ensure_dirs "$operation_dest" 2>/dev/null; then
+        for operation in "$ROOT/tmp"/altscreen_start_*.log "$ROOT/tmp"/altscreen_operation_*.log; do
+            [ -f "$operation" ] || continue
+            operation_name=${operation##*/}
+            if cp "$operation" "$operation_dest/$operation_name.new" 2>/dev/null &&
+               mv "$operation_dest/$operation_name.new" "$operation_dest/$operation_name" 2>/dev/null; then
+                rm -f "$operation" 2>/dev/null || true
+            else
+                rm -f "$operation_dest/$operation_name.new" 2>/dev/null || true
+            fi
+        done
+    fi
+    flat_log_event "BOOT_BEGIN storage=FLAT_TMP_PLAINTEXT_SD volume=$VOLUME cursor_scope=VOLATILE_BOOT_FLAT cursor_resume=1"
     flat_log_event "SD_READY volume=$VOLUME"
     flat_system="${FLAT_PREFIX}_system.raw"; flat_slog_pid=""
     if command -v sloginfo >/dev/null 2>&1; then
         (exec sloginfo -w -t) > "$flat_system" 2>&1 & flat_slog_pid=$!
     fi
-    flat_hook_offset=0; flat_dio_offset=0; flat_entry_offset=0; flat_mirror_offset=0; flat_mirror_autostart_offset=0; flat_controller_offset=0; flat_system_offset=0; flat_tick=0
+    flat_hook_offset=$(flat_read_cursor "${CURSOR_PREFIX}_hook.offset")
+    flat_dio_offset=$(flat_read_cursor "${CURSOR_PREFIX}_dio.offset")
+    flat_entry_offset=$(flat_read_cursor "${CURSOR_PREFIX}_boot-entry.offset")
+    flat_mirror_offset=$(flat_read_cursor "${CURSOR_PREFIX}_mirror.offset")
+    flat_mirror_autostart_offset=$(flat_read_cursor "${CURSOR_PREFIX}_mirror-autostart.offset")
+    flat_controller_offset=$(flat_read_cursor "${CURSOR_PREFIX}_controller.offset")
+    flat_wheel_log_offset=$(flat_read_cursor "${CURSOR_PREFIX}_wheel-log.offset")
+    flat_carplay_hook_offset=$(flat_read_cursor "${CURSOR_PREFIX}_carplay-hook.offset")
+    flat_oem_geometry_offset=$(flat_read_cursor "${CURSOR_PREFIX}_oem-geometry.offset")
+    flat_oem_api_offset=$(flat_read_cursor "${CURSOR_PREFIX}_oem-api.offset")
+    flat_wheel_events_sig=absent
+    flat_system_offset=0
+    flat_tick=0
     while [ -f "$ENABLED" ]; do
-        flat_hook_offset=$(flat_capture_delta "$(select_hook_source)" "$flat_hook_offset" "$FLAT_DEST/streams/hook_tmp.log" "${FLAT_PREFIX}_hook.chunk")
-        flat_dio_offset=$(flat_capture_delta "$ROOT/tmp/CinemoDioManager.log" "$flat_dio_offset" "$FLAT_DEST/streams/dio_tmp.log" "${FLAT_PREFIX}_dio.chunk")
-        flat_entry_offset=$(flat_capture_delta "$(select_boot_entry_source)" "$flat_entry_offset" "$FLAT_DEST/streams/boot_entry.log" "${FLAT_PREFIX}_entry.chunk")
-        flat_mirror_offset=$(flat_capture_delta "$(select_mirror_log_source)" "$flat_mirror_offset" "$FLAT_DEST/streams/mirror.log" "${FLAT_PREFIX}_mirror.chunk")
-        flat_mirror_autostart_offset=$(flat_capture_delta "$(select_mirror_autostart_source)" "$flat_mirror_autostart_offset" "$FLAT_DEST/streams/mirror_autostart.log" "${FLAT_PREFIX}_mirror_autostart.chunk")
-        flat_controller_offset=$(flat_capture_delta "$(select_controller_log_source)" "$flat_controller_offset" "$FLAT_DEST/streams/mmi-mirror-controller.log" "${FLAT_PREFIX}_controller.chunk")
+        flat_hook_offset=$(flat_capture_delta "$(select_hook_source)" "$flat_hook_offset" "$FLAT_DEST/streams/hook_tmp.log" "${FLAT_PREFIX}_hook.chunk" "${CURSOR_PREFIX}_hook.offset")
+        flat_dio_offset=$(flat_capture_delta "$ROOT/tmp/CinemoDioManager.log" "$flat_dio_offset" "$FLAT_DEST/streams/dio_tmp.log" "${FLAT_PREFIX}_dio.chunk" "${CURSOR_PREFIX}_dio.offset")
+        flat_entry_offset=$(flat_capture_delta "$(select_boot_entry_source)" "$flat_entry_offset" "$FLAT_DEST/streams/boot_entry.log" "${FLAT_PREFIX}_entry.chunk" "${CURSOR_PREFIX}_boot-entry.offset")
+        flat_mirror_offset=$(flat_capture_delta "$(select_mirror_log_source)" "$flat_mirror_offset" "$FLAT_DEST/streams/mirror.log" "${FLAT_PREFIX}_mirror.chunk" "${CURSOR_PREFIX}_mirror.offset")
+        flat_mirror_autostart_offset=$(flat_capture_delta "$(select_mirror_autostart_source)" "$flat_mirror_autostart_offset" "$FLAT_DEST/streams/mirror_autostart.log" "${FLAT_PREFIX}_mirror_autostart.chunk" "${CURSOR_PREFIX}_mirror-autostart.offset")
+        flat_controller_offset=$(flat_capture_delta "$(select_controller_log_source)" "$flat_controller_offset" "$FLAT_DEST/streams/mmi-mirror-controller.log" "${FLAT_PREFIX}_controller.chunk" "${CURSOR_PREFIX}_controller.offset")
+        flat_wheel_log_offset=$(flat_capture_delta "$(select_wheel_log_source)" "$flat_wheel_log_offset" "$FLAT_DEST/streams/mmi-mirror-wheel-zoom.log" "${FLAT_PREFIX}_wheel_log.chunk" "${CURSOR_PREFIX}_wheel-log.offset")
+        flat_carplay_hook_offset=$(flat_capture_delta "$(select_carplay_hook_log_source)" "$flat_carplay_hook_offset" "$FLAT_DEST/streams/carplay_hook.log" "${FLAT_PREFIX}_carplay_hook.chunk" "${CURSOR_PREFIX}_carplay-hook.offset")
+        flat_oem_geometry_offset=$(flat_capture_delta "$(select_oem_geometry_history_source)" "$flat_oem_geometry_offset" "$FLAT_DEST/streams/carplay-oem-geometry.log" "${FLAT_PREFIX}_oem_geometry.chunk" "${CURSOR_PREFIX}_oem-geometry.offset")
+        flat_oem_api_offset=$(flat_capture_delta "$(select_oem_displaymanager_api_source)" "$flat_oem_api_offset" "$FLAT_DEST/streams/carplay-oem-displaymanager-read-api.log" "${FLAT_PREFIX}_oem_api.chunk" "${CURSOR_PREFIX}_oem-api.offset")
+        wheel_events_source=$(select_wheel_events_source)
+        wheel_events_sig=$(flat_file_signature "$wheel_events_source")
+        if [ "$wheel_events_sig" != "$flat_wheel_events_sig" ]; then
+            if [ -f "$wheel_events_source" ]; then
+                if cp "$wheel_events_source" "$FLAT_DEST/streams/mmi-mirror-wheel-zoom.events.new" 2>/dev/null &&
+                   mv "$FLAT_DEST/streams/mmi-mirror-wheel-zoom.events.new" "$FLAT_DEST/streams/mmi-mirror-wheel-zoom.events" 2>/dev/null; then
+                    flat_wheel_events_sig=$wheel_events_sig
+                else
+                    rm -f "$FLAT_DEST/streams/mmi-mirror-wheel-zoom.events.new" 2>/dev/null || true
+                fi
+            else
+                rm -f "$FLAT_DEST/streams/mmi-mirror-wheel-zoom.events" "$FLAT_DEST/streams/mmi-mirror-wheel-zoom.events.new" 2>/dev/null || true
+                flat_wheel_events_sig=absent
+            fi
+        fi
+        if [ -f "$ROOT/tmp/carplay-oem-geometry.state" ]; then
+            cp "$ROOT/tmp/carplay-oem-geometry.state" "$FLAT_DEST/streams/carplay-oem-geometry.state.new" 2>/dev/null &&
+                mv "$FLAT_DEST/streams/carplay-oem-geometry.state.new" "$FLAT_DEST/streams/carplay-oem-geometry.state" 2>/dev/null || true
+        fi
+        if [ -f "$ROOT/tmp/mmi-mirror-displayable3.state" ]; then
+            cp "$ROOT/tmp/mmi-mirror-displayable3.state" "$FLAT_DEST/streams/mmi-mirror-displayable3.state.new" 2>/dev/null &&
+                mv "$FLAT_DEST/streams/mmi-mirror-displayable3.state.new" "$FLAT_DEST/streams/mmi-mirror-displayable3.state" 2>/dev/null || true
+        fi
         flat_system_offset=$(flat_capture_delta "$flat_system" "$flat_system_offset" "$FLAT_DEST/streams/system.log" "${FLAT_PREFIX}_system.chunk")
         if [ -f "$flat_system" ] && [ "$(wc -c < "$flat_system")" -ge 8388608 ]; then
             flat_log_event "SYSTEM_RAW_TRIM possible_boundary_loss=1 limit_bytes=8388608"
@@ -180,275 +284,41 @@ run_flat_plaintext() {
     return 0
 }
 
-STORAGE_MODE=LOCAL_CACHE; LOCAL_LOCK=0
-if ! ensure_dirs "$BASE/boots" 2>/dev/null; then
-    echo "DIAGNOSTICS_TMP_DIRECTORY_UNAVAILABLE fallback=FLAT_TMP_PLAINTEXT_SD"
-    storage_wait=0
-    while [ -f "$ENABLED" ]; do
-        storage_volume=""
-        if [ "${ALTSCREEN_CHAIN_TESTING:-0}" = 1 ]; then
-            storage_candidate=${ALTSCREEN_CHAIN_VOLUME:-}
-            [ ! -d "$storage_candidate/Toolbox" ] || storage_volume=$storage_candidate
-        else
-            for storage_candidate in /net/mmx/fs/sda0 /net/mmx/fs/sda1 /net/mmx/fs/sdb0 /net/mmx/fs/sdb1 /fs/sda0 /fs/sda1 /fs/sdb0 /fs/sdb1; do
-                if [ -d "$storage_candidate/Toolbox" ] && { [ -d "$storage_candidate/MMI-Cockpit-Carplay/backup/original" ] || [ -d "$storage_candidate/Backup/AltScreenChain/original" ]; }; then
-                    storage_volume=$storage_candidate; break
-                fi
-            done
-        fi
-        if [ -n "$storage_volume" ]; then
-            if [ "${ALTSCREEN_CHAIN_TESTING:-0}" != 1 ]; then
-                (exec mount -uw "$storage_volume") >/dev/null 2>&1 &
-                storage_mount_pid=$!
-                (sleep 5; kill -KILL "$storage_mount_pid" 2>/dev/null || true) & storage_timer=$!
-                wait "$storage_mount_pid" || true; kill "$storage_timer" 2>/dev/null || true; wait "$storage_timer" 2>/dev/null || true
-            fi
-            if ensure_dirs "$storage_volume/MMI-Cockpit-Carplay/logs/boots" 2>/dev/null; then
-                run_flat_plaintext "$storage_volume"
-                exit 0
-            fi
-        fi
-        echo "SD_WAIT storage=FLAT_TMP_PLAINTEXT_SD attempt=$storage_wait"
-        storage_wait=$((storage_wait + 1))
-        if [ "$ITERATIONS" -gt 0 ] && [ "$storage_wait" -ge "$ITERATIONS" ]; then exit 0; fi
-        sleep "$INTERVAL"
-    done
-    exit 0
-fi
-# A mkdir guard prevents duplicate observers without trusting/reusing stale PIDs.
-# Never persist this guard on SD: it would survive a reboot and suppress logging.
-if [ "$STORAGE_MODE" = LOCAL_CACHE ]; then
-    mkdir "$BASE/observer.lock" 2>/dev/null || { echo "DIAGNOSTICS_ALREADY_RUNNING_OR_STALE_LOCK path=$BASE/observer.lock"; exit 0; }
-    LOCAL_LOCK=1
-fi
-BOOT_ID="boot_$(date +%Y%m%d_%H%M%S)_$$"
-SPOOL="$BASE/boots/$BOOT_ID"
-ensure_dirs "$SPOOL" || { [ "$LOCAL_LOCK" != 1 ] || rmdir "$BASE/observer.lock"; exit 1; }
-exec >> "$SPOOL/observer_console.log" 2>&1
-VOLUME=""; PREVIOUS=""; TICK=0; LIVE_PID=""
-event() {
-    printf '%s tick=%s %s\n' "$(date +%Y%m%d_%H%M%S)" "$TICK" "$*" >> "$SPOOL/boot.log"
-    # Bound the event history even if the SD keeps disconnecting all day.
-    if [ "$(wc -c < "$SPOOL/boot.log")" -gt 131072 ]; then
-        tail -c 65536 "$SPOOL/boot.log" > "$SPOOL/boot.trim"
-        mv "$SPOOL/boot.trim" "$SPOOL/boot.log"
-    fi
-}
-probe() (
-    output=$1; shift
-    if ! command -v "$1" >/dev/null 2>&1; then
-        echo "MISSING_COMMAND $1" > "$output"; exit 0
-    fi
-    (exec "$@") > "$output.raw" 2>&1 &
-    child=$!
-    (
-        sleep "$PROBE_SECONDS"
-        if kill -0 "$child" 2>/dev/null; then
-            echo "PROBE_TIMEOUT command=$*" >> "$output.raw"
-            kill -KILL "$child" 2>/dev/null || true
-        fi
-    ) &
-    timer=$!
-    wait "$child"; result=$?
-    kill "$timer" 2>/dev/null || true
-    wait "$timer" 2>/dev/null || true
-    tail -c 1048576 "$output.raw" > "$output"
-    echo "PROBE_RESULT status=$result command=$*" >> "$output"
-    rm -f "$output.raw"
-)
-discover() {
-    VOLUME=""
-    if [ "${ALTSCREEN_CHAIN_TESTING:-0}" = 1 ]; then
-        candidate=${ALTSCREEN_CHAIN_VOLUME:-}
-        [ -d "$candidate/Toolbox" ] && VOLUME=$candidate
-    else
-        for candidate in /net/mmx/fs/sda0 /net/mmx/fs/sda1 /net/mmx/fs/sdb0 /net/mmx/fs/sdb1 /fs/sda0 /fs/sda1 /fs/sdb0 /fs/sdb1; do
-            # Only write to a test card with an AltScreen installation/backup.
-            if [ -d "$candidate/Toolbox" ] && { [ -d "$candidate/MMI-Cockpit-Carplay/backup/original" ] || [ -d "$candidate/Backup/AltScreenChain/original" ]; }; then
-                VOLUME=$candidate; break
-            fi
-        done
-    fi
-    return 0
-}
-snapshot() {
-    event "SNAPSHOT_BEGIN"
-    probe "$SPOOL/processes.txt" pidin arguments
-    probe "$SPOOL/dio_libraries.txt" pidin -p dio_manager libs
-    probe "$SPOOL/dio_mappings.txt" pidin -p dio_manager mapinfo
-    probe "$SPOOL/integrator_libraries.txt" pidin -p smartphone_integrator libs
-    probe "$SPOOL/mounts.txt" mount
-    probe "$SPOOL/network.txt" netstat -an
-    if [ -x "$ROOT/armle/sbin/pfctl" ]; then
-        probe "$SPOOL/pf_rules.txt" "$ROOT/armle/sbin/pfctl" -sr
-    else
-        probe "$SPOOL/pf_rules.txt" pfctl -sr
-    fi
-    probe "$SPOOL/system_slog.txt" sloginfo
-    {
-        date
-        echo "VOLUME=$VOLUME"
-        ls -la "$ROOT/mnt/app/root/carplay-altscreen/lib"
-        ls -la "$ROOT/mnt/app/root/carplay-altscreen/bin/mirror"
-        ls -la "$ROOT/mnt/app/root/carplay-altscreen/state"
-        for lib in libairplay.so libairplax.so libNmeBaseClasses.so; do
-            cksum "$ROOT/mnt/app/root/carplay-altscreen/lib/$lib"
-        done
-        if [ -n "$VOLUME" ]; then
-            ls -la "$VOLUME/MMI-Cockpit-Carplay/state"
-            cat "$VOLUME/MMI-Cockpit-Carplay/state/run_id" 2>/dev/null
-        fi
-    } > "$SPOOL/file_state.txt" 2>&1
-    for name in smartphone_integrator dio_manager; do
-        source="$ROOT/mnt/system/etc/eso/production/$name.json"
-        if [ -f "$source" ]; then cp "$source" "$SPOOL/$name.json"; fi
-    done
-    event "SNAPSHOT_END"
-    for source in "$SPOOL/processes.txt" "$SPOOL/dio_libraries.txt" "$SPOOL/dio_mappings.txt" "$SPOOL/integrator_libraries.txt" "$SPOOL/network.txt" "$SPOOL/pf_rules.txt" "$SPOOL/file_state.txt"; do
-        {
-            printf '\nSTATE_OBSERVATION time=%s tick=%s source=%s\n' "$(date +%Y%m%d_%H%M%S)" "$TICK" "${source##*/}"
-            cat "$source"
-        } >> "$SPOOL/state_history.log"
-    done
-    # Preserve the first boot observation even after dio starts or restarts.
-    if [ ! -f "$SPOOL/initial_snapshot.complete" ]; then
-        for source in "$SPOOL"/*.txt "$SPOOL"/*.json; do
-            [ -f "$source" ] || continue
-            cp "$source" "$SPOOL/initial_${source##*/}" || return 1
-        done
-        touch "$SPOOL/initial_snapshot.complete"
-    fi
-}
-runtime_logs() {
-    entry_source=$(select_boot_entry_source)
-    if [ -f "$entry_source" ]; then
-        tail -c 131072 "$entry_source" > "$SPOOL/boot_entry.log"
-    fi
-
-    hook_source=$(select_hook_source)
-    hook_output="$SPOOL/tmp_altscreen_hook.log"
-    if [ -f "$hook_source" ]; then
-        tail -c 1048576 "$hook_source" > "$hook_output.new" && mv "$hook_output.new" "$hook_output"
-    elif [ ! -f "$hook_output" ]; then
-        echo "MISSING $hook_source" > "$hook_output"
-    fi
-
-    dio_source="$ROOT/tmp/CinemoDioManager.log"
-    dio_output="$SPOOL/tmp_CinemoDioManager.log"
-    if [ -f "$dio_source" ]; then
-        tail -c 1048576 "$dio_source" > "$dio_output.new" && mv "$dio_output.new" "$dio_output"
-    elif [ ! -f "$dio_output" ]; then
-        echo "MISSING $dio_source" > "$dio_output"
-    fi
-
-    mirror_source=$(select_mirror_log_source)
-    mirror_output="$SPOOL/tmp_mirror.log"
-    if [ -f "$mirror_source" ]; then
-        tail -c 1048576 "$mirror_source" > "$mirror_output.new" && mv "$mirror_output.new" "$mirror_output"
-    elif [ ! -f "$mirror_output" ]; then
-        echo "MISSING $mirror_source" > "$mirror_output"
-    fi
-
-    mirror_autostart_source=$(select_mirror_autostart_source)
-    mirror_autostart_output="$SPOOL/tmp_mirror_autostart.log"
-    if [ -f "$mirror_autostart_source" ]; then
-        tail -c 1048576 "$mirror_autostart_source" > "$mirror_autostart_output.new" &&
-            mv "$mirror_autostart_output.new" "$mirror_autostart_output"
-    elif [ ! -f "$mirror_autostart_output" ]; then
-        echo "MISSING $mirror_autostart_source" > "$mirror_autostart_output"
-    fi
-
-    controller_source=$(select_controller_log_source)
-    controller_output="$SPOOL/tmp_mmi-mirror-controller.log"
-    if [ -f "$controller_source" ]; then
-        tail -c 1048576 "$controller_source" > "$controller_output.new" &&
-            mv "$controller_output.new" "$controller_output"
-    elif [ ! -f "$controller_output" ]; then
-        echo "MISSING $controller_source" > "$controller_output"
-    fi
-}
-copy_snapshot() {
-    cp "$1" "$2"
-}
-flush_sd() {
-    [ -n "$VOLUME" ] && [ -d "$VOLUME/Toolbox" ] || return 0
-    dest="$VOLUME/MMI-Cockpit-Carplay/logs/boots/$BOOT_ID"
-    if ! ensure_dirs "$dest" 2>/dev/null; then
-        event "SD_WRITE_FAILED volume=$VOLUME"; return 0
-    fi
-    # Publish via temp names so an interrupted copy retains the previous snapshot.
-    for source in "$SPOOL"/*; do
-        [ -f "$source" ] || continue
-        case "$source" in *.raw|*.new) continue ;; esac
-        name=${source##*/}
-        if ! copy_snapshot "$source" "$dest/$name.new" 2>/dev/null ||
-           ! mv "$dest/$name.new" "$dest/$name" 2>/dev/null; then
-            rm -f "$dest/$name.new" 2>/dev/null || true
-            event "SD_WRITE_FAILED file=$name"; return 0
-        fi
-    done
-    # Operations attempted before SD discovery remain recoverable this boot.
-    if [ -d "$BASE/operations" ]; then
-        ensure_dirs "$VOLUME/MMI-Cockpit-Carplay/logs/operations"
-        for source in "$BASE/operations"/*.log; do
-            [ -f "$source" ] || continue
-            name=${source##*/}
-            if copy_snapshot "$source" "$VOLUME/MMI-Cockpit-Carplay/logs/operations/$name.new" 2>/dev/null; then
-                mv "$VOLUME/MMI-Cockpit-Carplay/logs/operations/$name.new" \
-                   "$VOLUME/MMI-Cockpit-Carplay/logs/operations/$name" 2>/dev/null || true
-            else
-                rm -f "$VOLUME/MMI-Cockpit-Carplay/logs/operations/$name.new" 2>/dev/null || true
-            fi
-        done
-    fi
-}
-finish() {
-    trap - 0
-    event "DIAGNOSTICS_STOP"
-    if [ -n "$LIVE_PID" ]; then
-        kill -TERM "$LIVE_PID" 2>/dev/null || true
-        wait "$LIVE_PID" 2>/dev/null || true
-    fi
-    runtime_logs
-    flush_sd
-    # Diagnostics stderr is bounded as well (for example, an SD that fills up).
-    if [ "$(wc -c < "$SPOOL/observer_console.log")" -gt 131072 ]; then
-        tail -c 65536 "$SPOOL/observer_console.log" > "$SPOOL/observer_console.previous.log"
-        : > "$SPOOL/observer_console.log"
-    fi
-    if [ "$LOCAL_LOCK" = 1 ]; then rmdir "$BASE/observer.lock" 2>/dev/null || true; fi
-}
-trap finish 0
-trap 'exit 0' 1 2 15
-event "BOOT_BEGIN pid=$$ script=$0 storage=$STORAGE_MODE"
-if [ -n "${ALTSCREEN_WRAPPER_DIR:-}" ]; then
-    HELPER_DIR=$ALTSCREEN_WRAPPER_DIR
-else
-    HELPER_DIR=${0%/*}
-    [ "$HELPER_DIR" != "$0" ] || HELPER_DIR=.
-fi
-if [ -f "$HELPER_DIR/altscreen_live_diag.sh" ]; then
-    /bin/sh "$HELPER_DIR/altscreen_live_diag.sh" "$SPOOL" "$$" &
-    LIVE_PID=$!
-else event "LIVE_HELPER_MISSING script=$HELPER_DIR/altscreen_live_diag.sh"; fi
+# Flat /tmp contract: diagnostics persist directly to SD and use only
+# process-local flat /tmp scratch (altscreen_diag_$$*). No /tmp directory tree
+# is created, so early boot logging cannot be blocked by QNX mkdir behavior.
+storage_wait=0
 while [ -f "$ENABLED" ]; do
-    discover
-    printf '%s\n' "$VOLUME" > "$SPOOL/volume.path.new"
-    mv "$SPOOL/volume.path.new" "$SPOOL/volume.path"
-    if [ "$VOLUME" != "$PREVIOUS" ] || [ "$TICK" = 0 ]; then
-        if [ -n "$VOLUME" ]; then
-            event "SD_READY volume=$VOLUME"
-            if [ "${ALTSCREEN_CHAIN_TESTING:-0}" != 1 ]; then
-                probe "$SPOOL/sd_mount.txt" mount -uw "$VOLUME"
+    storage_volume=""
+    if [ "${ALTSCREEN_CHAIN_TESTING:-0}" = 1 ]; then
+        storage_candidate=${ALTSCREEN_CHAIN_VOLUME:-}
+        [ ! -d "$storage_candidate/Toolbox" ] || storage_volume=$storage_candidate
+    else
+        for storage_candidate in /net/mmx/fs/sda0 /net/mmx/fs/sda1 /net/mmx/fs/sdb0 /net/mmx/fs/sdb1 /fs/sda0 /fs/sda1 /fs/sdb0 /fs/sdb1; do
+            if [ -d "$storage_candidate/Toolbox" ] && { [ -d "$storage_candidate/MMI-Cockpit-Carplay/backup/original" ] || [ -d "$storage_candidate/Backup/AltScreenChain/original" ]; }; then
+                storage_volume=$storage_candidate
+                break
             fi
-        else event "SD_WAIT candidates=8"; fi
-        PREVIOUS=$VOLUME
-        snapshot
-    elif [ "$TICK" -lt 30 ] && [ $((TICK % 3)) = 0 ]; then snapshot
-    elif [ $((TICK % 15)) = 0 ]; then snapshot; fi
-    runtime_logs
-    flush_sd
-    TICK=$((TICK + 1))
-    if [ "$ITERATIONS" -gt 0 ] && [ "$TICK" -ge "$ITERATIONS" ]; then break; fi
+        done
+    fi
+    if [ -n "$storage_volume" ]; then
+        if [ "${ALTSCREEN_CHAIN_TESTING:-0}" != 1 ]; then
+            (exec mount -uw "$storage_volume") >/dev/null 2>&1 &
+            storage_mount_pid=$!
+            (sleep 5; kill -KILL "$storage_mount_pid" 2>/dev/null || true) &
+            storage_timer=$!
+            wait "$storage_mount_pid" || true
+            kill "$storage_timer" 2>/dev/null || true
+            wait "$storage_timer" 2>/dev/null || true
+        fi
+        if ensure_dirs "$storage_volume/MMI-Cockpit-Carplay/logs/boots" 2>/dev/null; then
+            run_flat_plaintext "$storage_volume"
+            exit 0
+        fi
+    fi
+    echo "SD_WAIT storage=FLAT_TMP_PLAINTEXT_SD attempt=$storage_wait"
+    storage_wait=$((storage_wait + 1))
+    if [ "$ITERATIONS" -gt 0 ] && [ "$storage_wait" -ge "$ITERATIONS" ]; then exit 0; fi
     sleep "$INTERVAL"
 done
+exit 0

@@ -46,7 +46,10 @@ const struct anchor kAnchor[] = {
     { NULL, 0u }
 };
 
-#define ALTSCREEN_PROBE_MARKER "/mnt/app/root/hooks/.mibcarplay_fullchain_probe"
+/* Keep this authorization marker under the owned persistent runtime root.
+ * It must stay byte-for-byte aligned with altscreen_chain_test_universal.sh
+ * and the release-binary contract verified by VERIFY-NATIVE-DIRECT-RELEASE.sh. */
+#define ALTSCREEN_PROBE_MARKER "/mnt/app/root/carplay-altscreen/state/fullchain_probe"
 #define AUTH_RUN_ID_MAX 64u
 #ifndef RTLD_NOW
 #define RTLD_NOW 2
@@ -513,7 +516,7 @@ static int read_authorization_run_id(const char *path, char *out, size_t cap,
     return 1;
 }
 
-static int runtime_authorization_match(void) {
+static __attribute__((unused)) int runtime_authorization_match(void) {
     char marker_id[AUTH_RUN_ID_MAX + 1u];
     char state_id[AUTH_RUN_ID_MAX + 1u];
     char state_path[ALTSCREEN_PATH_MAX];
@@ -602,9 +605,14 @@ static int resolve_required_libairplay_symbols(void) {
 }
 
 int p1404_probe_stack(void) {
-    int requested_armed = altscreen_marker_present("ARMED");
-    int requested_mutate = requested_armed && altscreen_marker_present("ARMED_MUTATE");
-    int force_start = requested_armed && altscreen_marker_present("FORCE_START");
+    /*
+     * V3.4 production policy: installation/preload presence is the enable
+     * contract.  Do not gate the current CarPlay session on removable-SD
+     * ARMED/run_id markers.  Firmware identity, exact symbol resolution and
+     * backend safety checks below remain mandatory and fail open to stock.
+     */
+    int requested_armed = 1;
+    int requested_mutate = 1;
 
     p1404_identity_ok = 0;
     p1404_armed = 0;
@@ -615,12 +623,7 @@ int p1404_probe_stack(void) {
         altscreen_log("PHASE=RUNTIME_SYMBOL_RESOLUTION result=REFUSED reason=stock_export_bind");
         return 0;
     }
-    if (!force_start && !runtime_authorization_match()) {
-        altscreen_log("PHASE=RUNTIME_SYMBOL_RESOLUTION result=REFUSED reason=transaction_authorization");
-        return 0;
-    }
-    if (force_start)
-        altscreen_log("PHASE=RUNTIME_AUTHORIZATION result=FORCED_BYPASS marker=FORCE_START required_symbol_and_backend_safety_checks=ENFORCED");
+    altscreen_log("PHASE=RUNTIME_AUTHORIZATION result=PASS policy=INSTALLED_PRELOAD sd_marker_gate=DISABLED required_symbol_and_backend_safety_checks=ENFORCED");
     if (!resolve_required_libairplay_symbols()) {
         /* Exact handle-scoped probing may have replaced a subset of forwarding
          * pointers before it refused. Restore the complete RTLD_NEXT stock
@@ -637,9 +640,7 @@ int p1404_probe_stack(void) {
     p1404_identity_ok = 1;
     p1404_armed = requested_armed;
     p1404_mutate_armed = requested_mutate;
-    altscreen_log("PHASE=RUNTIME_ABI_IDENTITY result=PASS compatibility_checks=%s resolution=DLSYM_REQUIRED_NAMES authorization=%s armed=%d mutate=%d",
-                  force_start ? "FORCED" : "BYPASSED_BY_OWNER",
-                  force_start ? "FORCED_BYPASS" : "PASS",
+    altscreen_log("PHASE=RUNTIME_ABI_IDENTITY result=PASS compatibility_checks=ENFORCED resolution=DLSYM_REQUIRED_NAMES authorization=INSTALLED_PRELOAD armed=%d mutate=%d",
                   p1404_armed, p1404_mutate_armed);
     return 1;
 }
